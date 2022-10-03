@@ -14,12 +14,12 @@ jobs:
     # See: https://circleci.com/docs/2.0/configuration-reference/#steps
     steps:
       - run:
-          name: "install git"
-          command: "apk add git"
+          name: "install git and openssh"
+          command: "apk add git openssh"
       - checkout
       - run:
           name: "ls"
-          command: "ls -al"
+          command: "pwd && ls -al"
 
 # Invoke jobs via workflows
 # See: https://circleci.com/docs/2.0/configuration-reference/#workflows

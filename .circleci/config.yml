@@ -1,28 +1,22 @@
-# Use the latest 2.1 version of CircleCI pipeline process engine.
-# See: https://circleci.com/docs/2.0/configuration-reference
 version: 2.1
 
-# Define a job to be invoked later in a workflow.
-# See: https://circleci.com/docs/2.0/configuration-reference/#jobs
 jobs:
   build-image:
-    # Specify the execution environment. You can specify an image from Dockerhub or use one of our Convenience Images from CircleCI's Developer Hub.
-    # See: https://circleci.com/docs/2.0/configuration-reference/#docker-machine-macos-windows-executor
     docker:
       - image: python:alpine
-    # Add steps to the job
-    # See: https://circleci.com/docs/2.0/configuration-reference/#steps
     steps:
       - run:
-          name: "install git and openssh"
-          command: "apk add git openssh"
-      - checkout
+          name: Install dependencies
+          command: "apk add --no-cache git openssh"
       - run:
-          name: "ls"
-          command: "pwd && ls -al"
+          name: "Install from source"
+          command: |
+            git clone https://github.com/trstovall/coin.git project
+            cd ./project
+            python setup.py install
+            cd ..
+            rm -rf ./project
 
-# Invoke jobs via workflows
-# See: https://circleci.com/docs/2.0/configuration-reference/#workflows
 workflows:
   build-workflow:
     jobs:

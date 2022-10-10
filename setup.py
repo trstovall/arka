@@ -6,6 +6,6 @@ setup(
     version="0.0.1",
     description="short description",
     long_description="long description",
-    packages=find_packages(where="arka"),
+    packages=find_packages(where="src"),
     python_requires=">=3.10, <4",
 )

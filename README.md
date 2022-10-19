@@ -44,7 +44,7 @@
     payment:
       work:
         - diff: 1
-        - nonce: 0-32 bytes binary
+          nonce: 0-32 bytes binary              # H(nonce) ~= H(work_item)
       from:
       - tx_hash: ...shake256...
         outs:

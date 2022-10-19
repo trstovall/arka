@@ -62,7 +62,6 @@
         net_diff: 2 ** 32                       # work difficulty for nodes joining network
         work_reward: 0.5                        # proportion of reward from work payments w.r.t. authority transactions
     chain: ...shake256...                       # hash of previous transaction in chain
-    authority: ...ed25519 key...
     signature: ...ed25519 signature...          # 64-byte result of ed25519-sign tx by authority
 
 ### Consensus

@@ -1,5 +1,5 @@
 
-# Coin: A SHAKE256 powered transaction chain with Ed25519 signatures
+# Coin: A Shake256 powered transaction chain with Ed25519 signatures
 
 ## Bank
 

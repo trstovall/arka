@@ -30,8 +30,8 @@
       work_reward: 0.5                          # proportion of reward from work payments w.r.t. authority transactions
     challenge:                                  # prove previous authority attempted double spend
       authority: ...shake256...                 # identify authority transaction by hash
-      tx1:  ...payment tx hash...
-      tx2: ...payment tx hash...        
+      tx1: ...payment tx hash...                # Just need to identify two transactions...
+      tx2: ...payment tx hash...                # ...listing all can be pushed to another layer
     chain: ...shake256...                       # hash of previous transaction in chain
     authority: ...ed25519 key...                # Miner's public key - all proceeds from this tx go to key
     nonce: 0-32 bytes binary                    # H(tx) ~= 0
@@ -61,7 +61,7 @@
         tax_rate: ~                             # Fee per byte of data used by transaction.
         auth_period: 60 * 1000                  # Target period in ms between authority transactions
         expire_tx: 2 ** 40                      # forget transactions past expiration (in ms)
-        net_diff: 2 ** 32                       # work difficulty for nodes joining network
+        network_diff: 2 ** 32                   # work difficulty for nodes joining network
         work_reward: 0.5                        # proportion of reward from work payments w.r.t. authority transactions
     chain: ...shake256...                       # hash of previous transaction in chain
     signature: ...ed25519 signature...          # 64-byte result of ed25519-sign tx by authority

@@ -42,12 +42,6 @@
     clock: 0 (0y 0d 0h 0.000s)                  # milliseconds since chain launch
     chain: ...shake256...                       # hash of previous transaction in chain
     payment:                                    # identifies tx as a payment transaction
-      work:                                     # network pays reduced rate for offline miners
-      - worker: ...ed25519 key...
-        reference: ...shake256...               # recent "enough" transaction reference
-        difficulty: 1                           # 2-byte float from 0 to 2**256-1
-        nonce: 0-32 bytes binary                # H(tx_hash | difficulty | nonce) ~= 0, nonce is unique
-        signature: ...ed25519 signature...
       from:
       - tx_hash: ...shake256...                 # identify payment or authority transaction
         out:                                    # authority txs have one out, payment txs have many
@@ -57,8 +51,8 @@
       - worker: ...ed25519 key...
         difficulty: 2**32                       # 2-byte float from 0 to 2**256-1
         reference: ...shake256...               # recent "enough" transaction reference
-        nonce: 0-32 bytes binary                # H(tx_hash | difficulty | nonce) ~= 0, nonce is unique
-        signature: ...ed25519 signature...      # signature of payment
+        nonce: 0-32 bytes binary                # H(worker | difficulty | reference | nonce) ~= 0
+        signature: ...ed25519 signature...      # Payment signed by worker
       to:
       - address: 0-32 bytes shake256 digest     # Receipients public ed25519 key hashed with SHAKE256
         units: 0                                # 1 coin = 1024*1024 units

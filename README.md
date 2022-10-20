@@ -51,7 +51,7 @@
       - worker: ...ed25519 key...
         difficulty: 2**32                       # 2-byte float from 0 to 2**256-1
         reference: ...shake256...               # recent "enough" transaction reference
-        nonce: 0-32 bytes binary                # H(worker | difficulty | reference | nonce) ~= 0
+        nonce: 0-32 bytes binary                # H(worker | difficulty | reference | nonce) ~= 0, unique
         signature: ...ed25519 signature...      # Payment signed by worker
       to:
       - address: 0-32 bytes shake256 digest     # Receipients public ed25519 key hashed with SHAKE256

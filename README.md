@@ -26,13 +26,12 @@
       tax_rate: 1024                            # 1024 units per byte in each transaction is to be destroyed
       auth_period: 60 * 1000                    # Target period in ms between authority transactions
       auth_expiry: 2 ** 40                      # forget transactions past expiration (~35 years, in ms)
-      net_diff: 2 ** 25                         # work difficulty for nodes joining network
-      work_reward: 0.7                          # proportion of reward for (offline) work in payments vs in authority tx
+      work_ratio: 0.5                           # proportion of reward for (offline) work entries vs authority tx
       work_expiry: 0                            # max age of transactions allowed to be referenced by work entries
     challenge:                                  # prove a previous authority attempted double spend
       authority: ...shake256...                 # identify authority transaction by hash
-      tx1: ...payment tx hash...                # Just need to identify two transactions...
-      tx2: ...payment tx hash...                # ...listing all can be pushed to another layer
+      tx1: ...shake256...                       # Just need to identify two transactions...
+      tx2: ...shake256...                       # ...listing all can be pushed to another layer
     authority: ...ed25519 key...                # Miner's public key - all proceeds from this tx go to key
     difficulty: 2 ** 32                         # 2-byte float from 0 to 2**256-1 ([1-256] * 2 ** [0-255] - 1)
     nonce: 0-32 bytes binary                    # H(H(tx - nonce) | nonce) ~= 0
@@ -44,15 +43,22 @@
     chain: ...shake256...                       # hash of previous transaction in chain
     payment:                                    # identifies tx as a payment transaction
       work:                                     # network pays reduced rate for offline miners
-      - tx_hash: ...shake256...                 # recent "enough" transaction reference
+      - worker: ...ed25519 key...
+        reference: ...shake256...               # recent "enough" transaction reference
         difficulty: 1                           # 2-byte float from 0 to 2**256-1
         nonce: 0-32 bytes binary                # H(tx_hash | difficulty | nonce) ~= 0, nonce is unique
+        signature: ...ed25519 signature...
       from:
       - tx_hash: ...shake256...                 # identify payment or authority transaction
         out:                                    # authority txs have one out, payment txs have many
         - index: 0                              # index of entry in `tx[tx_hash].to`
           key: ...ed25519 key...                # Present key that hashes to address of UTXO
-          signature: ...ed25519 signature...    # Signed by `tx[tx_hash].to[index].address`
+          signature: ...ed25519 signature...    # Payment signed by `tx[tx_hash].to[index].address`
+      - worker: ...ed25519 key...
+        difficulty: 2**32                       # 2-byte float from 0 to 2**256-1
+        reference: ...shake256...               # recent "enough" transaction reference
+        nonce: 0-32 bytes binary                # H(tx_hash | difficulty | nonce) ~= 0, nonce is unique
+        signature: ...ed25519 signature...      # signature of payment
       to:
       - address: 0-32 bytes shake256 digest     # Receipients public ed25519 key hashed with SHAKE256
         units: 0                                # 1 coin = 1024*1024 units
@@ -64,8 +70,7 @@
         tax_rate: ~                             # Fee per byte of data used by transaction.
         auth_period: 60 * 1000                  # Target period in ms between authority transactions
         auth_expiry: 2 ** 40                    # forget transactions past expiration (~35 years, in ms)
-        net_diff: 2 ** 25                       # work difficulty for nodes joining network
-        work_reward: 0.7                        # proportion of reward from work payments w.r.t. authority transactions
+        work_ratio: 0.5                         # proportion of reward from work payments w.r.t. authority transactions
         work_expiry: 0                          # max age of transactions allowed to be referenced by work entries
     signature: ...ed25519 signature...          # 64-byte result of ed25519-sign tx by authority
 

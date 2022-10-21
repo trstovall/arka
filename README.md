@@ -18,6 +18,7 @@
 
 ### Block
 
+    ---
     # common to blocks and transactions
     id: 0                                       # Sequential transaction id
     clock: 0 (0y 0d 0h 0.000s)                  # milliseconds since chain launch
@@ -45,6 +46,7 @@
     
 ### Transaction
 
+    ---
     # common to blocks and transactions
     id: 1                                       # Sequential transaction id
     clock: 0 (0y 0d 0h 0.000s)                  # milliseconds since chain launch

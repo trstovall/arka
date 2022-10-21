@@ -32,8 +32,8 @@
       block: ...shake256...                     # identify authority transaction by hash
       tx1: ...shake256...                       # Just need to identify two transactions...
       tx2: ...shake256...                       # ...listing all can be pushed to another layer
-    authority: ...ed25519 key...                # Miner's public key - all proceeds from this tx go to key
-    difficulty: 2 ** 32                         # 2-byte float from 0 to 2**256-1 ([1-256] * 2 ** [0-255] - 1)
+    worker: ...ed25519 key...                   # worker's public key - all proceeds from this tx go to key
+    difficulty: 2 ** 32                         # 2-byte float from 0 to 2**256-1 ([1-256] * 2 ** [0-248] - 1)
     nonce: 0-32 bytes binary                    # H(H(tx - nonce) | nonce) ~= 0
     
 ### Transaction

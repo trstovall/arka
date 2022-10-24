@@ -122,6 +122,8 @@ The `payment` structure defines a set of unspent transaction outputs from previo
       signature: <Signature>
 
     <Register>:
+      registry: <RegistryHash>
+      timestamp: <Timestamp>
       payment:
         from:
         - worker: <PublicKey>
@@ -134,7 +136,6 @@ The `payment` structure defines a set of unspent transaction outputs from previo
             namespace: arka-registry
             peer: <PublicKey>
             signature: <Signature>
-      peer: <PublicKey>
       signature: <Signature>
 
     <Peer>:

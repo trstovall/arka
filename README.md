@@ -122,7 +122,18 @@ The `payment` structure defines a set of unspent transaction outputs from previo
       signature: <Signature>
 
     <Register>:
-      payment: <WorkChallenge or Payment>
+      payment:
+        from:
+        - worker: <PublicKey>
+          difficulty: <Difficulty>
+          nonce: <bytes(len=0..32)>
+          signature: <Signature>
+        to:
+        - units: <int>
+          memo:
+            namespace: arka-registry
+            key: <PublicKey>
+            signature: <Signature>
       peer: <PublicKey>
       signature: <Signature>
 

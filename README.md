@@ -132,7 +132,7 @@ The `payment` structure defines a set of unspent transaction outputs from previo
         - units: <int>
           memo:
             namespace: arka-registry
-            key: <PublicKey>
+            peer: <PublicKey>
             signature: <Signature>
       peer: <PublicKey>
       signature: <Signature>

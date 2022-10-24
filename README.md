@@ -57,8 +57,7 @@
     # each transaction includes one payment
     payment:                                    # identifies tx as a payment transaction
 
-      # sources are non-expired UTXOs and workstamps
-      from:
+      from:                                     # sources are non-expired UTXOs and workstamps
 
       # spend a UTXO
       - tx_hash: ...shake256...                 # identify payment or authority transaction
@@ -73,8 +72,7 @@
         nonce: 0-32 bytes binary                # H(worker | difficulty | nonce) ~= 0, unique
         signature: ...ed25519 signature...      # Payment signed by worker
 
-      # destinations are UTXOs
-      to:
+      to:                                       # destinations are UTXOs
 
       # create a UTXO
       - address: 0-32 bytes shake256 digest     # Receipients public ed25519 key hashed with SHAKE256

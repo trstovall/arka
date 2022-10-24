@@ -36,7 +36,6 @@
       block_period: 60 * 1000                   # Target period in ms between blocks
       block_expiry: 2 ** 40                     # forget transactions past expiration (~35 years, in ms)
       work_ratio: 0.5                           # proportion of reward from work payments vs. blocks
-      work_expiry: 0                            # max age of transactions allowed to be referenced by work entries
 
     # exists only to prove a previous block.worker attempted double spend
     challenge:
@@ -71,7 +70,6 @@
       # spend a workstamp
       - worker: ...ed25519 key...
         difficulty: 2**32                       # 2-byte float from 0 to 2**256-1
-        reference: ...shake256...               # recent "enough" transaction reference
         nonce: 0-32 bytes binary                # H(worker | difficulty | reference | nonce) ~= 0, unique
         signature: ...ed25519 signature...      # Payment signed by worker
 
@@ -95,7 +93,6 @@
         block_period: 60 * 1000                 # Target period in ms between blocks
         block_expiry: 2 ** 40                   # forget transactions past expiration (~35 years, in ms)
         work_ratio: 0.5                         # proportion of reward from work payments vs. blocks
-        work_expiry: 0                          # max age of transactions allowed to be referenced by work entries
 
 ### Consensus
 

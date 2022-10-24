@@ -107,7 +107,23 @@ The `payment` structure defines a set of unspent transaction outputs from previo
 
 ## Network
 
+    <Packet>:
+      to: <PublicKey>
+      from: <PublicKey>
+      nonce: <bytes(len=32)>
+      message: <EncryptedMessage(len=range(64, 1024, 64)[0])>
+
 ### UDP Hole punching
+
+    <Registry>:
+        key: <PublicKey>
+        ipv6: <public IP-v6 address>
+        port: <port for arka protocol>
+
+    <Register>:
+      key: <PublicKey>
+      nonce: <bytes(len=32)>
+      signature: <Signature>
 
 ### DC network for broadcasting payments and transactions
 

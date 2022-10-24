@@ -70,7 +70,7 @@
       # spend a workstamp
       - worker: ...ed25519 key...
         difficulty: 2**32                       # 2-byte float from 0 to 2**256-1
-        nonce: 0-32 bytes binary                # H(worker | difficulty | reference | nonce) ~= 0, unique
+        nonce: 0-32 bytes binary                # H(worker | difficulty | nonce) ~= 0, unique
         signature: ...ed25519 signature...      # Payment signed by worker
 
       # destinations are UTXOs

@@ -116,14 +116,22 @@ The `payment` structure defines a set of unspent transaction outputs from previo
 ### UDP Hole punching
 
     <Registry>:
-        key: <PublicKey>
-        ipv6: <public IP-v6 address>
-        port: <port for arka protocol>
+      ipv6: <public IP-v6 address>
+      port: <port for arka protocol>
+      key: <PublicKey>
+      signature: <Signature>
 
     <Register>:
-      key: <PublicKey>
-      nonce: <bytes(len=32)>
+      payment: <WorkChallenge or Payment>
+      peer: <PublicKey>
       signature: <Signature>
+
+    <Peer>:
+      registry: <RegistryHash>
+      key: <PublicKey>
+      ipv6: <public IP-v6 address>
+      port: <port for arka protocol>
+      registered: <Signature>
 
 ### DC network for broadcasting payments and transactions
 

@@ -111,19 +111,27 @@ The `payment` structure defines a set of unspent transaction outputs from previo
       to: <PublicKey>
       from: <PublicKey>
       timestamp: <Timestamp>
-      nonce: <bytes(len=32)>
-      fragment: <EncryptedFragment>
+      nonce: <bytes(len=16)>
+      message: <EncryptedMessage>
 
     <SharedPacket>:
       shared: <PublicKey>
-      nonce: <bytes(len=32)>
-      fragment: <EncryptedFragment>
-    
-    <PlaintextFragment>:
+      timestamp: <Timestamp>
+      nonce: <bytes(len=16)>
+      message: <EncryptedMessage>
+
+    <EncryptedMessage>:
+      decrypted: <Message or Fragment>
+
+    <Message>:
       hash: <Shake256Digest>
-      message_hash: <Shake256Digest>
-      id: <int>
-      total: <int>
+      length: <int>
+      nparts: <int>
+
+    <Fragment>:
+      hash: <Shake256Digest>
+      message: <Message or MessageHash>
+      part: <int>
       data: <bytes(len=range(64, 1024, 64)[0])>
 
 ### UDP Hole punching

@@ -107,16 +107,29 @@ The `payment` structure defines a set of unspent transaction outputs from previo
 
 ## Network
 
-    <Packet>:
+    <OpenPortPacket>:
       to: <PublicKey>
       from: <PublicKey>
       nonce: <bytes(len=32)>
-      message: <EncryptedMessage(len=range(64, 1024, 64)[0])>
+      timestamp: <Timestamp>
+      fragment: <EncryptedFragment>
+
+    <SharedPacket>:
+      shared: <PublicKey>
+      nonce: <bytes(len=32)>
+      fragment: <EncryptedFragment>
+    
+    <PlaintextFragment>:
+      hash: <Shake256Digest>
+      message_hash: <Shake256Digest>
+      id: <int>
+      total: <int>
+      data: <bytes(len=range(64, 1024, 64)[0])>
 
 ### UDP Hole punching
 
     <Registry>:
-      ipv6: <public IP-v6 address>
+      ip: <public IP-v4 address>
       port: <port for arka protocol>
       key: <PublicKey>
       signature: <Signature>

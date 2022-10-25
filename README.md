@@ -129,7 +129,7 @@ The `payment` structure defines a set of unspent transaction outputs from previo
 ### UDP Hole punching
 
     <Registry>:
-      ip: <public IP-v4 address>
+      ip: <public IPv4 address>
       port: <port for arka protocol>
       key: <PublicKey>
       signature: <Signature>
@@ -154,7 +154,7 @@ The `payment` structure defines a set of unspent transaction outputs from previo
     <Peer>:
       registry: <RegistryHash>
       key: <PublicKey>
-      ipv6: <public IP-v6 address>
+      host: <public IPv4 address>
       port: <port for arka protocol>
       registered: <Signature>
 

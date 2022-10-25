@@ -121,35 +121,29 @@ The `payment` structure defines a set of unspent transaction outputs from previo
       message: <EncryptedMessage>
 
     <EncryptedMessage>:
-      decrypted: <Message or Fragment>
-
-    <Message>:
       hash: <Shake256Digest>
-      length: <int>
-      nparts: <int>
-
-    <Fragment>:
-      hash: <Shake256Digest>
-      message: <Message or MessageHash>
+      message:
+        hash: <Shake256Digest>
+        nparts: <int = range(1, 32)[0]>
       part: <int>
-      data: <bytes(len=range(64, 1024, 64)[0])>
+      data: <bytes(len=range(0, 1024, 64)[0])>
 
 ### UDP Hole punching
 
     <Registry>:
-      timestamp: <Timestamp>
+      registry: <PublicKey>
       host: <public IPv4 address>
       port: <port for arka protocol>
-      registry: <PublicKey>
+      timestamp: <Timestamp>
       signature: <Signature>
 
     <Peer>:
-      timestamp: <Timestamp>
+      peer: <PublicKey>
+      registry: <RegistryHash>
       host: <public IPv4 address>
       port: <port for arka protocol>
-      registry: <RegistryHash>
-      peer: <PublicKey>
-      registered: <Signature>
+      timestamp: <Timestamp>
+      signature: <Signature>
 
     <PaymentRequest>:
       to:
@@ -159,12 +153,12 @@ The `payment` structure defines a set of unspent transaction outputs from previo
           registry: <RegistryHash>
 
     <Payment>:
+      to: <PaymentRequest.to>
       from:
       - worker: <PublicKey>
         difficulty: <Difficulty>
         nonce: <bytes(len=0..32)>
         signature: <Signature>
-      to: <PaymentRequest.to>
 
     <Register>:
     - registry: <Registry>

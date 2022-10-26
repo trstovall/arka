@@ -132,7 +132,7 @@ The `payment` structure defines a set of unspent transaction outputs from previo
 
     <Registry>:
       registry: <PublicKey>
-      host: <public IPv4 address>
+      host: <public IPv4 or DNS address>
       port: <port for arka protocol>
       timestamp: <Timestamp>
       signature: <Signature>
@@ -140,20 +140,19 @@ The `payment` structure defines a set of unspent transaction outputs from previo
     <Peer>:
       peer: <PublicKey>
       registry: <RegistryHash>
-      host: <public IPv4 address>
+      host: <public IPv4 or DNS address>
       port: <port for arka protocol>
       timestamp: <Timestamp>
       signature: <Signature>
 
     <PaymentRequest>:
-      to:
-      - units: <int>
-        memo:
-          namespace: arka-boot
-          registry: <RegistryHash>
+      units: <int>
+      memo:
+        namespace: arka-boot
+        registry: <RegistryHash>
 
     <Payment>:
-      to: <PaymentRequest.to>
+      to: <PaymentRequestHash>
       from:
       - worker: <PublicKey>
         difficulty: <Difficulty>
@@ -161,20 +160,23 @@ The `payment` structure defines a set of unspent transaction outputs from previo
         signature: <Signature>
 
     <Register>:
-    - registry: <Registry>
-    - packet: <OpenPortPacket(to=registry)>
-    - peer: <Peer>
-    - request: <PaymentRequest>
-    - packet: <SharedPacket(to=peer.peer, message=request)>
-    - payment: <Payment(request=request)>
-    - packet: <SharedPacket(to=registry.registry, message=payment)>
-    - neighbor: <Peer>
-    - packet: <SharedPacket(to=peer.peer, message=neighbor)>
-    - packet: <SharedPacket(to=neighbor.peer, message=peer)>
-    - packet: <OpenPortPacket(to=neighbor)>
-    - packet: <OpenPortPacket(to=peer)>
-    - packet: <SharedPacket(to=neighbor)>
-    - packet: <SharedPacket(to=peer)>
+      init:
+      - + registry: <Registry>
+      - + request: <PaymentRequest>
+      - + publish: <Payment>
+      sequence:
+      - > packet: <OpenPortPacket(to=registry)>
+      - + peer: <Peer>
+      - < packet: <SharedPacket(to=peer, message=request)>
+      - + payment: <Payment(request=request)>
+      - > packet: <SharedPacket(to=registry, message=payment)>
+      - + neighbor: <Peer>
+      - < packet: <SharedPacket(to=peer, message=neighbor)>
+      - < packet: <SharedPacket(to=neighbor, message=peer)>
+      - > packet: <OpenPortPacket(to=neighbor)>
+      - < packet: <OpenPortPacket(to=peer)>
+      - > packet: <SharedPacket(to=neighbor)>
+      - < packet: <SharedPacket(to=peer)>
 
 ### DC network for broadcasting payments and transactions
 

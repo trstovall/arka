@@ -109,23 +109,23 @@ The `payment` structure defines a set of unspent transaction outputs from previo
 
     <StartPacket>:
       sent: <PacketHash>
-      hash: <PacketHash>
       to: <PublicKey>
       from: <PublicKey>
-      timestamp: <Timestamp>
+      timestamp: <datetime>
       nonce: <bytes(len=16)>
-      data: <EncryptedMessageFragment>
+      data: <EncryptedMessageFragments>
 
     <ContinuePacket>:
       sent: <PacketHash>
+      last: <PacketHash>
       received: <PacketHash>
       shared: <PublicKey>
-      timestamp: <Timestamp>
+      timestamp: <datetime>
       nonce: <bytes(len=16)>
-      data: <EncryptedMessageFragment>
+      data: <EncryptedMessageFragments>
     
-    <EncryptedMessageFragment>:
-      data: <MessageFragment>
+    <EncryptedMessageFragments>:
+      data: <list[MessageFragment]>
 
     <MessageFragment>:
       hash: <FragmentHash>
@@ -133,11 +133,11 @@ The `payment` structure defines a set of unspent transaction outputs from previo
         hash: <MessageHash>
         nparts: <int = range(1, 32)[0]>
       part: <int in range(nparts)>
-      data: <bytes(len=range(0, 1024, 64)[0])>
+      data: <bytes(len=range(64, 1024, 64)[0])>
     
     <Message> =
       <GetAddress> | <HasAddress> | <GetSuccessor> | <HasSuccessor> | <CheckPredecessor>
-      | <GetClique> | <HasClique> | <ReserveBuffer> | <SendBuffer>
+      | <GetClique> | <HasClique> | <LeaveClique> | <ReserveBuffer> | <SendBuffer>
       | <Payment> | <Transaction>
       | <StartPayment> | <AddPaymentInput> | <AddPaymentOutput> | <SignPayment> | <RevealCommits>
 
@@ -147,14 +147,14 @@ The `payment` structure defines a set of unspent transaction outputs from previo
       id: <PublicKey>
       host: <static public IPv4 or DNS address>
       port: <UDP port for arka protocol>
-      timestamp: <Timestamp>
+      timestamp: <datetime>
       signature: <Signature>
 
     <UserAddress>:
       id: <PublicKey>
       host: <static or ephemeral public IPv4 or DNS address>
       port: <UDP port for arka protocol>
-      timestamp: <Timestamp>
+      timestamp: <datetime>
       signature: <Signature>
 
     <RegistryPayment>:
@@ -162,7 +162,7 @@ The `payment` structure defines a set of unspent transaction outputs from previo
         units: <int>
         memo:
           type: user
-          user: <PublicKey>
+          user: <UserAddress.id>
           veto: False
       from:
       - <UnspentTransactionOutput>

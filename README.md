@@ -107,7 +107,7 @@ The `payment` structure defines a set of unspent transaction outputs from previo
 
 ## Network
 
-    <StartPacket>:
+    <StartPacket(mtu=1400)>:
       sent: <PacketHash>
       to: <PublicKey>
       from: <PublicKey>
@@ -115,7 +115,7 @@ The `payment` structure defines a set of unspent transaction outputs from previo
       nonce: <bytes(len=16)>
       data: <EncryptedMessageFragments>
 
-    <ContinuePacket>:
+    <ContinuePacket(mtu=1400)>:
       sent: <PacketHash>
       last: <PacketHash>
       received: <PacketHash>
@@ -131,13 +131,13 @@ The `payment` structure defines a set of unspent transaction outputs from previo
       hash: <FragmentHash>
       message:
         hash: <MessageHash>
-        nparts: <int = range(1, 32)[0]>
+        nparts: <int in range(1, 32)>
       part: <int in range(nparts)>
-      data: <bytes(len=range(64, 1024, 64)[0])>
+      data: <bytes(len in range(64, 1024, 64))>
     
     <Message> =
       <GetAddress> | <HasAddress> | <GetSuccessor> | <HasSuccessor> | <CheckPredecessor>
-      | <GetClique> | <HasClique> | <LeaveClique> | <ReserveBuffer> | <SendBuffer>
+      | <GetClique> | <HasClique> | <JoinClique> | <LeaveClique> | <ReserveBuffer> | <SendBuffer>
       | <Payment> | <Transaction>
       | <StartPayment> | <AddPaymentInput> | <AddPaymentOutput> | <SignPayment> | <RevealCommits>
 
@@ -172,15 +172,16 @@ The `payment` structure defines a set of unspent transaction outputs from previo
       - <Registry>
       - <RegistryPayment>
       sequence:
-      - <StartPacket to=Registry data=GetAddress>
-      - <ContinuePacket data=HasAddress>
+      - <StartPacket from=predecessor to=registry data=GetAddress,RegistryPayment>
+      - <ContinuePacket from=registry to=predecessor data=HasAddress>
       - <UserAddress>
-      - <ContinuePacket data=GetSuccessor>
-      - <ContinuePacket data=HasSuccessor>
-      - <StartPacket to=successor data=GetSuccessor>
-      - <StartPacket from=successor data=CheckPredecessor>
-      - <ContinuePacket to=successor data=HasSuccessor>
-      - <ContinuePacket from=successor data=CheckPredecessor>
+      - <ContinuePacket from=predecessor to=registry data=GetSuccessor,UserAddress>
+      - <ContinuePacket from=registry to=predecessor data=HasSuccessor>
+      - <ContinuePacket from=registry to=successor data=HasSuccessor>
+      - <StartPacket from=predecessor to=successor data=GetSuccessor>
+      - <StartPacket from=successor to=predecessor data=GetSuccessor>
+      - <ContinuePacket from=predecessor to=successor data=HasSuccessor>
+      - <ContinuePacket to=predecessor data=HasSuccessor>
       
 
 ### DC network for broadcasting payments and transactions

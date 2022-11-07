@@ -107,76 +107,81 @@ The `payment` structure defines a set of unspent transaction outputs from previo
 
 ## Network
 
-    <OpenPortPacket>:
+    <StartPacket>:
+      sent: <PacketHash>
+      hash: <PacketHash>
       to: <PublicKey>
       from: <PublicKey>
       timestamp: <Timestamp>
       nonce: <bytes(len=16)>
-      message: <EncryptedMessage>
+      data: <EncryptedMessageFragment>
 
-    <SharedPacket>:
+    <ContinuePacket>:
+      sent: <PacketHash>
+      received: <PacketHash>
       shared: <PublicKey>
       timestamp: <Timestamp>
       nonce: <bytes(len=16)>
-      message: <EncryptedMessage>
+      data: <EncryptedMessageFragment>
+    
+    <EncryptedMessageFragment>:
+      data: <MessageFragment>
 
-    <EncryptedMessage>:
-      hash: <Shake256Digest>
+    <MessageFragment>:
+      hash: <FragmentHash>
       message:
-        hash: <Shake256Digest>
+        hash: <MessageHash>
         nparts: <int = range(1, 32)[0]>
-      part: <int>
+      part: <int in range(nparts)>
       data: <bytes(len=range(0, 1024, 64)[0])>
+    
+    <Message> =
+      <GetAddress> | <HasAddress> | <GetSuccessor> | <HasSuccessor> | <CheckPredecessor>
+      | <GetClique> | <HasClique> | <ReserveBuffer> | <SendBuffer>
+      | <Payment> | <Transaction>
+      | <StartPayment> | <AddPaymentInput> | <AddPaymentOutput> | <SignPayment> | <RevealCommits>
 
 ### UDP Hole punching
 
     <Registry>:
-      registry: <PublicKey>
-      host: <public IPv4 or DNS address>
-      port: <port for arka protocol>
+      id: <PublicKey>
+      host: <static public IPv4 or DNS address>
+      port: <UDP port for arka protocol>
       timestamp: <Timestamp>
       signature: <Signature>
 
-    <Peer>:
-      peer: <PublicKey>
-      registry: <RegistryHash>
-      host: <public IPv4 or DNS address>
-      port: <port for arka protocol>
+    <UserAddress>:
+      id: <PublicKey>
+      host: <static or ephemeral public IPv4 or DNS address>
+      port: <UDP port for arka protocol>
       timestamp: <Timestamp>
       signature: <Signature>
 
-    <PaymentRequest>:
-      units: <int>
-      memo:
-        namespace: arka-boot
-        registry: <RegistryHash>
-
-    <Payment>:
-      to: <PaymentRequestHash>
+    <RegistryPayment>:
+      to:
+        units: <int>
+        memo:
+          type: user
+          user: <PublicKey>
+          veto: False
       from:
-      - worker: <PublicKey>
-        difficulty: <Difficulty>
-        nonce: <bytes(len=0..32)>
-        signature: <Signature>
+      - <UnspentTransactionOutput>
 
     <Register>:
       init:
-      - + registry: <Registry>
-      - + request: <PaymentRequest>
-      - + publish: <Payment>
+      - <Registry>
+      - <RegistryPayment>
       sequence:
-      - > packet: <OpenPortPacket(to=registry)>
-      - + peer: <Peer>
-      - < packet: <SharedPacket(to=peer, message=request)>
-      - + payment: <Payment(request=request)>
-      - > packet: <SharedPacket(to=registry, message=payment)>
-      - + neighbor: <Peer>
-      - < packet: <SharedPacket(to=peer, message=neighbor)>
-      - < packet: <SharedPacket(to=neighbor, message=peer)>
-      - > packet: <OpenPortPacket(to=neighbor)>
-      - < packet: <OpenPortPacket(to=peer)>
-      - > packet: <SharedPacket(to=neighbor)>
-      - < packet: <SharedPacket(to=peer)>
+      - <StartPacket to=Registry data=GetAddress>
+      - <ContinuePacket data=HasAddress>
+      - <UserAddress>
+      - <ContinuePacket data=GetSuccessor>
+      - <ContinuePacket data=HasSuccessor>
+      - <StartPacket to=successor data=GetSuccessor>
+      - <StartPacket from=successor data=CheckPredecessor>
+      - <ContinuePacket to=successor data=HasSuccessor>
+      - <ContinuePacket from=successor data=CheckPredecessor>
+      
 
 ### DC network for broadcasting payments and transactions
 

@@ -1,5 +1,5 @@
 
-# Arka: A Shake256 transaction chain with Ed25519 signatures
+# Arka: A simple and private transaction chain with voting
 
 ## Bank
 
@@ -126,9 +126,10 @@ The `payment` structure defines a set of unspent transaction outputs from previo
       data: <bytes(len in range(64, 1024, 64))>
     
     <Message> =
-      <Find> | <GetClique> | <HasClique> | <JoinClique> | <LeaveClique> | <ReserveBuffer> | <SendBuffer>
-      | <Payment> | <Transaction>
-      | <StartPayment> | <AddPaymentInput> | <AddPaymentOutput> | <SignPayment> | <RevealCommits>
+      <TraceRequest> | <TraceResponse> | <ConnectRequest> | <ConnectResponse>
+      | <Get> | <Put> | <JoinRequest> | <JoinResponse> | <LeaveRequest> | <LeaveResponse>
+      | <ReserveRequest> | <ReserveResponse> | <SendRequest> | <SendResponse>
+      | <Payment> | <Transaction> | <PaymentFragment> | <SignPayment> | <RevealCommits>
 
 ### UDP Hole punching
 

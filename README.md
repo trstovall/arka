@@ -107,27 +107,17 @@ The `payment` structure defines a set of unspent transaction outputs from previo
 
 ## Network
 
-    <StartPacket(mtu=1400)>:
+    <Packet(mtu=1400)>:
       sent: <PacketHash>
       to: <PublicKey>
       from: <PublicKey>
       timestamp: <datetime>
       nonce: <bytes(len=16)>
-      data: <EncryptedMessageFragments>
+      data: decrypted(<EncryptedFragments>)
 
-    <ContinuePacket(mtu=1400)>:
-      sent: <PacketHash>
-      last: <PacketHash>
-      received: <PacketHash>
-      shared: <PublicKey>
-      timestamp: <datetime>
-      nonce: <bytes(len=16)>
-      data: <EncryptedMessageFragments>
-    
-    <EncryptedMessageFragments>:
-      data: <list[MessageFragment]>
+    <EncryptedFragments> = encrypted(list[Message | Fragment])
 
-    <MessageFragment>:
+    <Fragment>:
       hash: <FragmentHash>
       message:
         hash: <MessageHash>
@@ -136,8 +126,7 @@ The `payment` structure defines a set of unspent transaction outputs from previo
       data: <bytes(len in range(64, 1024, 64))>
     
     <Message> =
-      <GetAddress> | <HasAddress> | <GetSuccessor> | <HasSuccessor> | <CheckPredecessor>
-      | <GetClique> | <HasClique> | <JoinClique> | <LeaveClique> | <ReserveBuffer> | <SendBuffer>
+      <Find> | <GetClique> | <HasClique> | <JoinClique> | <LeaveClique> | <ReserveBuffer> | <SendBuffer>
       | <Payment> | <Transaction>
       | <StartPayment> | <AddPaymentInput> | <AddPaymentOutput> | <SignPayment> | <RevealCommits>
 

@@ -107,29 +107,32 @@ The `payment` structure defines a set of unspent transaction outputs from previo
 
 ## Network
 
-    <Packet(mtu=1400)>:
-      sent: <PacketHash>
-      to: <PublicKey>
-      from: <PublicKey>
-      timestamp: <datetime>
-      nonce: <bytes(len=16)>
-      data: decrypted(<EncryptedFragments>)
+    Packet(mtu=1300):
+      sent: PacketHash
+      to: Identifier
+      from: Identifier | None
+      timestamp: datetime
+      nonce: bytes(16)
+      data: decrypted(EncryptedFragments)
 
-    <EncryptedFragments> = encrypted(list[Message | Fragment])
+    Identifier = hash(PublicKey)
 
-    <Fragment>:
-      hash: <FragmentHash>
+    EncryptedFragments = encrypted(list[Message | Fragment])
+
+    Fragment:
+      hash: FragmentHash
       message:
-        hash: <MessageHash>
-        nparts: <int in range(1, 32)>
-      part: <int in range(nparts)>
-      data: <bytes(len in range(64, 1024, 64))>
+        hash: MessageHash
+        nparts: int
+      part: int
+      data: bytes(range(64, 1024, 64)[0])
     
-    <Message> =
-      <TraceRequest> | <TraceResponse> | <ConnectRequest> | <ConnectResponse>
-      | <Get> | <Put> | <JoinRequest> | <JoinResponse> | <LeaveRequest> | <LeaveResponse>
-      | <ReserveRequest> | <ReserveResponse> | <SendRequest> | <SendResponse>
-      | <Payment> | <Transaction> | <PaymentFragment> | <SignPayment> | <RevealCommits>
+    Message = (
+      TraceRequest | TraceResponse | ConnectRequest | ConnectResponse
+      | Get | Put | JoinRequest | JoinResponse | LeaveRequest | LeaveResponse
+      | ReserveRequest | ReserveResponse | SendRequest | SendResponse
+      | Payment | Transaction | PaymentFragment | SignPayment | RevealCommits
+    )
 
 ### UDP Hole punching
 

@@ -32,12 +32,9 @@ iota800, iota1600 = {}, {}
 for i in range(24):
     for y in range(5):
         for x in range(5):
-            if i < 22:
-                RC = 0
-                for j in range(6):
-                    RC |= rc(j + 7*i) << (2**j - 1)
-                iota800[i] = RC
             RC = 0
             for j in range(7):
                 RC |= rc(j + 7*i) << (2**j - 1)
+            if i < 22:
+                iota800[i] = RC & 0xffffffff
             iota1600[i] = RC

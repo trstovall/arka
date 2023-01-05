@@ -37,7 +37,7 @@ static PyObject * unpack_map(PyObject * self, PyObject * args);
 static PyObject * unpack_ext(PyObject * self, PyObject * args);
 
 
-static PyMethodDef msgpack_methods[] = {
+static PyMethodDef mpack_methods[] = {
     {"pack", pack, METH_VARARGS, "Serialize Python `object` to msgpack formatted `bytes`."},
     {"pack_nil", pack_nil, METH_VARARGS, "Serialize Python `None` to msgpack `nil`."},
     {"pack_bool", pack_bool, METH_VARARGS, "Serialize Python `bool` to msgpack `bool`."},
@@ -63,33 +63,33 @@ static PyMethodDef msgpack_methods[] = {
 };
 
 
-static struct PyModuleDef msgpackmodule = {
+static struct PyModuleDef mpackmodule = {
     PyModuleDef_HEAD_INIT,
-    "msgpack",
+    "mpack",
     NULL,
     -1,
-    msgpack_methods
+    mpack_methods
 };
 
 
-PyMODINIT_FUNC PyInit_msgpack(void)
+PyMODINIT_FUNC PyInit_mpack(void)
 {
     PyObject * mod;
 
     PyDateTime_IMPORT;
     if (!(mod = PyModule_Create(&msgpackmodule)))
         goto _unknown_error_mod;
-    if (!(Error = PyErr_NewException("msgpack.Error", NULL, NULL)))
+    if (!(Error = PyErr_NewException("arka.mpack.Error", NULL, NULL)))
         goto _unknown_error_error_deref_mod;
     Py_INCREF(Error);
     if (PyModule_AddObject(mod, "Error", Error) < 0)
         goto _unknown_error_error_deref_error;
-    if (!(PackError = PyErr_NewException("msgpack.PackError", Error, NULL)))
+    if (!(PackError = PyErr_NewException("arka.mpack.PackError", Error, NULL)))
         goto _unknown_error_packerror_deref_error;
     Py_INCREF(PackError);
     if (PyModule_AddObject(mod, "PackError", Error) < 0)
         goto _unknown_error_packerror_deref_packerror;
-    if (!(UnpackError = PyErr_NewException("msgpack.UnpackError", Error, NULL)))
+    if (!(UnpackError = PyErr_NewException("arka.mpack.UnpackError", Error, NULL)))
         goto _unknown_error_unpackerror_deref_packerror;
     Py_INCREF(UnpackError);
     if (PyModule_AddObject(mod, "UnpackError", Error) < 0)

@@ -1,5 +1,5 @@
 
-# Arka: A simple and private transaction chain with voting
+# Arka: A private and scalable transaction chain with monetary policy voting
 
 ## Bank
 

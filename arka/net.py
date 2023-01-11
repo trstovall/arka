@@ -8,40 +8,8 @@ from socket import socket, AF_INET, SOCK_DGRAM
 from select import select
 from datetime import datetime
 
-from .crypto import keccak_1600, keypair, key_exchange
+from .crypto import keccak_800, keccak_1600, keypair, key_exchange
 from .msgpack import pack, unpack, Error as SerdesError
-
-
-Identifier = int
-HashDigest = bytes
-
-
-class Error(Exception):
-    '''network error'''
-
-
-class Secret(object):
-
-    def __init__(self, seed: bytes | None = None):
-        self.seed: bytes = seed or token_bytes(32)
-        self.keypair = keypair(seed)
-    
-    @property
-    def key(self) -> bytes:
-        return self.keypair[32:]
-
-    @property
-    def identifier(self) -> Identifier:
-        if not hasattr(self, "_id"):
-            self._id = Identifier(
-                sum(x << (8*i) for i, x in enumerate(self.keypair[32:]))
-            )
-
-    def key_exchange(self, other: Identifier, timestamp: datetime, nonce: bytes) -> "Secret":
-        other = bytes([(other >> (8*i)) & 0xff for i in range(32)])
-        data = pack((timestamp, nonce))
-        keypair = key_exchange(self.keypair, other, data)
-        return self.__class__(keypair)
 
 
 class Ext(object):
@@ -63,11 +31,74 @@ class Ext(object):
         return cls(**dict(zip(cls.fields, unpack(data))))
 
 
-class Node(object):
+HashDigest = bytes
+
+class Error(Exception):
+    '''network error'''
+
+
+class Identifier(object):
+
+    typecode = 1
+
+    def __init__(self, id: int, len=32):
+        super().__init__()
+        self.id = id
+        self.key = bytes(
+            (id >> 8*i) & 0xff for i in range(len)
+        )
 
     @property
     def __msgpack__(self) -> tuple[int, bytes]:
-        return 0x01, self.data
+        return self.typecode, self.key
+
+    @classmethod
+    def unpack(cls, data) -> object:
+        return cls(
+            id=sum(x << (8*i) for i, x in enumerate(data))
+        )
+
+
+class Secret(Identifier):
+
+    typecode = 2
+
+    def __init__(self, seed: bytes | None = None):
+        self.seed: bytes = seed or token_bytes(32)
+        self.keypair = keypair(seed)
+        super().__init__(id=Identifier.unpack(self.key).id)
+
+    @property
+    def __msgpack__(self) -> tuple[int, bytes]:
+        return self.typecode, self.seed
+
+    @classmethod
+    def unpack(cls, data) -> object:
+        return cls(seed=data)
+
+    @property
+    def key(self) -> bytes:
+        return self.keypair[32:]
+
+    @property
+    def id(self) -> int:
+        if not hasattr(self, "_id"):
+            self._id = sum(x << (8*i) for i, x in enumerate(self.key))
+        return self._id
+
+    def key_exchange(self, other: Identifier, nonce: HashDigest) -> "Secret":
+        x, A = self.seed, other.key
+        keypair = key_exchange(x, A, nonce)
+        return self.__class__(seed=keypair[:32])
+
+
+class Node(object):
+
+    typecode = 3
+
+    @property
+    def __msgpack__(self) -> tuple[int, bytes]:
+        return self.typecode, pack((self.id, self.data))
 
     def __init__(self, id: Identifier, data: bytes | None = None) -> None:
         super().__init__()

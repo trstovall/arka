@@ -14,13 +14,19 @@ static PyObject * keypair(PyObject * self, PyObject * args);
 static PyObject * sign(PyObject * self, PyObject * args);
 static PyObject * verify(PyObject * self, PyObject * args);
 static PyObject * key_exchange(PyObject * self, PyObject * args);
+static PyObject * djb2(PyObject * self, PyObject * args);
+static PyObject * keccak_800(PyObject * self, PyObject * args);
+static PyObject * keccak_1600(PyObject * self, PyObject * args);
 
 
 static PyMethodDef crypto_methods[] = {
-    {"keypair", keypair, METH_VARARGS, "Generate 64-byte ed25519 keypair of (32-byte secret, 32-byte public key)."},
+    {"keypair", keypair, METH_VARARGS, "Generate 64-byte ed25519 keypair of (32-byte seed, 32-byte public key)."},
     {"sign", sign, METH_VARARGS, "Use 32-byte secret key and 32-byte message hash to generate 64-byte ed25519 signature."},
     {"verify", verify, METH_VARARGS, "Validate ed25519 signature for 32-byte message hash and 32-byte public key."},
     {"key_exchange", key_exchange, METH_VARARGS, "Generate ed25519 keypair from 32-byte secret, 32-byte public key, and 32-byte nonce."},
+    {"djb2", djb2, METH_VARARGS, "Hash string to 32-bit digest."},
+    {"keccak_800", keccak_800, METH_VARARGS, "Perform 32-bit Keccak hash with 10*1 padding."},
+    {"keccak_1600", keccak_1600, METH_VARARGS, "Perform 64-bit Keccak hash with 10*1 padding."},
 };
 
 
@@ -44,149 +50,10 @@ PyMODINIT_FUNC PyInit_crypto(void)
 }
 
 
-int ed25519_keypair(
-    unsigned char * pk,
-    unsigned char * sk,
-    const unsigned char * seed
-) {
-    unsigned char az[32];
-    ge_p3 A;
-
-    memmove(sk, seed, 32);
-    keccak800(az, 32, sk, 32);
-    az[0] &= 248;
-    az[31] &= 63;
-    az[31] |= 64;
-
-    ge_scalarmult_base(& A, az);
-    ge_p3_tobytes(pk, & A);
-
-    memmove(sk + 32, pk, 32);
-    return 0;
-}
-
-int ed25519_sign(
-    unsigned char * sm,
-    unsigned long long * smlen,
-    const unsigned char * m,
-        unsigned long long mlen,
-        const unsigned char * sk
-) {
-    unsigned char pk[32];
-    unsigned char az[64];
-    unsigned char nonce[64];
-    unsigned char hram[64];
-    ge_p3 R;
-
-    memmove(pk, sk + 32, 32);
-
-    keccak800(az, 64, sk, 32);
-    az[0] &= 248;
-    az[31] &= 63;
-    az[31] |= 64;
-
-    * smlen = mlen + 64;
-    memmove(sm + 64, m, mlen);
-    memmove(sm + 32, az + 32, 32);
-    keccak800(nonce, 64, sm + 32, mlen + 32);
-    memmove(sm + 32, pk, 32);
-
-    sc_reduce(nonce);
-    ge_scalarmult_base( & R, nonce);
-    ge_p3_tobytes(sm, & R);
-
-    keccak800(hram, 64, sm, mlen + 64);
-    sc_reduce(hram);
-    sc_muladd(sm + 32, hram, az, nonce);
-
-    return 0;
-}
-
-int ed25519_verify(
-    unsigned char * m,
-    unsigned long long * mlen,
-    const unsigned char * sm,
-        unsigned long long smlen,
-        const unsigned char * pk
-) {
-    unsigned char pkcopy[32];
-    unsigned char rcopy[32];
-    unsigned char scopy[32];
-    unsigned char h[64];
-    unsigned char rcheck[32];
-    ge_p3 A;
-    ge_p2 R;
-
-    if (smlen < 64) goto badsig;
-    if (sm[63] & 224) goto badsig;
-    if (ge_frombytes_negate_vartime( & A, pk) != 0) goto badsig;
-
-    memmove(pkcopy, pk, 32);
-    memmove(rcopy, sm, 32);
-    memmove(scopy, sm + 32, 32);
-
-    memmove(m, sm, smlen);
-    memmove(m + 32, pkcopy, 32);
-    keccak800(h, 64, m, smlen);
-    sc_reduce(h);
-
-    ge_double_scalarmult_vartime( & R, h, & A, scopy);
-    ge_tobytes(rcheck, & R);
-    if (bytes_equal(rcheck, rcopy) == 0) {
-        memmove(m, m + 64, smlen - 64);
-        memset(m + smlen - 64, 0, 64);
-        * mlen = smlen - 64;
-        return 0;
-    }
-
-    badsig:
-        *
-        mlen = -1;
-    memset(m, 0, smlen);
-    return -1;
-}
-
-
-
-int ed25519_key_exchange_vartime(
-    unsigned char * keypair,
-    const unsigned char * seed,
-    const unsigned char * pkey,
-    const unsigned char * nonce
-) {
-    unsigned char az[32];
-    unsigned char pk[32];
-    ge_p3 A;
-    ge_p2 R;
-
-    keccak800(az, 32, seed, 32);
-    az[0] &= 248;
-    az[31] &= 63;
-    az[31] |= 64;
-
-    if (ge_frombytes_negate_vartime(& A, pkey) != 0)
-        return -1;
-
-    ge_double_scalarmult_vartime(& R, az, & A, nonce);
-    ge_tobytes(keypair, & R);
-
-    keccak800(az, 32, keypair, 32);
-    az[0] &= 248;
-    az[31] &= 63;
-    az[31] |= 64;
-
-    ge_scalarmult_base(& A, az);
-    ge_p3_tobytes(pk, & A);
-
-    memmove(keypair + 32, pk, 32);
-
-    return 0;
-}
-
 
 static PyObject * keypair(PyObject * self, PyObject * args) {
 
-    PyObject *buff, *value;
+    PyObject *buff;
     Py_buffer pybuf;
     uint8_t seed[32], sk[64], pk[32];
 
@@ -196,25 +63,20 @@ static PyObject * keypair(PyObject * self, PyObject * args) {
     if (!PyObject_CheckBuffer(buff))
         goto _bad_buffer;
     if (PyObject_GetBuffer(buff, & pybuf, 0))
-        goto _bad_buffer_deref_pybuf;
+        goto _bad_buffer;
     if (pybuf.len != 32)
         goto _bad_buffer_len_deref_pybuf;
     if (PyBuffer_ToContiguous(seed, & pybuf, pybuf.len, 'C'))
         goto _bad_buffer_deref_pybuf;
-    PyBuffer_Release(& pybuf);
 
+    PyBuffer_Release(& pybuf);
     ed25519_keypair(pk, sk, seed);
 
-    value = PyBytes_FromStringAndSize((const char *)sk, 64);
-    return value;
+    return PyBytes_FromStringAndSize((const char *)sk, 64);
 
 _bad_buffer:
     PyErr_SetString(PyExc_ValueError, "input seed must be buffer of len 32.");
     goto _error;
-
-_bad_buffer_deref_pybuf:
-    PyErr_SetString(PyExc_TypeError, "input seed must be buffer of len 32.");
-    goto _deref_pybuf;
 
 _bad_buffer_len_deref_pybuf:
     PyErr_SetString(PyExc_ValueError, "input seed must be buffer of len 32.");
@@ -222,7 +84,128 @@ _bad_buffer_len_deref_pybuf:
 
 _deref_pybuf:
     PyBuffer_Release(& pybuf);
+_error:
+    return NULL;
+}
 
+
+static PyObject * sign(PyObject * self, PyObject * args) {
+    // srm = sign(keypair, hash_digest)
+
+    PyObject *py_x_A, *py_m;
+    Py_buffer c_x_A, c_m;
+    uint8_t sm[64+32], m[32], x_A[64];
+
+    if (!PyArg_ParseTuple(args, "OO", & py_x_A, & py_m))
+        goto _error;
+
+    if (!(PyObject_CheckBuffer(py_x_A) && PyObject_CheckBuffer(py_m)))
+        goto _bad_buffs;
+
+    if (PyObject_GetBuffer(py_x_A, & c_x_A, 0))
+        goto _bad_buffs;
+
+    if (PyObject_GetBuffer(py_m, & c_m, 0))
+        goto _bad_buffs_deref_c_x_A;
+
+    if (c_x.len != 64 || c_m.len != 32)
+        goto _bad_buffs_len_deref_buffs;
+
+    if (PyBuffer_ToContiguous(x_A, & c_x_A, 64, 'C'))
+        goto _bad_buffs_deref_buffs;
+
+    if (PyBuffer_ToContiguous(m, & c_m, 32, 'C'))
+        goto _bad_buffs_deref_buffs;
+
+    PyBuffer_Release(& c_x_A);
+    PyBuffer_Release(& c_m);
+
+    ed25519_sign(sm, 96, m, 32, x_A);
+
+    return PyBytes_FromStringAndSize((const char *)sm, 96);
+
+_bad_buffs_deref_buffs;
+    PyErr_SetString(PyExc_TypeError, "input keypair must be 64 bytes and hash_digest must be of len 32.")
+    goto _deref_c_m:
+
+_bad_buffs_len_deref_buffs;
+    PyErr_SetString(PyExc_TypeError, "input keypair must be 64 bytes and hash_digest must be of len 32.")
+    goto _deref_c_m:
+
+_bad_buffs_deref_c_x_A:
+    PyErr_SetString(PyExc_TypeError, "input keypair must be 64 bytes and hash_digest must be of len 32.")
+    goto _deref_c_x_A:
+
+_bad_buffs:
+    PyErr_SetString(PyExc_TypeError, "input keypair must be 64 bytes and hash_digest must be of len 32.")
+    goto _error;
+
+_deref_c_m:
+    PyBuffer_Release(& c_m);
+_deref_c_x:
+    PyBuffer_Release(& c_x_A);
+_error:
+    return NULL;
+}
+
+
+static PyObject * verify(PyObject * self, PyObject * args) {
+    // p = verify(key, signed_message_digest)
+
+    PyObject *py_pk, *py_sm;
+    Py_buffer c_pk, c_sm;
+    uint8_t m[32], sm[64+32], pk[32];
+    uint32_t mlen = 0;
+
+     if (!PyArg_ParseTuple(args, "OO", & py_sm, & py_pk))
+        goto _error;
+
+    if (!(PyObject_CheckBuffer(py_sm) && PyObject_CheckBuffer(py_pk)))
+        goto _bad_buffs;
+
+    if (PyObject_GetBuffer(py_sm, & c_sm, 0))
+        goto _bad_buffs;
+
+    if (PyObject_GetBuffer(py_pk, & c_pk, 0))
+        goto _bad_buffs_deref_c_sm;
+
+    if (c_sm.len != 96 || c_pk.len != 32)
+        goto _bad_buffs_len_deref_buffs;
+
+    if (PyBuffer_ToContiguous(sm, & c_sm, 96, 'C'))
+        goto _bad_buffs_deref_buffs;
+
+    if (PyBuffer_ToContiguous(pk, & c_pk, 32, 'C'))
+        goto _bad_buffs_deref_buffs;
+
+    PyBuffer_Release(& c_sm);
+    PyBuffer_Release(& c_pk);
+   
+    if (ed25519_verify(m, & mlen, sm, 96, pk))
+        goto _error;
+
+    return PyBytes_FromStringAndSize((const char *)m, 32);
+
+_bad_buffs_deref_buffs;
+    PyErr_SetString(PyExc_TypeError, "input signed_message_digest must be 96 bytes and pk must be of len 32.")
+    goto _deref_c_pk:
+
+_bad_buffs_len_deref_buffs;
+    PyErr_SetString(PyExc_TypeError, "input signed_message_digest must be 96 bytes and pk must be of len 32.")
+    goto _deref_c_pk;
+
+_bad_buffs_deref_c_sm:
+    PyErr_SetString(PyExc_TypeError, "input signed_message_digest must be 96 bytes and pk must be of len 32.")
+    goto _deref_c_sm;
+
+_bad_buffs:
+    PyErr_SetString(PyExc_TypeError, "input signed_message_digest must be 96 bytes and pk must be of len 32.")
+    goto _error;
+
+_deref_c_pk:
+    PyBuffer_Release(& c_pk);
+_deref_c_sm:
+    PyBuffer_Release(& c_sm);
 _error:
     return NULL;
 }

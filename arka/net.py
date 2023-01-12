@@ -4,31 +4,13 @@ from asyncio import DatagramProtocol, DatagramTransport
 from ipaddress import ip_address, IPv4Address
 from bisect import bisect_left
 from random import choice
+from functools import cache
 from socket import socket, AF_INET, SOCK_DGRAM
 from select import select
 from datetime import datetime
 
-from .crypto import keccak_800, keccak_1600, keypair, key_exchange
+from .crypto import keccak_800, keccak_1600, ed25519_sign, ed25519_verify, keypair, key_exchange
 from .msgpack import pack, unpack, Error as SerdesError
-
-
-class Ext(object):
-
-    typecode: int
-    fields: tuple[str]
-
-    @property
-    def __msgpack__(self) -> tuple[int, bytes]:
-        if not hasattr(self, "_packed"):
-             self._packed = pack(tuple(
-                getattr(self, field)
-                for field in self.fields
-            ))
-        return self.typecode, self._packed
-
-    @classmethod
-    def unpack(cls, data) -> "Ext":
-        return cls(**dict(zip(cls.fields, unpack(data))))
 
 
 HashDigest = bytes
@@ -37,26 +19,72 @@ class Error(Exception):
     '''network error'''
 
 
+class Ext(object):
+
+    typecode: int
+    fields: tuple[str]
+
+    @cache
+    @property
+    def __msgpack__(self) -> tuple[int, bytes]:
+        return self._typecode, pack(tuple(
+            getattr(self, field)
+            for field in self.fields
+        ))
+
+    @cache
+    @classmethod
+    def unpack(cls, data) -> "Ext":
+        return cls(**dict(zip(cls.fields, unpack(data))))
+
+
 class Identifier(object):
 
     typecode = 1
 
-    def __init__(self, id: int, len=32):
+    def __init__(self, id: int, len: int = 32):
         super().__init__()
         self.id = id
-        self.key = bytes(
-            (id >> 8*i) & 0xff for i in range(len)
-        )
+        self.len = len
 
+    @cache
     @property
     def __msgpack__(self) -> tuple[int, bytes]:
         return self.typecode, self.key
 
+    @cache
     @classmethod
     def unpack(cls, data) -> object:
         return cls(
-            id=sum(x << (8*i) for i, x in enumerate(data))
+            id=sum(x << (8*i) for i, x in enumerate(data)),
+            len=len(data)
         )
+
+    @cache
+    @property
+    def key(self) -> bytes:
+        return bytes(
+            (id >> 8*i) & 0xff for i in range(self.len)
+        )
+
+    @cache
+    def __lt__(self, other: "Identifier") -> bool:
+        return self.id < other.id
+    @cache
+    def __le__(self, other: "Identifier") -> bool:
+        return self.id <= other.id
+    @cache
+    def __eq__(self, other: "Identifier") -> bool:
+        return self.id == other.id
+    @cache
+    def __ne__(self, other: "Identifier") -> bool:
+        return self.id != other.id
+    @cache
+    def __ge__(self, other: "Identifier") -> bool:
+        return self.id >= other.id
+    @cache
+    def __gt__(self, other: "Identifier") -> bool:
+        return self.id > other.id
 
 
 class Secret(Identifier):
@@ -68,23 +96,33 @@ class Secret(Identifier):
         self.keypair = keypair(seed)
         super().__init__(id=Identifier.unpack(self.key).id)
 
+    @cache
     @property
     def __msgpack__(self) -> tuple[int, bytes]:
         return self.typecode, self.seed
 
+    @cache
     @classmethod
     def unpack(cls, data) -> object:
         return cls(seed=data)
 
+    @cache
     @property
     def key(self) -> bytes:
         return self.keypair[32:]
 
+    @cache
     @property
-    def id(self) -> int:
-        if not hasattr(self, "_id"):
-            self._id = sum(x << (8*i) for i, x in enumerate(self.key))
-        return self._id
+    def id(self) -> Identifier:
+        return Identifier(
+            id=sum(x << (8*i) for i, x in enumerate(self.key)),
+            len=len(self.key)
+        )
+
+    @cache
+    def sign(self, nonce: HashDigest) -> "Signature":
+        x, m = self.seed, nonce
+        return Signature(id=self.id, nonce=nonce, sr=ed25519_sign(x, m)))
 
     def key_exchange(self, other: Identifier, nonce: HashDigest) -> "Secret":
         x, A = self.seed, other.key
@@ -92,18 +130,40 @@ class Secret(Identifier):
         return self.__class__(seed=keypair[:32])
 
 
-class Node(object):
+class Signature(Identifier):
 
     typecode = 3
 
-    @property
-    def __msgpack__(self) -> tuple[int, bytes]:
-        return self.typecode, pack((self.id, self.data))
+    def __init__(self, id: Identifier = None, nonce: HashDigest = None, sr: bytes = None):
+        super().__init__(id=id.id, len=id.len)
+        self.nonce = nonce
+        self.sr = sr
+
+    @cache
+    def verify(self) -> bool:
+        A, m, sr = self.key, self.nonce, self.sr
+        return bool(ed25519_verify(sr, A, m))
+
+
+class Node(Identifier):
+
+    typecode = 3
 
     def __init__(self, id: Identifier, data: bytes | None = None) -> None:
-        super().__init__()
-        self.id, self.data = id, data
-    
+        super().__init__(id=id.id)
+
+    @property
+    def __msgpack__(self) -> tuple[int, bytes]:
+        return self.typecode, pack((self._id, self.data))
+
+    @classmethod
+    def unpack(cls, data) -> "Node":
+        return cls(*unpack(data))
+
+    @property
+    def id(self) -> int:
+        return self._id.id
+
     def __lt__(self, other: "Node") -> bool:
         return self.id < other.id
     
@@ -125,7 +185,7 @@ class Node(object):
 
 class Peer(Node):
 
-    def __init__(self, network: "Network"):
+    def __init__(self, network: "Network", id=None, secret=None):
         super().__init__(id=None, data={})
         self.network = network
         self.secret: Secret = None
@@ -181,7 +241,7 @@ class Registry(Peer):
 class Network(DatagramProtocol):
 
     def __init__(self, secret: Secret, registries: list[Registry]):
-        self.host = Peer(secret.identifier, None, None)
+        self.host = Peer(self, id=id, None, None)
         self.secret = secret
         self.registries = registries
         self.conn: dict[tuple[str, int], Connection] = {}

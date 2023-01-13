@@ -142,7 +142,7 @@ _bad_buffs:
 
 _deref_c_m:
     PyBuffer_Release(& c_m);
-_deref_c_x:
+_deref_c_x_A:
     PyBuffer_Release(& c_x_A);
 _error:
     return NULL;

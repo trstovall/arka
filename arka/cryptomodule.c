@@ -209,3 +209,116 @@ _deref_c_sm:
 _error:
     return NULL;
 }
+
+
+static PyObject * key_exchange(PyObject * self, PyObject * args) {
+
+    PyObject *py_xA, *py_Q, *py_nonce;
+    Py_buffer c_xA, c_Q, c_nonce;
+    uint8_t xA[64], Q[32], nonce[32];
+    uint8_t keypair[64];
+
+
+    if (!PyArg_ParseTuple(args, "OOO", & buff))
+        goto _error;
+    if (!(PyObject_CheckBuffer(py_xA) && PyObject_CheckBuffer(py_Q) && PyObject_CheckBuffer(py_nonce)))
+        goto _bad_buffers;
+
+    if (PyObject_GetBuffer(py_xA, & c_xA, 0))
+        goto _bad_xA;
+    if (PyObject_GetBuffer(py_xA, & c_xA, 0))
+        goto _bad_Q_deref_xA;
+    if (PyObject_GetBuffer(py_xA, & c_xA, 0))
+        goto _bad_nonce_deref_Q;
+    if (c_xA.len != 64 || c_Q != 32 || c_nonce != 32)
+        goto _bad_buffer_len_deref_buffers;
+
+    if (PyBuffer_ToContiguous(xA, & c_xA, 64, 'C'))
+        goto _buffer_copy_fail;
+    if (PyBuffer_ToContiguous(Q, & Q, 32, 'C'))
+        goto _buffer_copy_fail;
+    if (PyBuffer_ToContiguous(nonce, & c_nonce, 32, 'C'))
+        goto _buffer_copy_fail;
+
+    PyBuffer_Release(& c_xA);
+    PyBuffer_Release(& c_Q);
+    PyBuffer_Release(& c_nonce);
+    ed25519_key_exchange_vartime(keypair, xA, Q, nonce);
+
+    return PyBytes_FromStringAndSize((const char *)keypair, 64);
+
+_bad_buffers:
+    PyErr_SetString(PyExc_TypeError, "input keypair, key, and nonce must be buffers");
+    goto _error;
+
+_bad_buffer_len_deref_buffers:
+    PyErr_SetString(PyExc_ValueError, "input keypair, key, and nonce must be buffers of len 64, 32, 32.");
+    goto _deref_nonce;
+
+_buffer_copy_fail_deref_buffers:
+    PyErr_SetString(PyExc_ValueError, "Failed to copy Py_buffers to C.");
+    goto _deref_nonce;
+
+_deref_nonce:
+    PyBuffer_Release(& c_nonce);
+_deref_Q:
+    PyBuffer_Release(& c_Q);
+_deref_xA:
+    PyBuffer_Release(& c_xA);
+_error:
+    return NULL;
+}
+
+
+static PyObject * djb2(PyObject * self, PyObject * args) {
+
+    PyObject *py_x;
+    Py_buffer c_x;
+    uint8_t x[32], y[4];
+    uint32_t value = 0;
+
+    if (!PyArg_ParseTuple(args, "O", & py_x))
+        goto _error;
+    
+    if (!PyObject_CheckBuffer(py_x))
+        goto _bad_py_x;
+
+    if (PyObject_GetBuffer(py_x, & c_x, 0))
+        goto _bad_py_x;
+
+    if (c_xA.len != 32)
+        goto _bad_x_len;
+
+    if (PyBuffer_ToContiguous(x, & c_x, 32, 'C'))
+        goto _buffer_copy_fail;
+
+    PyBuffer_Release(& c_x);
+
+    for (int i=0; i<32; i++)
+        value = 33 * value + x[i];
+
+    y[0] = value & 0xff;
+    y[1] = (value >> 8) & 0xff;
+    y[2] = (value >> 16) & 0xff;
+    y[3] = (value >> 24) & 0xff;
+
+    return PyBytes_FromStringAndSize((const char *)y, 4);
+
+_buffer_copy_fail:
+    PyErr_SetString(PyExc_TypeError, "input value must be buffer of len 32.");
+    goto _deref_c_x;
+
+_bad_x_len:
+    PyErr_SetString(PyExc_TypeError, "input value must be buffer of len 32.");
+    goto _deref_c_x;
+
+_bad_py_x:
+    PyErr_SetString(PyExc_TypeError, "input value must be buffer of len 32.");
+    goto _error;
+
+_deref_c_x:
+    PyBuffer_Release(& c_x);
+
+_error:
+    return NULL;
+}

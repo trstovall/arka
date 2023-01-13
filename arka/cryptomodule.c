@@ -275,7 +275,7 @@ static PyObject * djb2(PyObject * self, PyObject * args) {
     PyObject *py_x;
     Py_buffer c_x;
     uint8_t x[32], y[4];
-    uint32_t value = 0;
+    uint32_t value = 5381;
 
     if (!PyArg_ParseTuple(args, "O", & py_x))
         goto _error;
@@ -315,6 +315,134 @@ _bad_x_len:
 _bad_py_x:
     PyErr_SetString(PyExc_TypeError, "input value must be buffer of len 32.");
     goto _error;
+
+_deref_c_x:
+    PyBuffer_Release(& c_x);
+
+_error:
+    return NULL;
+}
+
+
+static PyObject * keccak_800(PyObject * self, PyObject * args) {
+
+    PyObject * py_x, * value;
+    Py_buffer c_x;
+    int8_t *x, *y;
+    int32_t outlen = 32;
+
+    if (!PyArg_ParseTuple(args, "O|i", & py_x, & outlen))
+        goto _error;
+
+    if (!PyObject_CheckBuffer(py_x))
+        goto _bad_py_x;
+
+    if (PyObject_GetBuffer(py_x, & c_x, 0))
+        goto _bad_py_x;
+
+    if (!(x = (uint8_t *) malloc(py_x.len)))
+        goto _oom;
+    if (!(x = (uint8_t *) malloc(py_x.len)))
+        goto _oom_deref_x;
+
+    if (PyBuffer_ToContiguous(x, & c_x, c_x.len, 'C'))
+        goto _buffer_copy_fail;
+
+    PyBuffer_Release(& c_x);
+
+    keccak800(y, outlen, x, py_x.len);
+
+    value = PyBytes_FromStringAndSize((const char *)y, outlen);
+
+    free(x);
+    free(y);
+    return value;
+
+_buffer_copy_fail:
+    PyErr_SetString(PyExc_TypeError, "input value must be buffer of len 32.");
+    goto _deref_y;
+
+_oom_deref_x:
+    PyErr_SetString(PyErr_NoMemory, "Out of memory.");
+    goto _deref_x;
+
+_oom:
+    PyErr_SetString(PyErr_NoMemory, "Out of memory.");
+    goto _deref_c_x;
+
+_bad_py_x:
+    PyErr_SetString(PyExc_TypeError, "input value must be buffer.");
+    goto _error;
+
+_deref_y:
+    free(y);
+
+_deref_x:
+    free(x);
+
+_deref_c_x:
+    PyBuffer_Release(& c_x);
+
+_error:
+    return NULL;
+}
+
+
+static PyObject * keccak_1600(PyObject * self, PyObject * args) {
+
+    PyObject * py_x, * value;
+    Py_buffer c_x;
+    int8_t *x, *y;
+    int64_t outlen = 32;
+
+    if (!PyArg_ParseTuple(args, "O|i", & py_x, & outlen))
+        goto _error;
+
+    if (!PyObject_CheckBuffer(py_x))
+        goto _bad_py_x;
+
+    if (PyObject_GetBuffer(py_x, & c_x, 0))
+        goto _bad_py_x;
+
+    if (!(x = (uint8_t *) malloc(py_x.len)))
+        goto _oom;
+    if (!(x = (uint8_t *) malloc(py_x.len)))
+        goto _oom_deref_x;
+
+    if (PyBuffer_ToContiguous(x, & c_x, c_x.len, 'C'))
+        goto _buffer_copy_fail;
+
+    PyBuffer_Release(& c_x);
+
+    keccak1600(y, outlen, x, py_x.len);
+
+    value = PyBytes_FromStringAndSize((const char *)y, outlen);
+
+    free(x);
+    free(y);
+    return value;
+
+_buffer_copy_fail:
+    PyErr_SetString(PyExc_TypeError, "input value must be buffer of len 32.");
+    goto _deref_y;
+
+_oom_deref_x:
+    PyErr_SetString(PyErr_NoMemory, "Out of memory.");
+    goto _deref_x;
+
+_oom:
+    PyErr_SetString(PyErr_NoMemory, "Out of memory.");
+    goto _deref_c_x;
+
+_bad_py_x:
+    PyErr_SetString(PyExc_TypeError, "input value must be buffer.");
+    goto _error;
+
+_deref_y:
+    free(y);
+
+_deref_x:
+    free(x);
 
 _deref_c_x:
     PyBuffer_Release(& c_x);

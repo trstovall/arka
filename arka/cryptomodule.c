@@ -78,6 +78,10 @@ _bad_buffer:
     PyErr_SetString(PyExc_ValueError, "input seed must be buffer of len 32.");
     goto _error;
 
+_bad_buffer_deref_pybuf:
+    PyErr_SetString(PyExc_ValueError, "input seed must be buffer of len 32.");
+    goto _deref_pybuf;
+
 _bad_buffer_len_deref_pybuf:
     PyErr_SetString(PyExc_ValueError, "input seed must be buffer of len 32.");
     goto _deref_pybuf;
@@ -95,6 +99,7 @@ static PyObject * sign(PyObject * self, PyObject * args) {
     PyObject *py_x_A, *py_m;
     Py_buffer c_x_A, c_m;
     uint8_t sm[64+32], m[32], x_A[64];
+    unsigned long long smlen = 0;
 
     if (!PyArg_ParseTuple(args, "OO", & py_x_A, & py_m))
         goto _error;
@@ -108,7 +113,7 @@ static PyObject * sign(PyObject * self, PyObject * args) {
     if (PyObject_GetBuffer(py_m, & c_m, 0))
         goto _bad_buffs_deref_c_x_A;
 
-    if (c_x.len != 64 || c_m.len != 32)
+    if (c_x_A.len != 64 || c_m.len != 32)
         goto _bad_buffs_len_deref_buffs;
 
     if (PyBuffer_ToContiguous(x_A, & c_x_A, 64, 'C'))
@@ -120,24 +125,31 @@ static PyObject * sign(PyObject * self, PyObject * args) {
     PyBuffer_Release(& c_x_A);
     PyBuffer_Release(& c_m);
 
-    ed25519_sign(sm, 96, m, 32, x_A);
+    ed25519_sign(sm, &smlen, m, 32, x_A);
+
+    if (smlen != 96)
+        goto _bad_signature_deref_buffs;
 
     return PyBytes_FromStringAndSize((const char *)sm, 96);
 
-_bad_buffs_deref_buffs;
-    PyErr_SetString(PyExc_TypeError, "input keypair must be 64 bytes and hash_digest must be of len 32.")
-    goto _deref_c_m:
+_bad_signature_deref_buffs:
+    PyErr_SetString(PyExc_Exception, "Unknown error when signing.");
+    goto _deref_c_m;
 
-_bad_buffs_len_deref_buffs;
-    PyErr_SetString(PyExc_TypeError, "input keypair must be 64 bytes and hash_digest must be of len 32.")
-    goto _deref_c_m:
+_bad_buffs_deref_buffs:
+    PyErr_SetString(PyExc_TypeError, "input keypair must be 64 bytes and hash_digest must be of len 32.");
+    goto _deref_c_m;
+
+_bad_buffs_len_deref_buffs:
+    PyErr_SetString(PyExc_TypeError, "input keypair must be 64 bytes and hash_digest must be of len 32.");
+    goto _deref_c_m;
 
 _bad_buffs_deref_c_x_A:
-    PyErr_SetString(PyExc_TypeError, "input keypair must be 64 bytes and hash_digest must be of len 32.")
-    goto _deref_c_x_A:
+    PyErr_SetString(PyExc_TypeError, "input keypair must be 64 bytes and hash_digest must be of len 32.");
+    goto _deref_c_x_A;
 
 _bad_buffs:
-    PyErr_SetString(PyExc_TypeError, "input keypair must be 64 bytes and hash_digest must be of len 32.")
+    PyErr_SetString(PyExc_TypeError, "input keypair must be 64 bytes and hash_digest must be of len 32.");
     goto _error;
 
 _deref_c_m:
@@ -155,7 +167,7 @@ static PyObject * verify(PyObject * self, PyObject * args) {
     PyObject *py_pk, *py_sm;
     Py_buffer c_pk, c_sm;
     uint8_t m[32], sm[64+32], pk[32];
-    uint32_t mlen = 0;
+    unsigned long long mlen = 0;
 
      if (!PyArg_ParseTuple(args, "OO", & py_sm, & py_pk))
         goto _error;
@@ -181,25 +193,25 @@ static PyObject * verify(PyObject * self, PyObject * args) {
     PyBuffer_Release(& c_sm);
     PyBuffer_Release(& c_pk);
    
-    if (ed25519_verify(m, & mlen, sm, 96, pk))
+    if (ed25519_verify(m, & mlen, sm, 96, pk) || mlen != 32)
         goto _error;
 
     return PyBytes_FromStringAndSize((const char *)m, 32);
 
-_bad_buffs_deref_buffs;
-    PyErr_SetString(PyExc_TypeError, "input signed_message_digest must be 96 bytes and pk must be of len 32.")
-    goto _deref_c_pk:
+_bad_buffs_deref_buffs:
+    PyErr_SetString(PyExc_TypeError, "input signed_message_digest must be 96 bytes and pk must be of len 32.");
+    goto _deref_c_pk;
 
-_bad_buffs_len_deref_buffs;
-    PyErr_SetString(PyExc_TypeError, "input signed_message_digest must be 96 bytes and pk must be of len 32.")
+_bad_buffs_len_deref_buffs:
+    PyErr_SetString(PyExc_TypeError, "input signed_message_digest must be 96 bytes and pk must be of len 32.");
     goto _deref_c_pk;
 
 _bad_buffs_deref_c_sm:
-    PyErr_SetString(PyExc_TypeError, "input signed_message_digest must be 96 bytes and pk must be of len 32.")
+    PyErr_SetString(PyExc_TypeError, "input signed_message_digest must be 96 bytes and pk must be of len 32.");
     goto _deref_c_sm;
 
 _bad_buffs:
-    PyErr_SetString(PyExc_TypeError, "input signed_message_digest must be 96 bytes and pk must be of len 32.")
+    PyErr_SetString(PyExc_TypeError, "input signed_message_digest must be 96 bytes and pk must be of len 32.");
     goto _error;
 
 _deref_c_pk:
@@ -219,7 +231,7 @@ static PyObject * key_exchange(PyObject * self, PyObject * args) {
     uint8_t keypair[64];
 
 
-    if (!PyArg_ParseTuple(args, "OOO", & buff))
+    if (!PyArg_ParseTuple(args, "OOO", & py_xA, & py_Q, & py_nonce))
         goto _error;
     if (!(PyObject_CheckBuffer(py_xA) && PyObject_CheckBuffer(py_Q) && PyObject_CheckBuffer(py_nonce)))
         goto _bad_buffers;
@@ -230,15 +242,15 @@ static PyObject * key_exchange(PyObject * self, PyObject * args) {
         goto _bad_Q_deref_xA;
     if (PyObject_GetBuffer(py_xA, & c_xA, 0))
         goto _bad_nonce_deref_Q;
-    if (c_xA.len != 64 || c_Q != 32 || c_nonce != 32)
+    if (c_xA.len != 64 || c_Q.len != 32 || c_nonce.len != 32)
         goto _bad_buffer_len_deref_buffers;
 
     if (PyBuffer_ToContiguous(xA, & c_xA, 64, 'C'))
-        goto _buffer_copy_fail;
-    if (PyBuffer_ToContiguous(Q, & Q, 32, 'C'))
-        goto _buffer_copy_fail;
+        goto _buffer_copy_fail_deref_buffers;
+    if (PyBuffer_ToContiguous(Q, & c_Q, 32, 'C'))
+        goto _buffer_copy_fail_deref_buffers;
     if (PyBuffer_ToContiguous(nonce, & c_nonce, 32, 'C'))
-        goto _buffer_copy_fail;
+        goto _buffer_copy_fail_deref_buffers;
 
     PyBuffer_Release(& c_xA);
     PyBuffer_Release(& c_Q);
@@ -250,6 +262,18 @@ static PyObject * key_exchange(PyObject * self, PyObject * args) {
 _bad_buffers:
     PyErr_SetString(PyExc_TypeError, "input keypair, key, and nonce must be buffers");
     goto _error;
+
+_bad_xA:
+    PyErr_SetString(PyExc_ValueError, "Bad keypair");
+    goto _error;
+
+_bad_Q_deref_xA:
+    PyErr_SetString(PyExc_ValueError, "Bad peer key.");
+    goto _deref_xA;
+
+_bad_nonce_deref_Q:
+    PyErr_SetString(PyExc_ValueError, "Bad nonce buffer.");
+    goto _deref_Q;
 
 _bad_buffer_len_deref_buffers:
     PyErr_SetString(PyExc_ValueError, "input keypair, key, and nonce must be buffers of len 64, 32, 32.");
@@ -286,11 +310,11 @@ static PyObject * djb2(PyObject * self, PyObject * args) {
     if (PyObject_GetBuffer(py_x, & c_x, 0))
         goto _bad_py_x;
 
-    if (c_xA.len != 32)
-        goto _bad_x_len;
+    if (c_x.len != 32)
+        goto _bad_x_len_deref_c_x;
 
     if (PyBuffer_ToContiguous(x, & c_x, 32, 'C'))
-        goto _buffer_copy_fail;
+        goto _buffer_copy_fail_deref_c_x;
 
     PyBuffer_Release(& c_x);
 
@@ -304,11 +328,11 @@ static PyObject * djb2(PyObject * self, PyObject * args) {
 
     return PyBytes_FromStringAndSize((const char *)y, 4);
 
-_buffer_copy_fail:
+_buffer_copy_fail_deref_c_x:
     PyErr_SetString(PyExc_TypeError, "input value must be buffer of len 32.");
     goto _deref_c_x;
 
-_bad_x_len:
+_bad_x_len_deref_c_x:
     PyErr_SetString(PyExc_TypeError, "input value must be buffer of len 32.");
     goto _deref_c_x;
 
@@ -328,8 +352,8 @@ static PyObject * keccak_800(PyObject * self, PyObject * args) {
 
     PyObject * py_x, * value;
     Py_buffer c_x;
-    int8_t *x, *y;
-    int32_t outlen = 32;
+    uint8_t *x, y[4096];
+    uint32_t outlen = 32;
 
     if (!PyArg_ParseTuple(args, "O|i", & py_x, & outlen))
         goto _error;
@@ -340,42 +364,37 @@ static PyObject * keccak_800(PyObject * self, PyObject * args) {
     if (PyObject_GetBuffer(py_x, & c_x, 0))
         goto _bad_py_x;
 
-    if (!(x = (uint8_t *) malloc(py_x.len)))
-        goto _oom;
-    if (!(x = (uint8_t *) malloc(py_x.len)))
-        goto _oom_deref_x;
+    if (!(x = (uint8_t *) malloc(c_x.len)))
+        goto _oom_deref_c_x;
 
     if (PyBuffer_ToContiguous(x, & c_x, c_x.len, 'C'))
         goto _buffer_copy_fail;
 
     PyBuffer_Release(& c_x);
 
-    keccak800(y, outlen, x, py_x.len);
+    keccak800(y, outlen, x, c_x.len);
 
-    value = PyBytes_FromStringAndSize((const char *)y, outlen);
+    if (!(value = PyBytes_FromStringAndSize((const char *)y, outlen)))
+        printf("no value for len %d\n", outlen);
 
     free(x);
-    free(y);
     return value;
 
 _buffer_copy_fail:
     PyErr_SetString(PyExc_TypeError, "input value must be buffer of len 32.");
-    goto _deref_y;
-
-_oom_deref_x:
-    PyErr_SetString(PyErr_NoMemory, "Out of memory.");
     goto _deref_x;
 
-_oom:
-    PyErr_SetString(PyErr_NoMemory, "Out of memory.");
+_oom_deref_x:
+    PyErr_NoMemory();
+    goto _deref_x;
+
+_oom_deref_c_x:
+    PyErr_NoMemory();
     goto _deref_c_x;
 
 _bad_py_x:
     PyErr_SetString(PyExc_TypeError, "input value must be buffer.");
     goto _error;
-
-_deref_y:
-    free(y);
 
 _deref_x:
     free(x);
@@ -392,7 +411,7 @@ static PyObject * keccak_1600(PyObject * self, PyObject * args) {
 
     PyObject * py_x, * value;
     Py_buffer c_x;
-    int8_t *x, *y;
+    uint8_t *x, *y;
     int64_t outlen = 32;
 
     if (!PyArg_ParseTuple(args, "O|i", & py_x, & outlen))
@@ -404,9 +423,9 @@ static PyObject * keccak_1600(PyObject * self, PyObject * args) {
     if (PyObject_GetBuffer(py_x, & c_x, 0))
         goto _bad_py_x;
 
-    if (!(x = (uint8_t *) malloc(py_x.len)))
-        goto _oom;
-    if (!(x = (uint8_t *) malloc(py_x.len)))
+    if (!(x = (uint8_t *) malloc(c_x.len)))
+        goto _oom_deref_c_x;
+    if (!(y = (uint8_t *) malloc(outlen)))
         goto _oom_deref_x;
 
     if (PyBuffer_ToContiguous(x, & c_x, c_x.len, 'C'))
@@ -414,7 +433,7 @@ static PyObject * keccak_1600(PyObject * self, PyObject * args) {
 
     PyBuffer_Release(& c_x);
 
-    keccak1600(y, outlen, x, py_x.len);
+    keccak1600(y, outlen, x, c_x.len);
 
     value = PyBytes_FromStringAndSize((const char *)y, outlen);
 
@@ -427,11 +446,11 @@ _buffer_copy_fail:
     goto _deref_y;
 
 _oom_deref_x:
-    PyErr_SetString(PyErr_NoMemory, "Out of memory.");
+    PyErr_NoMemory();
     goto _deref_x;
 
-_oom:
-    PyErr_SetString(PyErr_NoMemory, "Out of memory.");
+_oom_deref_c_x:
+    PyErr_NoMemory();
     goto _deref_c_x;
 
 _bad_py_x:

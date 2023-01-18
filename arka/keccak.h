@@ -1,9 +1,10 @@
 
+#include "stdio.h"
 #include "stdint.h"
 #include "string.h"
 
-#define ROL(a, offset) ((a << offset) ^ (a >> (64-offset)))
-
+#define ROTL64(a, offset) ((a << offset) ^ (a >> (64-offset)))
+#define ROTL32(a, offset) ((a << offset) ^ (a >> (32-offset)))
 #define MIN(A, B) (((A) < (B)) ? (A) : (B))
 
 uint64_t load64(const unsigned char *x)
@@ -117,7 +118,7 @@ void round800(uint32_t * A, uint32_t RC) {
         C[x] = A[x + 5*0] ^ A[x + 5*1] ^ A[x + 5*2] ^ A[x + 5*3] ^ A[x + 5*4];
     }
     for (int x=0; x < 5; x++) {
-        D[x] = C[(x - 1) % 5] ^ ROL(C[(x + 1) % 5], 1);
+        D[x] = C[(x - 1) % 5] ^ ROTL32(C[(x + 1) % 5], 1);
     }
     for (int y=0; y < 5; y++) {
         for (int x=0; x < 5; x++) {
@@ -129,7 +130,7 @@ void round800(uint32_t * A, uint32_t RC) {
 
     for (int y=0; y < 5; y++) {
         for (int x=0; x < 5; x++) {
-            B[y  + (2*x + 3*y) * 5] = ROL(A[x + 5*y], (rho[x + 5*y] % 32));
+            B[y  + ((2*x + 3*y) % 5) * 5] = ROTL32(A[x + 5*y], (rho[x + 5*y] % 32));
         }
     }
 
@@ -150,6 +151,7 @@ void round800(uint32_t * A, uint32_t RC) {
 void keccak_f800(uint32_t * A) {
     for (int i=0; i < 22; i++) {
         round800(A, (uint32_t) iota[i]);
+        printf("A: %u\n", A[0]);
     }
 }
 
@@ -186,7 +188,7 @@ void round1600(uint64_t * A, uint64_t RC) {
         C[x] = A[x + 5*0] ^ A[x + 5*1] ^ A[x + 5*2] ^ A[x + 5*3] ^ A[x + 5*4];
     }
     for (int x=0; x < 5; x++) {
-        D[x] = C[(x - 1) % 5] ^ ROL(C[(x + 1) % 5], 1);
+        D[x] = C[(x - 1) % 5] ^ ROTL64(C[(x + 1) % 5], 1);
     }
     for (int y=0; y < 5; y++) {
         for (int x=0; x < 5; x++) {
@@ -198,7 +200,7 @@ void round1600(uint64_t * A, uint64_t RC) {
 
     for (int y=0; y < 5; y++) {
         for (int x=0; x < 5; x++) {
-            B[y  + (2*x + 3*y) * 5] = ROL(A[x + 5*y], rho[x + 5*y]);
+            B[y  + ((2*x + 3*y) % 5) * 5] = ROTL64(A[x + 5*y], rho[x + 5*y]);
         }
     }
 
@@ -225,34 +227,44 @@ void keccak_f1600(uint64_t * A) {
 
 void keccak800 (uint8_t * output, uint32_t outlen, const uint8_t * input, const uint32_t inlen) {
     uint32_t A[25] = {0};
+    uint8_t buffer[36] = {0};
     uint32_t pos = 0;
-    uint8_t buffer[100];
-    while (inlen > pos) {
-        if ((inlen - pos) < 100) {
-            strncpy((char *)buffer, (char *)input + pos, inlen-pos);
-            pos = inlen;
-            memset(buffer + pos, 0, 100 - (pos % 100));
-            buffer[pos % 100] = 1;
-            buffer[99] = 0x80;
+    while (pos <= inlen) {
+        if (pos + 36 <= inlen) {
+            #pragma unroll
+            for (int i=0; i < 9; i++) {
+                A[i] ^= load32(input + pos + (4 * i));
+            }
         }
         else {
-            strncpy((char *)buffer, (char *)input + pos, 100);
-        }
-        pos += 100;
-        for (int i=0; i < 25; i++) {
-            A[i] = load32(buffer + 4*i);
+            strncpy((char *)buffer, (char *)input + pos, inlen-pos);
+            buffer[pos % 36] |= 0x01;
+            buffer[35] |= 0x80;
+            #pragma unroll
+            for (int i=0; i < 9; i++) {
+                A[i] ^= load32(buffer + 4 * i);
+            }
         }
         keccak_f800(A);
+        pos += 36;
     }
     pos = 0;
-    while (outlen > pos) {
-        for (int i=0; i < MIN(outlen - pos, 36)/4; i++) {
-            store32(output + pos + 4*i, A[i]);
+    while (pos <= outlen) {
+        if (pos + 36 <= outlen) {
+            for (int i=0; i < 9; i++) {
+                store32(output + pos + 4*i, A[i]);
+            }
         }
-        pos += MIN(outlen - pos, 36)/4;
+        else {
+            for (int i=0; i < ((outlen % 36) + 3) / 4; i++) {
+                store32(buffer + 4*i, A[i]);
+            }
+            strncpy((char *)output, (char *)buffer, outlen % 36);
+        }
+        pos += 36;
         if (pos < outlen)
             keccak_f800(A);
-    }
+    };
 }
 
 
@@ -279,10 +291,10 @@ void keccak1600 (uint8_t * output, uint64_t outlen, const uint8_t * input, const
     }
     pos = 0;
     while (outlen > pos) {
-        for (int i=0; i < MIN(outlen - pos, 136)/8; i++) {
+        for (int i=0; i < ((int) MIN(outlen - pos, 136))/8; i++) {
             store64(output + pos + 8*i, A[i]);
         }
-        pos += MIN(outlen - pos, 136)/8;
+        pos += ((int) MIN(outlen - pos, 136))/8;
         if (pos < outlen)
             keccak_f1600(A);
     }

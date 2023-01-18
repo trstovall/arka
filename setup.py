@@ -4,8 +4,14 @@ from setuptools import setup, find_packages, Extension
 
 _crypto = Extension(
     name="arka.crypto",
-    sources=["crypto/cryptomodule.c"],
-    include_dirs=["crypto"],
+    sources=["arka/cryptomodule.c"],
+    include_dirs=["arka"],
+)
+
+_mpack = Extension(
+    name="arka.mpack",
+    sources=["arka/mpackmodule.c"],
+    include_dirs=["arka"],
 )
 
 setup(
@@ -15,5 +21,5 @@ setup(
     long_description="long description",
     packages=find_packages(where="."),
     python_requires=">=3.10, <4",
-    ext_modules=[_crypto]
+    ext_modules=[_crypto, _mpack]
 )

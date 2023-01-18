@@ -10381,7 +10381,7 @@ void cmov(ge_precomp * t, ge_precomp * u, unsigned char b) {
     fe_cmov(t -> xy2d, u -> xy2d, b);
 }
 
-void select(ge_precomp * t, int pos, signed char b) {
+void _select(ge_precomp * t, int pos, signed char b) {
     ge_precomp minust;
     unsigned char bnegative = negative(b);
     unsigned char babs = b - (((-bnegative) & b) << 1);
@@ -11266,7 +11266,7 @@ void ge_scalarmult_base(ge_p3 * h,
 
     ge_p3_0(h);
     for (i = 1; i < 64; i += 2) {
-        select( & t, i / 2, e[i]);
+        _select( & t, i / 2, e[i]);
         ge_madd( & r, h, & t);
         ge_p1p1_to_p3(h, & r);
     }
@@ -11281,7 +11281,7 @@ void ge_scalarmult_base(ge_p3 * h,
     ge_p1p1_to_p3(h, & r);
 
     for (i = 0; i < 64; i += 2) {
-        select( & t, i / 2, e[i]);
+        _select( & t, i / 2, e[i]);
         ge_madd( & r, h, & t);
         ge_p1p1_to_p3(h, & r);
     }

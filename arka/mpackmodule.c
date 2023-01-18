@@ -77,7 +77,7 @@ PyMODINIT_FUNC PyInit_mpack(void)
     PyObject * mod;
 
     PyDateTime_IMPORT;
-    if (!(mod = PyModule_Create(&msgpackmodule)))
+    if (!(mod = PyModule_Create(&mpackmodule)))
         goto _unknown_error_mod;
     if (!(Error = PyErr_NewException("arka.mpack.Error", NULL, NULL)))
         goto _unknown_error_error_deref_mod;

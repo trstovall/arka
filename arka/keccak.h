@@ -88,28 +88,6 @@ static const uint64_t iota[24] =
 
 void round800(uint32_t * A, uint32_t RC) {
 
-    /*
-
-    Round[b](A,RC) {
-    # θ step
-    C[x] = A[x,0] xor A[x,1] xor A[x,2] xor A[x,3] xor A[x,4],   for x in 0…4
-    D[x] = C[x-1] xor rot(C[x+1],1),                             for x in 0…4
-    A[x,y] = A[x,y] xor D[x],                           for (x,y) in (0…4,0…4)
-
-    # ρ and π steps
-    B[y,2*x+3*y] = rot(A[x,y], r[x,y]),                 for (x,y) in (0…4,0…4)
-
-    # χ step
-    A[x,y] = B[x,y] xor ((not B[x+1,y]) and B[x+2,y]),  for (x,y) in (0…4,0…4)
-
-    # ι step
-    A[0,0] = A[0,0] xor RC
-
-    return A
-    }
-
-    */
-
     uint32_t B[25], C[5], D[5];
 
     // theta step
@@ -118,7 +96,7 @@ void round800(uint32_t * A, uint32_t RC) {
         C[x] = A[x + 5*0] ^ A[x + 5*1] ^ A[x + 5*2] ^ A[x + 5*3] ^ A[x + 5*4];
     }
     for (int x=0; x < 5; x++) {
-        D[x] = C[(x - 1) % 5] ^ ROTL32(C[(x + 1) % 5], 1);
+        D[x] = C[(x == 0) ? 4 : (x - 1)] ^ ROTL32(C[(x + 1) % 5], 1);
     }
     for (int y=0; y < 5; y++) {
         for (int x=0; x < 5; x++) {
@@ -130,7 +108,7 @@ void round800(uint32_t * A, uint32_t RC) {
 
     for (int y=0; y < 5; y++) {
         for (int x=0; x < 5; x++) {
-            B[y  + ((2*x + 3*y) % 5) * 5] = ROTL32(A[x + 5*y], (rho[x + 5*y] % 32));
+            B[y  + ((2*x + 3*y) % 5) * 5] = ROTL32(A[x + 5*y], (rho[x + 5*y] & 0x1f));
         }
     }
 
@@ -151,34 +129,11 @@ void round800(uint32_t * A, uint32_t RC) {
 void keccak_f800(uint32_t * A) {
     for (int i=0; i < 22; i++) {
         round800(A, (uint32_t) iota[i]);
-        printf("A: %u\n", A[0]);
     }
 }
 
 
 void round1600(uint64_t * A, uint64_t RC) {
-
-    /*
-
-    Round[b](A,RC) {
-    # θ step
-    C[x] = A[x,0] xor A[x,1] xor A[x,2] xor A[x,3] xor A[x,4],   for x in 0…4
-    D[x] = C[x-1] xor rot(C[x+1],1),                             for x in 0…4
-    A[x,y] = A[x,y] xor D[x],                           for (x,y) in (0…4,0…4)
-
-    # ρ and π steps
-    B[y,2*x+3*y] = rot(A[x,y], r[x,y]),                 for (x,y) in (0…4,0…4)
-
-    # χ step
-    A[x,y] = B[x,y] xor ((not B[x+1,y]) and B[x+2,y]),  for (x,y) in (0…4,0…4)
-
-    # ι step
-    A[0,0] = A[0,0] xor RC
-
-    return A
-    }
-
-    */
 
     uint64_t B[25], C[5], D[5];
 
@@ -188,7 +143,7 @@ void round1600(uint64_t * A, uint64_t RC) {
         C[x] = A[x + 5*0] ^ A[x + 5*1] ^ A[x + 5*2] ^ A[x + 5*3] ^ A[x + 5*4];
     }
     for (int x=0; x < 5; x++) {
-        D[x] = C[(x - 1) % 5] ^ ROTL64(C[(x + 1) % 5], 1);
+        D[x] = C[(x == 0) ? 4 : (x - 1)] ^ ROTL64(C[(x + 1) % 5], 1);
     }
     for (int y=0; y < 5; y++) {
         for (int x=0; x < 5; x++) {
@@ -237,8 +192,8 @@ void keccak800 (uint8_t * output, uint32_t outlen, const uint8_t * input, const 
             }
         }
         else {
-            strncpy((char *)buffer, (char *)input + pos, inlen-pos);
-            buffer[pos % 36] |= 0x01;
+            memcpy((char *)buffer, (char *)input + pos, inlen-pos);
+            buffer[inlen % 36] |= 0x01;
             buffer[35] |= 0x80;
             #pragma unroll
             for (int i=0; i < 9; i++) {
@@ -249,54 +204,58 @@ void keccak800 (uint8_t * output, uint32_t outlen, const uint8_t * input, const 
         pos += 36;
     }
     pos = 0;
-    while (pos <= outlen) {
-        if (pos + 36 <= outlen) {
-            for (int i=0; i < 9; i++) {
-                store32(output + pos + 4*i, A[i]);
-            }
-        }
-        else {
-            for (int i=0; i < ((outlen % 36) + 3) / 4; i++) {
-                store32(buffer + 4*i, A[i]);
-            }
-            strncpy((char *)output, (char *)buffer, outlen % 36);
+    while (pos + 36 <= outlen) {
+        for (int i=0; i < 9; i++) {
+            store32(output + pos + 4*i, A[i]);
         }
         pos += 36;
-        if (pos < outlen)
-            keccak_f800(A);
-    };
+        keccak_f800(A);
+    }
+    if (pos < outlen) {
+        for (uint32_t i=0; i < ((outlen % 36) + 7) / 4; i++) {
+            store32(buffer + 4*i, A[i]);
+        }
+        memcpy((char *)output + pos, (char *)buffer, outlen % 36);
+    }
 }
 
 
 void keccak1600 (uint8_t * output, uint64_t outlen, const uint8_t * input, const uint64_t inlen) {
     uint64_t A[25] = {0};
+    uint8_t buffer[136] = {0};
     uint64_t pos = 0;
-    uint8_t buffer[200];
-    while (inlen > pos) {
-        if ((inlen - pos) < 200) {
-            strncpy((char *)buffer, (char *)input + pos, inlen-pos);
-            pos = inlen;
-            memset(buffer + pos, 0, 200 - (pos % 200));
-            buffer[pos % 200] = 1;
-            buffer[199] = 0x80;
+    while (pos <= inlen) {
+        if (pos + 136 <= inlen) {
+            #pragma unroll
+            for (int i=0; i < 17; i++) {
+                A[i] ^= load64(input + pos + (8 * i));
+            }
         }
         else {
-            strncpy((char *)buffer, (char *)input + pos, 200);
-        }
-        pos += 200;
-        for (int i=0; i < 25; i++) {
-            A[i] = load64(buffer + 8*i);
+            memcpy((char *)buffer, (char *)input + pos, inlen-pos);
+            buffer[inlen % 136] |= 0x01;
+            buffer[135] |= 0x80;
+            #pragma unroll
+            for (int i=0; i < 17; i++) {
+                A[i] ^= load64(buffer + 8 * i);
+            }
         }
         keccak_f1600(A);
+        pos += 136;
     }
     pos = 0;
-    while (outlen > pos) {
-        for (int i=0; i < ((int) MIN(outlen - pos, 136))/8; i++) {
+    while (pos + 136 <= outlen) {
+        for (int i=0; i < 17; i++) {
             store64(output + pos + 8*i, A[i]);
         }
-        pos += ((int) MIN(outlen - pos, 136))/8;
-        if (pos < outlen)
-            keccak_f1600(A);
+        pos += 136;
+        keccak_f1600(A);
+    }
+    if (pos < outlen) {
+        for (uint64_t i=0; i < ((outlen % 136) + 7) / 8; i++) {
+            store64(buffer + 8*i, A[i]);
+        }
+        memcpy(output + pos, buffer, outlen % 136);
     }
 }
 

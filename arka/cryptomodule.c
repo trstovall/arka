@@ -194,9 +194,9 @@ static PyObject * verify(PyObject * self, PyObject * args) {
     PyBuffer_Release(& c_pk);
    
     if (ed25519_verify(m, & mlen, sm, 96, pk) || mlen != 32)
-        goto _error;
+        Py_RETURN_FALSE;
 
-    return PyBytes_FromStringAndSize((const char *)m, 32);
+    Py_RETURN_TRUE;
 
 _bad_buffs_deref_buffs:
     PyErr_SetString(PyExc_TypeError, "input signed_message_digest must be 96 bytes and pk must be of len 32.");

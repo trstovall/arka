@@ -358,6 +358,9 @@ static PyObject * keccak_800(PyObject * self, PyObject * args) {
     if (!PyArg_ParseTuple(args, "O|i", & py_x, & outlen))
         goto _error;
 
+    if (outlen > 4096)
+        goto _bad_outlen;
+
     if (!PyObject_CheckBuffer(py_x))
         goto _bad_py_x;
 
@@ -374,8 +377,7 @@ static PyObject * keccak_800(PyObject * self, PyObject * args) {
 
     keccak800(y, outlen, x, c_x.len);
 
-    if (!(value = PyBytes_FromStringAndSize((const char *)y, outlen)))
-        printf("no value for len %d\n", outlen);
+    value = PyBytes_FromStringAndSize((const char *)y, outlen);
 
     free(x);
     return value;
@@ -394,6 +396,10 @@ _oom_deref_c_x:
 
 _bad_py_x:
     PyErr_SetString(PyExc_TypeError, "input value must be buffer.");
+    goto _error;
+
+_bad_outlen:
+    PyErr_SetString(PyExc_ValueError, "Output len must be >= 0 and <= 4096.");
     goto _error;
 
 _deref_x:
@@ -437,8 +443,7 @@ static PyObject * keccak_1600(PyObject * self, PyObject * args) {
 
     keccak1600(y, outlen, x, c_x.len);
 
-    if (!(value = PyBytes_FromStringAndSize((const char *)y, outlen)))
-        printf("no value for len %d\n", outlen);
+    value = PyBytes_FromStringAndSize((const char *)y, outlen);
 
     free(x);
     return value;

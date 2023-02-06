@@ -9,7 +9,7 @@ from socket import socket, AF_INET, SOCK_DGRAM
 from select import select
 from datetime import datetime
 
-from .crypto import keccak_800, keccak_1600, ed25519_sign, ed25519_verify, keypair, key_exchange
+from .crypto import keccak_800, keccak_1600, sign, verify, keypair, key_exchange
 from .msgpack import pack, unpack, Error as SerdesError
 
 
@@ -112,57 +112,42 @@ class Secret(Identifier):
         return self.keypair[32:]
 
     @cache
-    @property
-    def id(self) -> Identifier:
-        return Identifier(
-            id=sum(x << (8*i) for i, x in enumerate(self.key)),
-            len=len(self.key)
-        )
-
-    @cache
-    def sign(self, nonce: HashDigest) -> "Signature":
-        x, m = self.seed, nonce
-        return Signature(id=self.id, nonce=nonce, sr=ed25519_sign(x, m)))
+    def sign(self, nonce: HashDigest) -> "SignedMessageDigest":
+        return SignedMessageDigest(rsm=sign(self.seed, nonce))
 
     def key_exchange(self, other: Identifier, nonce: HashDigest) -> "Secret":
-        x, A = self.seed, other.key
-        keypair = key_exchange(x, A, nonce)
+        keypair = key_exchange(self.keypair, other.key, nonce)
         return self.__class__(seed=keypair[:32])
 
 
-class Signature(Identifier):
+class SignedMessageDigest(object):
 
     typecode = 3
 
-    def __init__(self, id: Identifier = None, nonce: HashDigest = None, sr: bytes = None):
-        super().__init__(id=id.id, len=id.len)
-        self.nonce = nonce
-        self.sr = sr
+    def __init__(self, rsm: bytes):
+        super().__init__()
+        self.rsm = rsm
 
     @cache
-    def verify(self) -> bool:
-        A, m, sr = self.key, self.nonce, self.sr
-        return bool(ed25519_verify(sr, A, m))
+    def verify(self, id: Identifier) -> bool:
+        return verify(self.rsm, id.key)
 
 
-class Node(Identifier):
+class Node(object):
 
-    typecode = 3
+    typecode = 4
 
     def __init__(self, id: Identifier, data: bytes | None = None) -> None:
-        super().__init__(id=id.id)
+        self.id = id
+        self.data = data
 
     @property
     def __msgpack__(self) -> tuple[int, bytes]:
-        return self.typecode, pack((self._id, self.data))
+        return self.typecode, pack((self.id, self.data))
 
     @classmethod
     def unpack(cls, data) -> "Node":
         return cls(*unpack(data))
-
-    @property
-    def id(self) -> int:
-        return self._id.id
 
     def __lt__(self, other: "Node") -> bool:
         return self.id < other.id

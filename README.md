@@ -57,7 +57,7 @@
 
       # spend a UTXO
       - digest: ...keccak800...                 # block digest or H(link digest | payment index | output index)
-\       key: ...ed25519 key...                  # Present key that hashes to address of UTXO
+        key: ...ed25519 key...                  # Present key that hashes to address of UTXO
         signature: ...ed25519 signature...      # Payment signed by `tx[tx_hash].to[index].address`
 
       # spend a workstamp

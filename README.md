@@ -74,7 +74,7 @@
         units: 0                                # 1 coin = 2**32 units
         memo: 0-MEMO_LIMIT bytes binary         # can be used for layer 2 protocols
         # vote to adjust parameters, weighted by units and aggregated across epoch (10000 blocks)
-        vote:                                   # applied to each entry in `tx.payment.to`
+        vote:
           block_reward: 0                       # [-128:127] integer corresponding to +/- 10% adjustment
           stamp_reward: 0                       # [-128:127] integer corresponding to +/- 10% adjustment
           data_fee: 0                           # [-128:127] integer corresponding to +/- 10% adjustment

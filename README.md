@@ -23,7 +23,7 @@
     index: 0                                    # block since genesis block
     prev_block: ...keccak800...                 # 32-byte digest of previous block link in chain
     prev_link: ...keccak800...                  # 32-byte digest of previous block or payment link in chain
-    timestamp: 0 (0y 0d 0h 0s)                  # seconds since UNIX epoch, unique
+    timestamp: 0                                # seconds since UNIX epoch, unique
 
     # common to all blocks
     total_work: 0                               # integer sum of work since chain start
@@ -35,9 +35,9 @@
     parameters:                                 # Adjusted parameters for epoch (10000 blocks)
       target: 2 ** 32                           # difficulty to mint a block link (average # of hashes)
       block_reward: 1000 * 2 ** 32              # 1000 coin minted by block link
-      stamp_reward: 500 * 2 ** 32               # reward = workstamp_reward * workstamp_difficulty / target
+      stamp_reward: 500 * 2 ** 32               # reward = (stamp_reward * workstamp.target) / target
       data_fee: 2 ** 20                         # 2 ** 20 units per byte in each transaction is to be destroyed
-      expiry: 2 ** 20                           # forget transactions older than 2**20 block periods
+      expiry: 100                               # forget transactions older than 100 epochs
     
 ### Payment link
 
@@ -46,7 +46,7 @@
     index: 0                                    # links since block link
     prev_block: ...keccak800...                 # 32-byte digest of most recent block in chain
     prev_link: ...keccak800...                  # 32-byte digest of most recent link in chain
-    timestamp: 0 (0y 0d 0h 0s)                  # seconds since UNIX epoch, unique
+    timestamp: 0                                # seconds since UNIX epoch, unique
 
     # payment links are signed by prev_block.worker
     signature: ...ed25519 signature...          # 64-byte result of ed25519-sign of link digest
@@ -73,12 +73,12 @@
       - address: 0-32 bytes keccak800 digest    # Receipients public ed25519 key hashed
         units: 0                                # 1 coin = 2**32 units
         memo: 0-MEMO_LIMIT bytes binary         # can be used for layer 2 protocols
-        # vote to adjust parameters, `weight = sum(to.units for to in tx.payment.to)`
+        # vote to adjust parameters, weighted by units and aggregated across epoch (10000 blocks)
         vote:                                   # applied to each entry in `tx.payment.to`
           block_reward: 0                       # [-128:127] integer corresponding to +/- 10% adjustment
-          stamp_reward: 0
-          data_fee: 0
-          block_expiry: 0
+          stamp_reward: 0                       # [-128:127] integer corresponding to +/- 10% adjustment
+          data_fee: 0                           # [-128:127] integer corresponding to +/- 10% adjustment
+          expiry: 0                             # [-128:127] integer corresponding to +/- 10% adjustment
 
       # commit data
       - memo: 0-MEMO_LIMIT bytes binary         # can be used for layer 2 protocols

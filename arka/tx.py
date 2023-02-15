@@ -3,7 +3,7 @@ from functools import cached_property
 from struct import pack, unpack
 
 from .crypto import keccak_800, keccak_1600, sign, verify
-from .chain import Chain
+
 
 class Parameters(object):
 
@@ -25,20 +25,18 @@ class BlockLink(object):
 
     def __init__(self,
         index: int,             # block number (prev block + 1)
-        prev_block: bytes,      # keccak800 hash digest
-        prev_link: bytes,       # keccak800 hash digest
         timestamp: int,         # seconds since UNIX epoch
-        total_work: int,        # total block work of chain including this block
-        parameters: Parameters, # Parameters from prev epoch block (every 10000 blocks)
+        epoch: bytes,           # hash digest of previous epoch block
+        prev_block: bytes,      # hash digest of most recent block
+        prev_link: bytes,       # hash digest of most recent link
         worker: bytes | None = None,    # ed25519 key of block worker
         nonce: bytes | None = None      # nonce required to hash block to target difficulty
     ):
         self.index = index
+        self.timestamp = timestamp
+        self.epoch = epoch
         self.prev_block = prev_block
         self.prev_link = prev_link
-        self.timestamp = timestamp
-        self.total_work = total_work
-        self.parameters = parameters
         self.worker = worker
         self.nonce = nonce
 

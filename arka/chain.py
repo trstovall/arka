@@ -2,22 +2,7 @@
 import sqlite3
 from pathlib import Path
 
-
-class PaymentLink(object):
-
-    id: int
-    time_ms: int
-    prev_link: bytes
-    prev_run: bytes
-    prev_epoch: bytes
-
-
-class BlockLink(object):
-
-    worker: bytes
-    difficulty: tuple[int, int]
-    nonce: bytes
-
+from .tx import BlockLink
 
 class Chain(object):
 
@@ -30,23 +15,59 @@ class Chain(object):
         self.cur = self.db.cursor()
         self.cur.execute("""
             CREATE TABLE IF NOT EXISTS
-            links (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                digest BLOB,
-                is_block BOOLEAN,
-                index INTEGER,
-                prev_link INTEGER,
-                prev_block INTEGER,
-                link BLOB
+            forks (
+                id          INTEGER PRIMARY KEY AUTOINCREMENT,
+                fork_epoch  INTEGER,
+                fork_block  INTEGER,
+                last_epoch  INTEGER,
+                last_block  INTEGER,
+                last_link   INTEGER,
+                total_work  BLOB
+            );
+        """)
+        self.cur.execute("""
+            CREATE TABLE IF NOT EXISTS
+            block_links (
+                id          INTEGER PRIMARY KEY AUTOINCREMENT,
+                index       INTEGER,
+                timestamp   INTEGER,
+                epoch       INTEGER,
+                prev_block  INTEGER,
+                prev_link   INTEGER,
+                worker      BLOB,
+                nonce       BLOB,
+                digest      BLOB
             );
         """)
         self.cur.execute("""
             CREATE INDEX IF NOT EXISTS
-            UNIQUE idx_links_id ON links(id);
+            UNIQUE idx_block_links_id ON block_links(id);
         """)
         self.cur.execute("""
             CREATE INDEX IF NOT EXISTS
-            UNIQUE idx_links_digest ON links(digest);
+            UNIQUE idx_block_links_digest ON block_links(digest);
+        """)
+        self.cur.execute("""
+            CREATE TABLE IF NOT EXISTS
+            epochs (
+                block_id        INTEGER,
+                index           INTEGER,
+                prev_epoch      INTEGER,
+                digest          BLOB,
+                target          BLOB,
+                block_reward    BLOB,
+                stamp_reward    BLOB,
+                data_fee        BLOB,
+                expiry          INTEGER
+            );
+        """)
+        self.cur.execute("""
+            CREATE INDEX IF NOT EXISTS
+            UNIQUE idx_epochs_id ON epochs(id);
+        """)
+        self.cur.execute("""
+            CREATE INDEX IF NOT EXISTS
+            UNIQUE idx_epochs_digest ON epochs(digest);
         """)
         self.cur.execute("""
             CREATE TABLE IF NOT EXISTS
@@ -76,11 +97,24 @@ class Chain(object):
         """)
 
     @property
+    def last_epoch(self) -> int:
+        if not hasattr(self, "_last_epoch"):
+            self.cur.execute("""
+                SELECT 
+            """)
+
+    @property
     def last_block(self):
         pass
 
     @property
     def last_link(self):
+        pass
+
+    def forge_block(self) -> BlockLink:
+
+
+    def add_block(self, block: BlockLink) -> bool:
         pass
 
 

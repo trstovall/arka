@@ -1,52 +1,38 @@
 
 # Arka: A private and scalable transaction chain with monetary policy voting
 
-## Bank
-
-### Send / Request Payment (Layer 1)
-
-### Send / Request Receipt (Layer 2)
-
-### Manage accounts and receipts (Layer 3)
-
-- Create
-- Organize
-- Export
-- Import
-
 ## Chain consensus with PoW
 
-### Block link
+### Block links
 
     ---
     # common to blocks and payment links
-    index: 0                                    # block since genesis block
-    prev_block: ...keccak800...                 # 32-byte digest of previous block link in chain
-    prev_link: ...keccak800...                  # 32-byte digest of previous block or payment link in chain
-    timestamp: 0                                # seconds since UNIX epoch, unique
+    index: int                              # block since genesis block
+    timestamp: int                          # seconds since UNIX epoch, unique
+    epoch: bytes                            # hash digest of most recent epoch link
+    prev_block: bytes                       # hash digest of most recent block link
+    prev_link: bytes                        # hash digest of most recent block or payment link
 
     # common to all blocks
-    total_work: 0                               # integer sum of work since chain start
-    worker: ...ed25519 key...                   # worker's public key - all proceeds from this tx go to key
-    target: 2 ** 32                             # 2-byte float from 0 to 2**256-1 ([1-256] * 2 ** [0-248] - 1)
-    nonce: 1-32 bytes binary                    # H(H(block - {target, nonce}) | target | nonce) ~= 0
+    worker: bytes                           # ed25519 public key of block link minter
+    nonce: bytes                            # H(H({block} - {nonce}) | parameters.target | nonce) ~= 0
 
-    # exists only in epoch blocks (every 10000 blocks)
-    parameters:                                 # Adjusted parameters for epoch (10000 blocks)
-      target: 2 ** 32                           # difficulty to mint a block link (average # of hashes)
-      block_reward: 1000 * 2 ** 32              # 1000 coin minted by block link
-      stamp_reward: 500 * 2 ** 32               # reward = (stamp_reward * workstamp.target) / target
-      data_fee: 2 ** 20                         # 2 ** 20 units per byte in each transaction is to be destroyed
-      expiry: 100                               # forget transactions older than 100 epochs
+    # exists only in epoch links (every 10000th block link)
+    parameters:                             # Adjusted parameters for epoch (10000 blocks)
+      target: (byte, byte)                  # difficulty to mint a block link (average # of hashes)
+      block_reward: int                     # 1000 coin minted by block link
+      stamp_reward: int                     # reward = (stamp_reward * stamp.target) / target
+      data_fee: int                         # units per byte in each transaction is to be destroyed
+      expiry: int                           # forget transactions older than expiry number of epochs
     
-### Payment link
+### Payment links
 
     ---
     # common to blocks and payment links
     index: 0                                    # links since block link
+    timestamp: 0                                # seconds since UNIX epoch, unique
     prev_block: ...keccak800...                 # 32-byte digest of most recent block in chain
     prev_link: ...keccak800...                  # 32-byte digest of most recent link in chain
-    timestamp: 0                                # seconds since UNIX epoch, unique
 
     # payment links are signed by prev_block.worker
     signature: ...ed25519 signature...          # 64-byte result of ed25519-sign of link digest

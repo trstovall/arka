@@ -2,41 +2,59 @@
 import sqlite3
 from pathlib import Path
 
-from .tx import BlockLink
+from .tx import WorkBlock, PaymentBlock
 
 class Chain(object):
 
-    def __init__(self, path: str | Path = '~/.arka/chain.db'):
+    forks = {}
 
-        path: Path = (path if isinstance(path, Path) else Path(path)).expanduser()
-        parent: Path = path.parent
-        parent.mkdir(parents=True, exist_ok=True)
-        self.db = sqlite3.connect(str(path))
+    def __init__(self, 
+        path: str | Path = '~/.arka/chain.db',
+        parent: "Chain" | None = None
+    ):
+        self.path: Path = (path if isinstance(path, Path) else Path(path)).expanduser()
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        self.db = sqlite3.connect(str(self.path))
         self.cur = self.db.cursor()
+        self.parent = parent
         self.cur.execute("""
             CREATE TABLE IF NOT EXISTS
-            forks (
-                id          INTEGER PRIMARY KEY AUTOINCREMENT,
-                fork_epoch  INTEGER,
-                fork_block  INTEGER,
-                last_epoch  INTEGER,
-                last_block  INTEGER,
-                last_link   INTEGER,
-                total_work  BLOB
+            params (
+                id          INTEGER,
+                values      BLOB
             );
         """)
         self.cur.execute("""
             CREATE TABLE IF NOT EXISTS
-            block_links (
-                id          INTEGER PRIMARY KEY AUTOINCREMENT,
-                index       INTEGER,
+            blocks (
+                id          INTEGER,
                 timestamp   INTEGER,
-                epoch       INTEGER,
-                prev_block  INTEGER,
-                prev_link   INTEGER,
-                worker      BLOB,
-                nonce       BLOB,
-                digest      BLOB
+                digest      BLOB,
+                data        BLOB
+            );
+        """)
+        self.cur.execute("""
+            CREATE TABLE IF NOT EXISTS
+            work_blocks (
+                id          INTEGER,
+                block_id    INTEGER
+            );
+        """)
+        self.cur.execute("""
+            CREATE TABLE IF NOT EXISTS
+            outputs (
+                id          BLOB,
+                address     BLOB,
+                units       BLOB,
+                block_id    INTEGER,
+                spent_id    INTEGER
+            );
+        """)
+        self.cur.execute("""
+            CREATE TABLE IF NOT EXISTS
+            workstamps (
+                id          BLOB,
+                block_id    INTEGER
             );
         """)
         self.cur.execute("""
@@ -46,20 +64,6 @@ class Chain(object):
         self.cur.execute("""
             CREATE INDEX IF NOT EXISTS
             UNIQUE idx_block_links_digest ON block_links(digest);
-        """)
-        self.cur.execute("""
-            CREATE TABLE IF NOT EXISTS
-            epochs (
-                block_id        INTEGER,
-                index           INTEGER,
-                prev_epoch      INTEGER,
-                digest          BLOB,
-                target          BLOB,
-                block_reward    BLOB,
-                stamp_reward    BLOB,
-                data_fee        BLOB,
-                expiry          INTEGER
-            );
         """)
         self.cur.execute("""
             CREATE INDEX IF NOT EXISTS
@@ -79,42 +83,18 @@ class Chain(object):
             CREATE INDEX IF NOT EXISTS
             UNIQUE idx_workstamps_digest ON workstamps(digest);
         """)
-        self.cur.execute("""
-            CREATE TABLE IF NOT EXISTS
-            outputs (
-                epoch           INTEGER,
-                digest          BLOB,
-                units           BLOB,
-                block_reward    INTEGER,
-                data_fee        INTEGER,
-                stamp_reward    INTEGER,
-                block_expiry    INTEGER
-            );
-        """)
-        self.cur.execute("""
-            CREATE INDEX IF NOT EXISTS
-            UNIQUE idx_outputs_digest ON outputs(digest);
-        """)
-
-    @property
-    def last_epoch(self) -> int:
-        if not hasattr(self, "_last_epoch"):
-            self.cur.execute("""
-                SELECT 
-            """)
 
     @property
     def last_block(self):
         pass
 
-    @property
-    def last_link(self):
+    def forge_work_block(self, worker: bytes | None = None) -> WorkBlock:
         pass
 
-    def forge_block(self) -> BlockLink:
+    def force_payment_block(self, payments: list[Payment] = []) -> PaymentBlock:
+        pass
 
-
-    def add_block(self, block: BlockLink) -> bool:
+    def add_block(self, block: WorkBlock | PaymentBlock) -> bool:
         pass
 
 

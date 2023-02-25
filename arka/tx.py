@@ -19,26 +19,57 @@ class Parameters(object):
         self.stamp_reward = stamp_reward
         self.data_fee = data_fee
         self.expiry = expiry
+    
+    @classmethod
+    def from_bytes(cls, data: bytes) -> "Parameters":
+        if len(data) < 6:
+            raise Exception("Not enough data to unpack Parameters.")
+        target = data[:2]
+        a, b, c, d = data[2:6]
+        if len(data) != 6 + sum([a, b, c, d]):
+            raise Exception("Cannot unpack Parameters from data.")
+        s, e = 6, 6 + a
+        block_reward = sum(x << (8*i) for i,x in enumerate(data[s:e]))
+        s, e = e, e + b
+        stamp_reward = sum(x << (8*i) for i,x in enumerate(data[s:e]))
+        s, e = e, e + c
+        data_fee = sum(x << (8*i) for i,x in enumerate(data[s:e]))
+        s, e = e, e + d
+        expiry = sum(x << (8*i) for i,x in enumerate(data[s:e]))
+        return cls(target, block_reward, stamp_reward, data_fee, expiry)
+
+    def to_bytes(self) -> bytes:
+        a = (self.block_reward.bit_length() + 7) // 8
+        b = (self.stamp_reward.bit_length() + 7) // 8
+        c = (self.data_fee.bit_length() + 7) // 8
+        d = (self.expiry.bit_length() + 7) // 8
+        return (self.target
+            + bytes(
+                [a, b, c, d]
+                + [(self.block_reward >> (8*i)) & 0xff for i in range(a)]
+                + [(self.stamp_reward >> (8*i)) & 0xff for i in range(b)]
+                + [(self.data_fee >> (8*i)) & 0xff for i in range(c)]
+                + [(self.expiry >> (8*i)) & 0xff for i in range(d)]
+            )
+        )
 
 
-class BlockLink(object):
+class WorkBlock(object):
 
     def __init__(self,
-        index: int,             # block number (prev block + 1)
-        timestamp: int,         # seconds since UNIX epoch
-        epoch: bytes,           # hash digest of previous epoch block
-        prev_block: bytes,      # hash digest of most recent block
-        prev_link: bytes,       # hash digest of most recent link
+        timestamp: int,                 # seconds since UNIX epoch
+        prev_block: bytes,              # hash digest of most recent block
+        prev_work_block: bytes,         # hash digest of most recent work block
         worker: bytes | None = None,    # ed25519 key of block worker
-        nonce: bytes | None = None      # nonce required to hash block to target difficulty
+        nonce: bytes | None = None,     # nonce required to hash block to target difficulty
+        parameters: Parameters | None = None
     ):
-        self.index = index
         self.timestamp = timestamp
-        self.epoch = epoch
         self.prev_block = prev_block
-        self.prev_link = prev_link
+        self.prev_work_block = prev_work_block
         self.worker = worker
         self.nonce = nonce
+        self.parameters = parameters
 
     @cached_property
     def index_bytes(self) -> bytes:

@@ -1,9 +1,18 @@
 
 # Arka: A private and scalable transaction chain with monetary policy voting
 
+## Features
+
+- ***Arka network parameters are determined through stakeholder voting.***  Payment outputs are colored with votes that determine network parameter adjustments for each epoch.  The blockchain is a sequence of Work blocks and Payment blocks.  Every epoch (every 10,000 work blocks or about 1 week), the votes are collected from those blocks and the associated payment blocks, and the median for each network parameter is computed.  The result determines the network parameters for the next epoch.  The network parameters control the function of many features in Arka.
+- To control the rate of inflation, you must first fairly measure time.  `target` is the only network parameter that is voted on by minters instead of stakeholders.  The miners are the time keepers, and are kept fair through proof of work voting.  In a proof-of-work, the target number of times a computation has been ran can be proven, without counting the iterations.  If you know approximately how long the computation takes, then you can fairly measure time.  Each work block has an associated timestamp, microseconds since 1970-01-01.  The timestamps in the epoch are collected and median voting determines the target for the next epoch.  The timestamps for each block are evaluated by the network when the work block is published to the network.  Each block is allowed a reward of `block_reward`.  The computation used is keccak-800 digest of the work block.
+- Payment processing is stream oriented, not batch oriented like Bitcoin.  Work blocks elect minters who collect the monetary inflation allowed for the block period.  That money (arka coin) can be transferred between accounts in payment blocks.  Once one or more payments are broadcast to the network, the elected minter collects the payments into a payment block, signs the block with its identifier, and commits them to the Payment collection (blockchain).  The next elected minter confirms the commit by selecting a blockchain that includes the payment block and inserts a link to that blockchain in its work block.
+- Offline minting can produce proof-of-work stamps that may be redeemed for arka coin.  This is useful for sending memos in the Arka network without associating the memo to an any particular payment activity.  It also provides a counterbalance to help stabilize the currency by providing a speculative asset that may be redeemed for the currency.
+
+- work blocks
+
 ## Chain consensus with PoW
 
-### Block links
+### Work blocks
 
     ---
     # common to blocks and payment links
@@ -25,7 +34,7 @@
       data_fee: int                         # units per byte in each transaction is to be destroyed
       expiry: int                           # forget transactions older than expiry number of epochs
     
-### Payment links
+### Payment blocks
 
     ---
     # common to blocks and payment links

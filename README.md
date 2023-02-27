@@ -8,22 +8,21 @@
 - Payment processing is stream oriented, not batch oriented like Bitcoin.  Work blocks elect minters who collect the monetary inflation allowed for the block period.  That money (arka coin) can be transferred between accounts in payment blocks.  Once one or more payments are broadcast to the network, the elected minter collects the payments into a payment block, signs the block with its identifier, and commits them to the Payment collection (blockchain).  The next elected minter confirms the commit by selecting a blockchain that includes the payment block and inserts a link to that blockchain in its work block.
 - Offline minting can produce proof-of-work stamps that may be redeemed for arka coin.  This is useful for sending memos in the Arka network without associating the memo to an any particular payment activity.  It also provides a counterbalance to help stabilize the currency by providing a speculative asset that may be redeemed for the currency.  The offline minters should receive a reduced rate of reward when compared to the block minters, as block minting is crucial to network operation.  However, `stamp_reward` may be increased to reduce the rate of computation currently performed by the network and is used in conjuction with `block_reward`.
 - ___Monetary supply may be deflated___.  Blockchain data users are charged a usage fee that is paid to no party.  It is simply removed from the supply.  The usage rate is provided by `data_fee`.
-- `expiry`
+- Blocks in the blockchain are retired after an `expiry` number of epochs have passed.  This means that old and unspendable coin is reclaimed by the network, and data can be discarded.
 
 ## Chain consensus with PoW
 
 ### Work blocks
 
     ---
-    # common to blocks and payment links
-    index: int                              # block since genesis block
-    timestamp: int                          # seconds since UNIX epoch, unique
-    epoch: bytes                            # hash digest of most recent epoch link
-    prev_block: bytes                       # hash digest of most recent block link
+    # common to work blocks and payment blocks
+    index: int                              # work block count, exclusive
+    timestamp: int                          # microseconds since UNIX epoch, unique and increasing
+    prev_block: bytes                       # 32-byte digest of most recent block (work or payment) in chain
     prev_link: bytes                        # hash digest of most recent block or payment link
 
     # common to all blocks
-    worker: bytes                           # ed25519 public key of block link minter
+    uid: bytes                              # ed25519 public key of block link minter
     nonce: bytes                            # H(H({block} - {nonce}) | parameters.target | nonce) ~= 0
 
     # exists only in epoch links (every 10000th block link)
@@ -37,46 +36,47 @@
 ### Payment blocks
 
     ---
-    # common to blocks and payment links
-    index: 0                                    # links since block link
-    timestamp: 0                                # seconds since UNIX epoch, unique
-    prev_block: ...keccak800...                 # 32-byte digest of most recent block in chain
-    prev_link: ...keccak800...                  # 32-byte digest of most recent link in chain
+    # common to work blocks and payment blocks
+    index: int                              # payment block count since last work block, exclusive
+    timestamp: int                          # hash digest of most recent block or payment link
+    prev_block: bytes                       # 32-byte digest of most recent block (work or payment) in chain
+    prev_work_block: bytes                  # 32-byte digest of most recent work block in chain
 
     # payment links are signed by prev_block.worker
-    signature: ...ed25519 signature...          # 64-byte result of ed25519-sign of link digest
+    signature: bytes                        # 64-byte result of ed25519-sign of block digest by work block minter
 
     # each payment link includes a list of payments
-    payments:                                   # identifies link as a payment link
+    payments:                               # identifies link as a payment link
 
-    - from:                                     # sources are non-expired UTXOs and workstamps
+    - from:                                 # sources are non-expired UTXOs and workstamps
 
       # spend a UTXO
-      - digest: ...keccak800...                 # block digest or H(link digest | payment index | output index)
-        key: ...ed25519 key...                  # Present key that hashes to output address
-        signature: ...ed25519 signature...      # payment outputs signed by key
+      - digest: bytes                       # block digest or H(link digest | payment index | output index)
+        key: bytes                          # Present key that hashes to output address
+        signature: bytes                    # 64-byte result of ed25519-sign of block digest by work block minter
 
-      # spend a workstamp
-      - key: ...ed25519 key...                  # ed25519 key used to spend workstamp
-        target: 2**32                           # 2-byte float from 0 to 2**256-1
-        nonce: 0-32 bytes binary                # H(key | target | nonce) ~= 0, unique
-        signature: ...ed25519 signature...      # Payment outputs signed by key
+      # spend a work stamp
+      - uid: bytes                          # ed25519 public key used to spend work stamp
+        target: bytes                       # 2-byte float from 0 to 2**256-1
+        nonce: bytes                        # H(key | target | nonce) ~= 0, unique
+        signature: bytes                    # 64-byte result of ed25519-sign of block digest by work block minter
 
-      to:                                       # destinations are UTXOs
+      to:                                   # destinations are UTXOs
 
       # create a UTXO
-      - address: 0-32 bytes keccak800 digest    # Receipients public ed25519 key hashed
-        units: 0                                # 1 coin = 2**32 units
-        memo: 0-MEMO_LIMIT bytes binary         # can be used for layer 2 protocols
-        # vote to adjust parameters, weighted by units and aggregated across epoch (10000 blocks)
+      - uid_hash: bytes                     # keccak-800 digest of receipient's public ed25519 key
+        units: bytes                        # 1 coin = 2**30 units
+        memo: bytes                         # can be used for layer 2 protocols
+
+        # optional vote to adjust parameters, weighted by units and aggregated across epoch (10000 blocks)
         vote:
-          block_reward: 0                       # [-128:127] integer corresponding to +/- 10% adjustment
-          stamp_reward: 0                       # [-128:127] integer corresponding to +/- 10% adjustment
-          data_fee: 0                           # [-128:127] integer corresponding to +/- 10% adjustment
-          expiry: 0                             # [-128:127] integer corresponding to +/- 10% adjustment
+          block_reward: int                 # [-128:127] integer corresponding to +/- 10% adjustment
+          stamp_reward: int                 # [-128:127] integer corresponding to +/- 10% adjustment
+          data_fee: int                     # [-128:127] integer corresponding to +/- 10% adjustment
+          expiry: int                       # [-128:127] integer corresponding to +/- 10% adjustment
 
       # commit data
-      - memo: 0-MEMO_LIMIT bytes binary         # can be used for layer 2 protocols
+      - memo: bytes                         # can be used for layer 2 protocols
 
 
 ### Consensus

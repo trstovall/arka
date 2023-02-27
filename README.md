@@ -59,7 +59,7 @@
       - uid: bytes                          # ed25519 public key used to spend work stamp
         target: bytes                       # 2-byte float from 0 to 2**256-1
         nonce: bytes                        # H(key | target | nonce) ~= 0, unique
-        signature: bytes                    # 64-byte result of ed25519-sign of block digest by work block minter
+        signature: bytes                    # 64-byte result of ed25519-sign of block digest by stamp minter
 
       to:                                   # destinations are UTXOs
 

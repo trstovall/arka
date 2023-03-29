@@ -17,6 +17,7 @@ static PyObject * key_exchange(PyObject * self, PyObject * args);
 static PyObject * djb2(PyObject * self, PyObject * args);
 static PyObject * keccak_800(PyObject * self, PyObject * args);
 static PyObject * keccak_1600(PyObject * self, PyObject * args);
+static PyObject * mint(PyObject * self, PyObject * args);
 
 
 static PyMethodDef crypto_methods[] = {
@@ -27,6 +28,7 @@ static PyMethodDef crypto_methods[] = {
     {"djb2", djb2, METH_VARARGS, "Hash string to 32-bit digest."},
     {"keccak_800", keccak_800, METH_VARARGS, "Perform 32-bit Keccak hash with 10*1 padding."},
     {"keccak_1600", keccak_1600, METH_VARARGS, "Perform 64-bit Keccak hash with 10*1 padding."},
+    {"mint", mint, METH_VARARGS, "Find nonce such that H(key|diff|nonce) ~= 0."},
 };
 
 
@@ -169,7 +171,7 @@ static PyObject * verify(PyObject * self, PyObject * args) {
     uint8_t m[32], sm[64+32], pk[32];
     unsigned long long mlen = 0;
 
-     if (!PyArg_ParseTuple(args, "OO", & py_sm, & py_pk))
+     if (!PyArg_ParseTuple(args, "OO", & py_pk, & py_sm))
         goto _error;
 
     if (!(PyObject_CheckBuffer(py_sm) && PyObject_CheckBuffer(py_pk)))
@@ -225,70 +227,58 @@ _error:
 
 static PyObject * key_exchange(PyObject * self, PyObject * args) {
 
-    PyObject *py_xA, *py_Q, *py_nonce;
-    Py_buffer c_xA, c_Q, c_nonce;
-    uint8_t xA[64], Q[32], nonce[32];
-    uint8_t keypair[64];
+    PyObject *py_x, *py_Q;
+    Py_buffer c_x, c_Q;
+    uint8_t x[32], Q[32], seed[32];
 
 
-    if (!PyArg_ParseTuple(args, "OOO", & py_xA, & py_Q, & py_nonce))
+    if (!PyArg_ParseTuple(args, "OO", & py_x, & py_Q))
         goto _error;
-    if (!(PyObject_CheckBuffer(py_xA) && PyObject_CheckBuffer(py_Q) && PyObject_CheckBuffer(py_nonce)))
+    if (!(PyObject_CheckBuffer(py_x) && PyObject_CheckBuffer(py_Q)))
         goto _bad_buffers;
 
-    if (PyObject_GetBuffer(py_xA, & c_xA, 0))
-        goto _bad_xA;
-    if (PyObject_GetBuffer(py_xA, & c_xA, 0))
-        goto _bad_Q_deref_xA;
-    if (PyObject_GetBuffer(py_xA, & c_xA, 0))
-        goto _bad_nonce_deref_Q;
-    if (c_xA.len != 64 || c_Q.len != 32 || c_nonce.len != 32)
+    if (PyObject_GetBuffer(py_x, & c_x, 0))
+        goto _bad_x;
+    if (PyObject_GetBuffer(py_Q, & c_Q, 0))
+        goto _bad_Q_deref_x;
+    if (c_x.len != 32 || c_Q.len != 32)
         goto _bad_buffer_len_deref_buffers;
 
-    if (PyBuffer_ToContiguous(xA, & c_xA, 64, 'C'))
+    if (PyBuffer_ToContiguous(x, & c_x, 32, 'C'))
         goto _buffer_copy_fail_deref_buffers;
     if (PyBuffer_ToContiguous(Q, & c_Q, 32, 'C'))
         goto _buffer_copy_fail_deref_buffers;
-    if (PyBuffer_ToContiguous(nonce, & c_nonce, 32, 'C'))
-        goto _buffer_copy_fail_deref_buffers;
 
-    PyBuffer_Release(& c_xA);
+    PyBuffer_Release(& c_x);
     PyBuffer_Release(& c_Q);
-    PyBuffer_Release(& c_nonce);
-    ed25519_key_exchange_vartime(keypair, xA, Q, nonce);
+    ed25519_key_exchange_vartime(seed, x, Q);
 
-    return PyBytes_FromStringAndSize((const char *)keypair, 64);
+    return PyBytes_FromStringAndSize((const char *)seed, 32);
 
 _bad_buffers:
-    PyErr_SetString(PyExc_TypeError, "input keypair, key, and nonce must be buffers");
+    PyErr_SetString(PyExc_TypeError, "input seed, key must be buffers");
     goto _error;
 
-_bad_xA:
-    PyErr_SetString(PyExc_ValueError, "Bad keypair");
+_bad_x:
+    PyErr_SetString(PyExc_ValueError, "Bad seed");
     goto _error;
 
-_bad_Q_deref_xA:
+_bad_Q_deref_x:
     PyErr_SetString(PyExc_ValueError, "Bad peer key.");
-    goto _deref_xA;
-
-_bad_nonce_deref_Q:
-    PyErr_SetString(PyExc_ValueError, "Bad nonce buffer.");
-    goto _deref_Q;
+    goto _deref_x;
 
 _bad_buffer_len_deref_buffers:
-    PyErr_SetString(PyExc_ValueError, "input keypair, key, and nonce must be buffers of len 64, 32, 32.");
-    goto _deref_nonce;
+    PyErr_SetString(PyExc_ValueError, "input seed and peer key must be buffers of len 32, 32.");
+    goto _deref_Q;
 
 _buffer_copy_fail_deref_buffers:
     PyErr_SetString(PyExc_ValueError, "Failed to copy Py_buffers to C.");
-    goto _deref_nonce;
+    goto _deref_Q;
 
-_deref_nonce:
-    PyBuffer_Release(& c_nonce);
 _deref_Q:
     PyBuffer_Release(& c_Q);
-_deref_xA:
-    PyBuffer_Release(& c_xA);
+_deref_x:
+    PyBuffer_Release(& c_x);
 _error:
     return NULL;
 }
@@ -474,6 +464,106 @@ _deref_x:
 _deref_c_x:
     PyBuffer_Release(& c_x);
 
+_error:
+    return NULL;
+}
+
+
+static PyObject * mint(PyObject * self, PyObject * args) {
+    PyObject *py_key, *py_diff, *py_nonce;
+    Py_buffer c_key, c_diff, c_nonce;
+    uint8_t key[32], diff[2], nonce[32], buffer[66], digest[32];
+    uint64_t limit, offset;
+    uint8_t exp, j;
+    int success;
+
+    if (!PyArg_ParseTuple(args, "OOOK",
+        & py_key, & py_diff, & py_nonce, & limit
+    ))
+        goto _error;
+    if (!(PyObject_CheckBuffer(py_key)
+        && PyObject_CheckBuffer(py_diff)
+        && PyObject_CheckBuffer(py_nonce) 
+    ))
+        goto _bad_buffers;
+
+    if (PyObject_GetBuffer(py_key, & c_key, 0))
+        goto _bad_key;
+    if (PyObject_GetBuffer(py_diff, & c_diff, 0))
+        goto _bad_diff_deref_key;
+    if (PyObject_GetBuffer(py_nonce, & c_nonce, 0))
+        goto _bad_nonce_deref_diff;
+    if (c_key.len != 32 || c_diff.len != 2 || c_nonce.len != 32)
+        goto _bad_buffer_len_deref_buffers;
+
+    if (PyBuffer_ToContiguous(key, & c_key, 32, 'C'))
+        goto _buffer_copy_fail_deref_buffers;
+    if (PyBuffer_ToContiguous(diff, & c_diff, 2, 'C'))
+        goto _buffer_copy_fail_deref_buffers;
+    if (PyBuffer_ToContiguous(nonce, & c_nonce, 32, 'C'))
+        goto _buffer_copy_fail_deref_buffers;
+
+    PyBuffer_Release(& c_key);
+    PyBuffer_Release(& c_diff);
+    PyBuffer_Release(& c_nonce);
+
+    memcpy(buffer, key, 32);
+    memcpy(buffer+32, diff, 2);
+    memcpy(buffer+34, nonce, 32);
+
+    for (uint64_t offset=0; offset < limit; offset++) {
+        for (int i=0; i<8; i++)
+            buffer[34+i] ^= (offset >> (8*i)) & 0xff;
+        keccak800(digest, 32, buffer, 66);
+        if (digest[0] >= diff[0]) {
+            exp = diff[1];
+            j = 1;
+            while (exp >= 8 && !digest[j]) {
+                j += 1;
+                exp -= 8;
+            }
+            if (exp < 8) {
+                if (digest[j] & ((1 << exp) - 1) == 0) {
+                    return PyBytes_FromStringAndSize((const char *)buffer+34, 32);
+                }
+            }
+        }
+        for (int i=0; i<8; i++)
+            buffer[34+i] ^= (offset >> (8*i)) & 0xff;
+   }
+
+    Py_RETURN_NONE;    
+
+_bad_buffers:
+    PyErr_SetString(PyExc_TypeError, "input key, diff, nonce must be buffers");
+    goto _error;
+
+_bad_key:
+    PyErr_SetString(PyExc_ValueError, "Bad key");
+    goto _error;
+
+_bad_diff_deref_key:
+    PyErr_SetString(PyExc_ValueError, "Bad diff.");
+    goto _deref_key;
+
+_bad_nonce_deref_diff:
+    PyErr_SetString(PyExc_ValueError, "Bad nonce.");
+    goto _deref_diff;
+
+_bad_buffer_len_deref_buffers:
+    PyErr_SetString(PyExc_ValueError, "input key, diff, nonce must be buffers of len 32, 2, 32.");
+    goto _deref_nonce;
+
+_buffer_copy_fail_deref_buffers:
+    PyErr_SetString(PyExc_ValueError, "Failed to copy Py_buffers to C.");
+    goto _deref_nonce;
+
+_deref_nonce:
+    PyBuffer_Release(& c_nonce);
+_deref_diff:
+    PyBuffer_Release(& c_diff);
+_deref_key:
+    PyBuffer_Release(& c_key);
 _error:
     return NULL;
 }

@@ -48,7 +48,7 @@ void store32(uint8_t *x, uint32_t u)
 }
 
 
-static const uint8_t rho[25] = {
+static const uint8_t rho_1600[25] = {
     0,  1,  62, 28, 27,
     36, 44, 6,  55, 20,
     3,  10, 43, 25, 39,
@@ -57,7 +57,16 @@ static const uint8_t rho[25] = {
 };
 
 
-static const uint64_t iota[24] = 
+static const uint8_t rho_800[25] = {
+    0, 1, 30, 28, 27,
+    4, 12, 6, 23, 20,
+    3, 10, 11, 25, 7,
+    9, 13, 15, 21, 8,
+    18, 2, 29, 24, 14
+};
+
+
+static const uint64_t iota_1600[24] = 
 {
     (uint64_t)0x0000000000000001ULL,
     (uint64_t)0x0000000000008082ULL,
@@ -86,6 +95,33 @@ static const uint64_t iota[24] =
 };
 
 
+static const uint32_t iota_800[22] = 
+{
+    (uint32_t)0x00000001UL,
+    (uint32_t)0x00008082UL,
+    (uint32_t)0x0000808aUL,
+    (uint32_t)0x80008000UL,
+    (uint32_t)0x0000808bUL,
+    (uint32_t)0x80000001UL,
+    (uint32_t)0x80008081UL,
+    (uint32_t)0x00008009UL,
+    (uint32_t)0x0000008aUL,
+    (uint32_t)0x00000088UL,
+    (uint32_t)0x80008009UL,
+    (uint32_t)0x8000000aUL,
+    (uint32_t)0x8000808bUL,
+    (uint32_t)0x0000008bUL,
+    (uint32_t)0x00008089UL,
+    (uint32_t)0x00008003UL,
+    (uint32_t)0x00008002UL,
+    (uint32_t)0x00000080UL,
+    (uint32_t)0x0000800aUL,
+    (uint32_t)0x8000000aUL,
+    (uint32_t)0x80008081UL,
+    (uint32_t)0x00008080UL,
+};
+
+
 void round800(uint32_t * A, uint32_t RC) {
 
     uint32_t B[25], C[5], D[5];
@@ -108,7 +144,7 @@ void round800(uint32_t * A, uint32_t RC) {
 
     for (int y=0; y < 5; y++) {
         for (int x=0; x < 5; x++) {
-            B[y  + ((2*x + 3*y) % 5) * 5] = ROTL32(A[x + 5*y], (rho[x + 5*y] & 0x1f));
+            B[y  + ((2*x + 3*y) % 5) * 5] = ROTL32(A[x + 5*y], rho_800[x + 5*y]);
         }
     }
 
@@ -128,7 +164,7 @@ void round800(uint32_t * A, uint32_t RC) {
 
 void keccak_f800(uint32_t * A) {
     for (int i=0; i < 22; i++) {
-        round800(A, (uint32_t) iota[i]);
+        round800(A, iota_800[i]);
     }
 }
 
@@ -155,7 +191,7 @@ void round1600(uint64_t * A, uint64_t RC) {
 
     for (int y=0; y < 5; y++) {
         for (int x=0; x < 5; x++) {
-            B[y  + ((2*x + 3*y) % 5) * 5] = ROTL64(A[x + 5*y], rho[x + 5*y]);
+            B[y  + ((2*x + 3*y) % 5) * 5] = ROTL64(A[x + 5*y], rho_1600[x + 5*y]);
         }
     }
 
@@ -175,7 +211,7 @@ void round1600(uint64_t * A, uint64_t RC) {
 
 void keccak_f1600(uint64_t * A) {
     for (int i=0; i < 24; i++) {
-        round1600(A, iota[i]);
+        round1600(A, iota_1600[i]);
     }
 }
 
@@ -259,3 +295,57 @@ void keccak1600 (uint8_t * output, uint64_t outlen, const uint8_t * input, const
     }
 }
 
+
+void mint_midstate (uint32_t * midstate, const uint8_t * key, const uint8_t * diff, const uint8_t * nonce) {
+    uint32_t A[25] = {0};
+    uint8_t buffer[36] = {0};
+    #pragma unroll
+    for (int i=0; i < 8; i++) {
+        A[i] ^= load32(key + (4 * i));
+    }
+    memcpy(buffer, diff, 2);
+    memcpy(buffer + 2, nonce, 2);
+    A[9] ^= load32(buffer);
+    keccak_f800(A);
+    memcpy(buffer, nonce + 2, 30);
+    buffer[30] ^= 1;
+    buffer[35] ^= 0x80;
+    #pragma unroll
+    for (int i=0; i < 9; i++) {
+        A[i] ^= load32(buffer + (4 * i));
+    }
+    memcpy(midstate, A, 4*25);
+}
+
+
+int mint_iterate(uint64_t * offset, const uint32_t * midstate, const uint8_t *diff, uint64_t limit) {
+
+    uint32_t A[25];
+    uint8_t buffer[32];
+    uint8_t exp, j;
+
+    for (uint64_t i=0; i < limit; i++) {
+        memcpy(A, midstate, 4*25);
+        A[0] ^= i & 0xffffffff;
+        A[1] ^= (i >> 32) & 0xffffffff;
+        keccak_f800(A);
+        if ((A[0] & 0xff) >= diff[0]) {
+            for (j=0; j<8; j++)
+                store32(buffer + 4*j, A[j]);
+            exp = diff[1];
+            j = 1;
+            while (exp >= 8 && !buffer[j]){
+                j += 1;
+                exp -= 8;
+            }
+            if (exp < 8) {
+                if (buffer[j] & ((1 << exp) - 1) == 0) {
+                    *offset = i;
+                    return 1;
+                }
+            }
+        }
+    }
+    *offset = limit;
+    return 0;
+}

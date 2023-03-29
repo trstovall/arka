@@ -11543,36 +11543,28 @@ int ed25519_verify(
 
 
 int ed25519_key_exchange_vartime(
-    unsigned char * keypair,
-    const unsigned char * seed,
-    const unsigned char * pkey,
-    const unsigned char * nonce
+    unsigned char * seed,
+    const unsigned char * x,
+    const unsigned char * Q
 ) {
     unsigned char az[32];
-    unsigned char pk[32];
+    unsigned char xQ[32];
+    unsigned char zero[32] = {0};
     ge_p3 A;
     ge_p2 R;
 
-    keccak800(az, 32, seed, 32);
+    keccak800(az, 32, x, 32);
     az[0] &= 248;
     az[31] &= 63;
     az[31] |= 64;
 
-    if (ge_frombytes_negate_vartime(& A, pkey) != 0)
+    if (ge_frombytes_negate_vartime(& A, Q) != 0)
         return -1;
 
-    ge_double_scalarmult_vartime(& R, az, & A, nonce);
-    ge_tobytes(keypair, & R);
+    ge_double_scalarmult_vartime(& R, az, & A, zero);
+    ge_tobytes(xQ, & R);
 
-    keccak800(az, 32, keypair, 32);
-    az[0] &= 248;
-    az[31] &= 63;
-    az[31] |= 64;
-
-    ge_scalarmult_base(& A, az);
-    ge_p3_tobytes(pk, & A);
-
-    memmove(keypair + 32, pk, 32);
+    keccak800(seed, 32, xQ, 32);
 
     return 0;
 }

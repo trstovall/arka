@@ -17,7 +17,7 @@
     timestamp: int                          # microseconds since UNIX epoch
     prev_block: bytes                       # hash digest of most recent block in chain
     uid: bytes                              # public key or truncated key hash digest of block creator
-    nonce: bytes                            # H(H({block} - {nonce}) | parameters.target | nonce) ~= 0
+    nonce: bytes                            # H(H({block} - {nonce}) | nonce) ~= 0
 
     # exists only in epoch links (every 10000th block link)
     parameters:                             # Adjusted parameters for epoch (10000 blocks)
@@ -33,8 +33,8 @@
 
       # spend a UTXO
       - index: bytes                        # block digest or H(link digest | payment index | output index)
-        uid: bytes                          # spender's public key that hashes to UTXO uid
-        signature: bytes                    # 64-byte result of ed25519-sign of block digest by work block worker
+        uid: bytes                          # spender's public key that hashes to or matches UTXO uid
+        signature: bytes                    # digital signature of H({transaction} - {signature})
 
       to:                                   # destinations are UTXOs
 

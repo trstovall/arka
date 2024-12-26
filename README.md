@@ -1,5 +1,5 @@
 
-# Arka: A private and scalable transaction chain with monetary policy voting
+# Arka: A blockchain with monetary policy voting and data publishing
 
 ## Features
 
@@ -14,7 +14,7 @@
     ---
     # common to all blocks
     height: int                             # block id, strictly increasing
-    timestamp: int                          # microseconds since UNIX epoch, strictly increasing
+    timestamp: int                          # microseconds since UNIX epoch
     prev_block: bytes                       # 32-byte digest of most recent block in chain
     worker: bytes                           # ed25519 public key of block worker
     nonce: bytes                            # H(H({block} - {nonce}) | parameters.target | nonce) ~= 0
@@ -22,10 +22,9 @@
     # exists only in epoch links (every 10000th block link)
     parameters:                             # Adjusted parameters for epoch (10000 blocks)
       target: (byte, byte)                  # difficulty to mint a block link (average # of hashes)
-      block_reward: bytes                   # 1000 coin minted by block link
-      stamp_reward: bytes                   # reward = (stamp_reward * stamp.target) / target
+      block_reward: bytes                   # units minted by block worker
+      utxo_fee: bytes                       # rate of decay of UTXOs (age of UTXO * UTXO units)
       data_fee: bytes                       # units per byte in each transaction is to be destroyed
-      expiry: bytes                         # forget blocks older than expiry number of epochs
 
     # each block includes a list of payments
     payments:
@@ -37,12 +36,6 @@
         key: bytes                          # Present key that hashes to output address
         signature: bytes                    # 64-byte result of ed25519-sign of block digest by work block worker
 
-      # spend a work stamp
-      - worker: 32 bytes                    # ed25519 public key used to spend work stamp
-        target: (byte, byte)                # 2-byte float from 0 to 2**256-1
-        nonce: 32 bytes                     # H(worker | target | nonce) ~= 0, unique
-        signature: 64 bytes                 # 64-byte result of ed25519-sign of block digest by stamp worker
-
       to:                                   # destinations are UTXOs
 
       # create a UTXO
@@ -52,10 +45,9 @@
 
         # optional vote to adjust parameters, weighted by units and aggregated across epoch (10000 blocks)
         vote:
-          block_reward: int                 # [-128:127] integer corresponding to +/- 10% adjustment
-          stamp_reward: int                 # [-128:127] integer corresponding to +/- 10% adjustment
-          data_fee: int                     # [-128:127] integer corresponding to +/- 10% adjustment
-          expiry: int                       # [-128:127] integer corresponding to +/- 10% adjustment
+          block_reward: bytes                   # units minted by block worker
+          utxo_fee: bytes                       # rate of decay of UTXOs (age of UTXO * UTXO units)
+          data_fee: bytes                       # units per byte in each transaction is to be destroyed
 
       # commit data
       - memo: bytes                         # can be used for layer 2 protocols

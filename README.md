@@ -15,8 +15,8 @@
     # common to all blocks
     height: int                             # block id, strictly increasing
     timestamp: int                          # microseconds since UNIX epoch
-    prev_block: bytes                       # 32-byte digest of most recent block in chain
-    worker: bytes                           # ed25519 public key of block worker
+    prev_block: bytes                       # hash digest of most recent block in chain
+    uid: bytes                              # public key or truncated key hash digest of block creator
     nonce: bytes                            # H(H({block} - {nonce}) | parameters.target | nonce) ~= 0
 
     # exists only in epoch links (every 10000th block link)
@@ -24,22 +24,22 @@
       target: (byte, byte)                  # difficulty to mint a block link (average # of hashes)
       block_reward: bytes                   # units minted by block worker
       utxo_fee: bytes                       # rate of decay of UTXOs (age of UTXO * UTXO units)
-      data_fee: bytes                       # units per byte in each transaction is to be destroyed
+      data_fee: bytes                       # units per byte in each transaction are to be destroyed
 
     # each block includes a list of payments
     payments:
 
-    - from:                                 # sources are non-expired UTXOs and workstamps
+    - from:                                 # sources are non-expired UTXOs
 
       # spend a UTXO
-      - digest: bytes                       # block digest or H(link digest | payment index | output index)
-        key: bytes                          # Present key that hashes to output address
+      - index: bytes                        # block digest or H(link digest | payment index | output index)
+        uid: bytes                          # spender's public key that hashes to UTXO uid
         signature: bytes                    # 64-byte result of ed25519-sign of block digest by work block worker
 
       to:                                   # destinations are UTXOs
 
       # create a UTXO
-      - uid_hash: bytes                     # keccak-800 digest of receipient's public ed25519 key
+      - uid: bytes                          # public key or truncated key hash digest of receipient
         units: bytes                        # 1 coin = 2**30 units
         memo: bytes                         # can be used for layer 2 protocols
 
@@ -47,7 +47,7 @@
         vote:
           block_reward: bytes                   # units minted by block worker
           utxo_fee: bytes                       # rate of decay of UTXOs (age of UTXO * UTXO units)
-          data_fee: bytes                       # units per byte in each transaction is to be destroyed
+          data_fee: bytes                       # units per byte in each transaction are to be destroyed
 
       # commit data
       - memo: bytes                         # can be used for layer 2 protocols

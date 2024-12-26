@@ -19,12 +19,12 @@
     uid: bytes                              # public key or truncated key hash digest of block creator
     nonce: bytes                            # H(H({block} - {nonce}) | nonce) ~= 0
 
-    # exists only in epoch links (every 10000th block link)
+    # exists only in epoch blocks (every 10000th block)
     parameters:                             # Adjusted parameters for epoch (10000 blocks)
-      target: (byte, byte)                  # difficulty to mint a block link (average # of hashes)
-      block_reward: bytes                   # units minted by block worker
-      utxo_fee: bytes                       # rate of decay of UTXOs (age of UTXO * UTXO units)
-      data_fee: bytes                       # units per byte in each transaction are to be destroyed
+      target: (byte, byte)                  # difficulty to create a block (average # of hashes)
+      block_reward: int                     # units created by block creator
+      utxo_fee: int                         # rate of decay of UTXOs (age of UTXO * UTXO units)
+      data_fee: int                         # units per byte in each transaction are to be destroyed
 
     # each block includes a list of payments
     payments:
@@ -32,22 +32,22 @@
     - from:                                 # sources are non-expired UTXOs
 
       # spend a UTXO
-      - index: bytes                        # block digest or H(link digest | payment index | output index)
+      - index: (int, int, int)              # block index | payment index | output index
         uid: bytes                          # spender's public key that hashes to or matches UTXO uid
-        signature: bytes                    # digital signature of H({transaction} - {signature})
+        signature: bytes                    # digital signature of H(index | uid | payment.to[]) using uid as key
 
       to:                                   # destinations are UTXOs
 
       # create a UTXO
       - uid: bytes                          # public key or truncated key hash digest of receipient
-        units: bytes                        # 1 coin = 2**30 units
+        units: int                          # 1 coin = 2**30 units
         memo: bytes                         # can be used for layer 2 protocols
 
         # optional vote to adjust parameters, weighted by units and aggregated across epoch (10000 blocks)
         vote:
-          block_reward: bytes                   # units minted by block worker
-          utxo_fee: bytes                       # rate of decay of UTXOs (age of UTXO * UTXO units)
-          data_fee: bytes                       # units per byte in each transaction are to be destroyed
+          block_reward: int                     # units created by block creator
+          utxo_fee: int                         # rate of decay of UTXOs (age of UTXO * UTXO units)
+          data_fee: int                         # units per byte in each transaction are to be destroyed
 
       # commit data
       - memo: bytes                         # can be used for layer 2 protocols

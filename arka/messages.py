@@ -5,6 +5,25 @@ from struct import pack, unpack
 from .crypto import keccak_800, keccak_1600, sign, verify
 
 
+from enum import IntEnum
+
+
+class SocketMessageEnum(IntEnum):
+    #
+    CONNECTION_PING = auto()
+    CONNECTION_PONG = auto()
+    #
+    CONNECTION_REQUEST = auto()
+    CONNECTION_RESPONSE = auto()
+    #
+    SERVER_BLOCK_REQUEST = auto()
+    SERVER_BLOCK_RESPONSE = auto()
+    #
+    SERVER_STREAM_REQUEST = auto()
+    SERVER_STREAM_RESPONSE = auto()
+
+
+
 class Parameters(object):
 
     def __init__(self,

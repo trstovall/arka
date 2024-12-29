@@ -1,5 +1,5 @@
 
-FROM python:3.10-alpine as build
+FROM trstovall/arka_builder:latest
 
 ENV ARKA_SOURCE https://github.com/trstovall/arka
 

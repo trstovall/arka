@@ -3,7 +3,7 @@ name: Build `arka_builder` Docker image as base image for building `arka` image
 
 on:
   push:
-    branches: [ "main" ]
+    branches: [ "arka_builder" ]
 
 jobs:
   build:

@@ -1,21 +1,24 @@
 #
-name: Build and Run Docker Image
+name: Build and Run arka Docker Image
 
 on:
   push:
-    branches: [ "main" ]
-  pull_request:
     branches: [ "main" ]
 
 jobs:
   build:
 
     runs-on: ubuntu-latest
+
     env:
       IMAGE_NAME: arka
+
     steps:
+
     - uses: actions/checkout@v3
+
     - name: Build Docker Image
       run: docker build -t $IMAGE_NAME:latest .
+
     - name: Run Docker Image
       run: docker run --rm $IMAGE_NAME:latest

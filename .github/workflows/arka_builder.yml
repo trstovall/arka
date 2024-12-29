@@ -26,7 +26,7 @@ jobs:
         password: ${{ secrets.DOCKER_PASSWORD }}
 
     - name: Build arka_builder base image
-      run: docker build -t $IMAGE_NAME:latest -f $IMAGE_NAME.Dockerfile
+      run: docker build . -t $IMAGE_NAME:latest -f $IMAGE_NAME.Dockerfile
 
     - name: Tag arka_builder base image
       run: docker tag $IMAGE_NAME:latest $DOCKER_USERNAME/$IMAGE_NAME:latest

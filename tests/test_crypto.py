@@ -6,11 +6,12 @@ from arka.crypto import keypair, sign, verify, key_exchange, mint, keccak_800
 def test_sign_happy_case():
     seed = urandom(32)
     kp = keypair(seed)
-    assert seed == kp[:32]
+    sk, pk = kp[:32], kp[32:]
+    assert seed == sk
     msg = urandom(32)
     sm = sign(kp, msg)
     assert msg == sm[64:]
-    assert verify(kp[32:], sm)
+    assert verify(pk, sm)
 
 
 def test_sign_bad_pkey():

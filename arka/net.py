@@ -1,313 +1,317 @@
 
-from asyncio import get_running_loop, create_task, wait, sleep, Queue, Task, FIRST_COMPLETED
 from time import time
-from secrets import token_bytes
-from ipaddress import ip_address, IPv4Address
 from bisect import bisect_left
 from random import choice
-from functools import cache
-from socket import socket, AF_INET, SOCK_DGRAM
+from socket import socket, create_connection
 from select import select
 from datetime import datetime
-from struct import pack, unpack
+from struct import unpack_from, pack_into
+from arka.messages import ArkaProtocolInitMessage
+from typing import Generator
+from enum import IntEnum, auto
+from os import urandom
 
-from .crypto import keccak_800, keccak_1600 as _keccak_1600, sign, verify, keypair, key_exchange, encrypt, decrypt
+import queue as q
 
 
-def keccak_1600(msg: bytes, outlen: int = 32) -> bytes:
-    return _keccak_1600(msg, outlen)
-
-
-class Fragment(object):
-
-    def __init__(self, value: bytes, msg_hash: bytes, offset: int, nfrags: int):
-        self.value = value
-        self.msg_hash = msg_hash
-        self.offset = offset
-        self.nfrags = nfrags
+class MessageEnum(IntEnum):
+    #
+    INIT = 0
+    #
+    CHALLENGE_ANSWER = 1
+    #
+    SERVER_STREAM_ITEM = auto()
+    #
+    TX_HASH_STREAM_ITEM = auto()
+    #
+    TX_ITEM_REQUEST = auto()
+    TX_ITEM_RESPONSE = auto()
+    #
+    BLOCK_HEADER_REQUEST = auto()
+    BLOCK_HEADER_RESPONSE = auto()
+    #
+    BLOCK_HEADER_STREAM_ITEM = auto()
+    #
+    BLOCK_CONTENTS_REQUEST = auto()
+    BLOCK_CONTENTS_RESPONSE = auto()
+    #
+    BLOCK_REQUEST = auto()
+    BLOCK_RESPONSE = auto()
 
 
 class Message(object):
 
-    def __init__(self, value: bytes | None = None, fragments: list[Fragment] = []):
-        self._value = value
-        self._digest = keccak_1600(value, 16) if value else None
-        self._fragments = fragments
-        self._offsets = {frag.offset for frag in fragments}
+    MAX_MESSAGE_SIZE = 2 ** 23
 
-    @property
-    def complete(self) -> bool:
-        if self._value:
-            return True
-        if not self._fragments:
-            return False
-        if len(self._offsets) < max(frag.nfrags for frag in self._fragments):
-            return False
-
-    @property
-    def valid(self) -> bool | None:
-        if self._value:
-            return True
-        if not self._fragments:
-            return True
-        nfrags = self._fragments[0].nfrags
-        if any(frag.nfrags != nfrags for frag in self._fragments):
-            return False
-        msg_hash = self._fragments[0].msg_hash
-        if any(frag.msg_hash != msg_hash for frag in self._fragments):
-            return False
-        if min(self._offsets) < 0 or max(self._offsets) >= nfrags:
-            return False
-        return True
-
-    @property
-    def value(self) -> bytes | None:
-        if self._value:
-            return self._value
-        if not self.complete or not self.valid:
-            return
-        fragments = sorted(
-            ((frag.offset, frag.value) for frag in self._fragments),
-            key=(lambda k: k[0])
-        )
-        value = b''.join(frag for _, frag in fragments)
-        msg_hash = keccak_1600(value, 16)
-        if msg_hash == self._fragments[0].msg_hash:
-            self._value = value
-            self._digest = msg_hash
-
-    @property
-    def digest(self) -> bytes | None:
-        if not self._digest:
-            if not self.value:
-                return
-        return self._digest
-
-    @property
-    def fragments(self) -> list[Fragment] | None:
-        FRAGMENT_SIZE = 512
-        if self._fragments:
-            return self._fragments
-        if not self.value:
-            return
-        msg_hash = self._digest
-        nfrags = (len(self._value) + FRAGMENT_SIZE - 1) // FRAGMENT_SIZE
-        self._fragments = [
-            Fragment(
-                value=self._value[offset*FRAGMENT_SIZE:(offset+1)*FRAGMENT_SIZE],
-                msg_hash=msg_hash,
-                offset=offset,
-                nfrags=nfrags
-            )
-            for offset in range(nfrags)
-        ]
-        return self._fragments
-
-    def add_fragment(self, fragment: Fragment):
-        if self.value:
-            return
-        self._fragments.append(fragment)
-        self._offsets.add(fragment.offset)
+    def __init__(self, size: int):
+        if 0 < size <= self.MAX_MESSAGE_SIZE:
+            self.buff = bytearray(size)
+            self.view = memoryview(self.buff)
+        else:
+            raise ValueError('message size is invalid.')
 
 
-class MessageSet(object):
+class InitMessageBuilder(object):
 
-    def __init__(self, msgs: bytes | list[bytes]):
-        self._imsgs = None if isinstance(msgs, bytes) or not msgs else iter(msgs)
-        self._imsg: bytes = msgs if isinstance(msgs, bytes) else next(self._imsgs)
-        self._iter: int = 0
+    BANNER = b'arka'
 
-    def __iter__(self):
-        return self
-
-    def __next__(self) -> bytes:
-        while True:
-            msgs_len: int = unpack('<H', self._imsg[:2])[0] if self._imsg else 0
-            if self._iter <= msgs_len:
-                offset = 2 + 2*self._iter
-                if self._iter == msgs_len - 1:
-                    offset = unpack('<H', self._imsg[offset:offset+2])[0]
-                    next_offset = len(self._imsg)
-                else:
-                    offset, next_offset = unpack('<HH', self._imsg[offset:offset+4])
-                return self._imsg[offset:next_offset]            
-            if self._imsgs is None:
-                raise StopIteration
-            self._imsg = next(self._imsgs)
-            self._iter = 0
-    
-    async def _sendto(self, msg: bytes, peer: "Peer"):
-        loop = get_running_loop()
-        await loop.sock_sendto(peer.sock, msg, peer.addr)
-
-    def sendto(self, peer: "Peer") -> list[Task]:
-        new_msgs: list[bytes] = []
-        new_msg: list[bytes] = []
-        msg_len: int = 2
-        for msg in self:
-            if not msg:
-                continue
-            if len(msg) > peer.MTU_1300 + 4:
-                raise Exception(f"Unable to send large message of size {len(msg)}")
-            if msg_len + 2 + len(msg) > peer.MTU_1300:
-                new_msg.insert(0,
-                    pack('<H' + 'H'*len(new_msg), len(new_msg), *[
-                        len(m) for m in new_msg
-                    ])
-                )
-                new_msgs.append(b''.join(new_msg))
-                new_msg, msg_len = [], 2
-            new_msg.append(msg)
-            msg_len += 2 + len(msg)
-        if new_msg:
-            new_msg.insert(0,
-                pack('<H' + 'H'*len(new_msg), len(new_msg), *[
-                    len(m) for m in new_msg
-                ])
-            )
-            new_msgs.append(b''.join(new_msg))
-        return [
-            create_task(self._sendto(msg, peer)) for msg in new_msgs
-        ]
-
-
-class Peer(object):
-
-    MTU_1300 = 1300
-
-    def __init__(self,
-        key: bytes,
-        secret: bytes,
-        addr: tuple[str, int],
-        sock: socket
-    ):
+    def __init__(self, key: bytes, challenge: bytes):
         self.key = key
-        self.secret = secret
-        self.addr = addr
-        self.sock = sock
-        self.id: int = sum(
-            b << (8*i) for i, b in enumerate(keccak_800(key[:32]))
-        )
-        self.recv_q = Queue()
-        self.nonce: int = 0
-        self.last_recvd = time()
+        self.challenge = challenge
+    
+    def build(self) -> Message:
+        msg = Message(69)
+        msg.view[0] = MessageEnum.INIT.value    # message id: 1 byte
+        msg.view[1:5] = self.BANNER             # arka banner: 4 bytes
+        msg.view[5:37] = self.key               # local node key: 32 bytes
+        msg.view[37:69] = self.challenge        # challenge for remote node: 32 bytes
+        return msg
 
-    async def send_msg(self, msg: bytes):
-        self.sock.sendto(msg, self.addr)
 
+class InitMessageView(object):
+
+    def __init__(self, msg: Message):
+        if len(msg.buff) != 69:
+            raise ValueError("msg argument for InitMessageView must be 69 bytes long.")
+        if msg.view[1:5] != b'arka':
+            raise ValueError("arka banner not set for msg argument to InitMessageView.")
+        self.buff = msg.buff
+        self.view = msg.view
+    
     @property
-    def tasks(self) -> list[Task]:
-        return [
-            self.process_recv_q()
-        ]
-
-    async def process_recv_q(self):
-        while not self.recv_q.empty():
-            item = await self.recv_q.get()
-            if isinstance((item := await self.recv_q.get()), Frames):
-                pass
-
-    def send_ping(self):
-        msg = b''.join([
-            self.key, token_bytes(16),
-            pack('<QQ', int(time()*1_000_000), self.nonce)
-        ])
-        self.nonce += 1
-        self.sock.sendto(msg, self.addr)
+    def key(self) -> bytes:
+        return bytes(self.view[5:37])
     
-    def send_fragments(self, frags: list[bytes]):
-        while frags:
-            msg_len, msg = 2, []
-            for frag in frags:
-                if ((frag_len := len(frag)) + msg_len) > MTU_1300:
-                    break
-                msg += [pack("<H", frag_len), frag]
-                msg_len += 2 + frag_len
-            msg_len = len(msg) // 2
-            frags = frags[msg_len:]
-            msg = b''.join([
-                self.key, token_bytes(16),
-                pack('<QQH', int(time()*1_000_000), self.nonce, msg_len)
-            ] + msg)
-            self.nonce += 1
-            self.sock.sendto(encrypt(self.secret, msg), self.addr)
-
-    async def recv_msg(self, msg: bytes):
-        self.last_recvd = time()
-        if len(msg) >= 96:
-            await self.q.put(Fragments(decrypt(self.secret, msg)))
+    @property
+    def challenge(self) -> bytes:
+        return bytes(self.view[37:69])
 
 
-class Chord(object):
+class ChallengeAnswerMessageBuilder(object):
 
-    def __init__(self, keypair: bytes, sock: socket):
-        self.secret = keypair[:32]
-        self.key = keypair[32:]
-        self.id: int = sum(
-            b << (8*i) for i, b in enumerate(keccak_800(self.key[:32]))
-        )
+    def __init__(self, answer: bytes):
+        self.answer = answer
+
+    def build(self) -> Message:
+        msg = Message(65)
+        msg.view[0] = MessageEnum.CHALLENGE_ANSWER.value    # message topic: 1 byte
+        msg.view[1:] = self.answer                          # signature of challenge: 64 bytes
+        return msg
+
+
+class ChallengeAnswerView(object):
+
+    def __init__(self, msg: Message):
+        if len(msg.buff) != 65:
+            raise ValueError("msg argument for ChallengeAnswerView must be 65 bytes long.")
+        self.buff = msg.buff
+        self.view = msg.view
+    
+    @property
+    def answer(self) -> bytes:
+        return bytes(self.view[1:])
+
+
+class Node(object):
+
+    def __init__(self, sock: socket, key: bytes | None = None):
         self.sock = sock
-        self.tasks: set[Task] = set()
-        self.key_to_peer: dict[bytes, Peer] = {}
-        self.peer_ids: list[int] = []
-        self.fingers = [
-            (self.id + (2 ** (16*i))) % (2 ** 256) for i in range(16)
-        ]
-        self.finger_to_peer: dict[int, Peer] = {}
-        self.q = Queue()
+        self.key = key
+        self.send_q = q.Queue()
+        self.recv_q = q.Queue()
+        self.recv = self._recv()
+        self.send = self._send()
+        self.send_pending = False
 
-    async def main(self) -> "Chord":
-        await wait(self.tasks)
-
-    
-    async def recv_msg(self, msg: bytes, addr: tuple[str, int]):
-        if (key := msg[32:64]) not in self.key_to_peer:
-            self.add_peer(key, addr)
-        await self.key_to_peer[key].recv_msg(msg)
-
-    def add_peer(self, key: bytes, addr: tuple[str, int]):
-        secret = key_exchange(self.secret, key)
-        peer = Peer(key + self.key, secret, addr, self.sock)
-        self.key_to_peer[key] = peer
-        self.peers.add(create_task(peer.main()))
-
-
-class Network(object):
-
-    def __init__(self, port: int = 4700):
-        self.sock = socket(AF_INET, SOCK_DGRAM)
-        self.sock.bind(("", port))
-        self.key_to_chord: dict[bytes, Chord] = {}
-        self.chord_to_key: dict[Chord, bytes] = {}
-        self.tasks: set[Task] = set()
-        self.task_to_chord: dict[Task, Chord] = {}
-
-    async def recv_msg(self):
-        select_args = (self.sock,), (), (), 0
+    def _recv(self) -> Generator[int, None, None]:
+        BUFFER_SIZE = 2 ** 16
+        buff = bytearray(BUFFER_SIZE)
+        view = memoryview(buff)
+        a = b = c = d = 0
         while True:
-            while select(*select_args)[0]:
-                msg, addr = self.sock.recvfrom(4096)
-                if len(msg) < 96:
-                    continue
-                if (key := msg[:32]) in self.key_to_chord:
-                    await self.key_to_chord[key].recv_msg(msg, addr)
-            sleep(.1)
+            recvd = self.sock.recv_into(view[b:], BUFFER_SIZE - b)
+            if not recvd:
+                yield 0
+            b += recvd
+            while a < b:
+                if not d:
+                    if view[a] & 1:
+                        if view[a] & 2:
+                            if b - a < 4:
+                                break
+                            d = unpack_from('<I', view, a) >> 2
+                            a += 4
+                        if b - a < 2:
+                            break
+                        d = unpack_from('<H', view, a) >> 2
+                        a += 2
+                    d = view[a] >> 1
+                    a += 1
+                    if d:
+                        msg = Message(d)
+                else:
+                    if d - c <= b - a:
+                        msg.view[c:d] = view[a:a+d-c]
+                        a += d - c
+                        c = d = 0
+                        if a == b:
+                            a = b = 0
+                        self.recv_q.put(msg)
+                    else:
+                        msg.view[c:c+b-a] = view[a:b]
+                        c += b - a
+                        a = b = 0
+            if a > BUFFER_SIZE - 2048:
+                view[:b-a] = view[a:b]
+                a, b = 0, b - a
+
+            yield recvd
+
+    def _send(self) -> Generator[int, None, None]:
+        BUFFER_SIZE = 2 ** 16
+        buff = bytearray(BUFFER_SIZE)
+        view = memoryview(buff)
+        a = b = 0
+        while True:
+            while not self.send_q.empty():
+                # process next queue item
+                msg: Message = self.send_q.get()
+                d = len(msg.buff)
+                # pack encoded message length into buffer
+                if d <= 127:                                    # 2 ** 7 - 1
+                    view[b] = d << 1
+                    b += 1
+                elif d <= 16383:                                # 2 ** 14 - 1
+                    pack_into('<H', view, b, (d << 2) | 1)
+                    b += 2
+                else:
+                    pack_into('<I', view, b, (d << 2) | 3)
+                    b += 4
+                # buffer message if it fits
+                if d <= BUFFER_SIZE - b:
+                    view[b:b+d] = msg.view
+                    b += d
+                # otherwise send buffer then message
+                else:
+                    self.send_pending = True
+                    # send buffer
+                    while a < b:
+                        sent = self.sock.send(view[a:b])
+                        a += sent
+                        yield sent
+                    # reset buffer
+                    a = b = c = 0
+                    # send message
+                    while c < d:
+                        sent = self.sock.send(msg.view[c:d])
+                        c += sent
+                        if c == d:
+                            self.send_pending = False
+                        yield sent
+            # send buffer after processing queue
+            if a < b:
+                self.send_pending = True
+            while a < b:
+                sent = self.sock.send(view[a:b])
+                a += sent
+                if a == b:
+                    self.send_pending = False
+                yield sent
+            # reset buffer
+            a = b = 0
+                
+
+class NodeManager(object):
+
+    def __init__(self, key: bytes):
+        self.key = key
+        self.server: int | None = None
+        self.nodes_map: dict[int, Node] = {}
+        self.nodes_list: list[int] = []
+
+    def serve(self, port: int) -> int:
+        sock = socket()
+        sock.bind(('', port))
+        sock.listen(100)
+        node = Node(sock=sock, key=self.key)
+        fd = sock.fileno()
+        self.server = fd
+        self.nodes_map[fd] = node
+        self.nodes_list.append(fd)
+        return fd
+
+    def accept(self, challenge: bytes) -> int:
+        sock = self.nodes_map[self.server].sock.accept()[0]
+        fd = sock.fileno()
+        node = Node(sock)
+        self.nodes_map[fd] = node
+        self.nodes_list.append(fd)
+        node.send_q.put(InitMessageBuilder(self.key, challenge).build())
+        return fd
+
+    def connect(self, addr: tuple[str, int], challenge: bytes) -> int:
+        sock = create_connection(addr, timeout=1)
+        node = Node(sock)
+        fd = sock.fileno()
+        self.nodes_map[fd] = node
+        self.nodes_list.append(fd)
+        node.send_q.put(InitMessageBuilder(self.key, challenge).build())
+        return fd
     
-    async def main(self):
-        recv = create_task(self.recv_msg())
-        self.tasks
+    def close(self, fd: int) -> None:
+        node = self.nodes_map.pop(fd)
+        self.nodes_list.remove(fd)
+        node.sock.close()
 
-    def add_chord(self, keypair: bytes):
-        chord = Chord(keypair=keypair, sock=self.sock)
-        key = keypair[32:64]
-        self.key_to_chord[key] = chord
-        self.chord_to_key[chord] = key
-        task = create_task(chord.main())
-        self.tasks.add(task)
-        self.task_to_chord[task] = chord
-        task.add_done_callback(self.remove_chord)
 
-    def remove_chord(self, task: Task):
-        self.tasks.remove(task)
-        chord = self.task_to_chord.pop(task)
+def parse_servers(filename: str) -> list[tuple[str, int]]:
+    servers = []
+    with open(filename, 'r') as file:
+        for line in file:
+            line = line.strip()
+            match line.split(':'):
+                case [host, port]:
+                    servers.append((host, int(port)))
+    return servers
 
+
+def network(
+    keypair: bytes,
+    servers_filename: str = 'servers.txt',
+    server_port: int | None = None
+) -> None:
+    public_key, private_key = keypair[:32], keypair[32:]
+    nodes = NodeManager(public_key)
+    challenge_pending: dict[int, bytes] = {}
+    if server_port is not None:
+        nodes.serve(server_port)
+    servers = parse_servers(servers_filename)
+    for addr in servers:
+        challenge = urandom(32)
+        fd = nodes.connect(addr, challenge)
+        challenge_pending[fd] = challenge
+    rlist, xlist = nodes.nodes_list, ()
+    while True:
+        wlist = [
+            fd for fd, node in nodes.nodes_map.items()
+            if not node.send_q.empty() or node.send_pending
+        ]
+        rr, wr, _ = select(rlist, wlist, xlist, 1)
+        for fd in rr:
+            if fd == nodes.server:
+                challenge = urandom(32)
+                client = nodes.accept(challenge)
+                challenge_pending[client] = challenge
+            else:
+                node = nodes.nodes_map[fd]
+                recvd = next(node.recv)
+                if not recvd:
+                    nodes.close(fd)
+                while not node.recv_q.empty():
+                    msg: Message = node.recv_q.get()
+                    match msg.view[0]:
+                        case MessageEnum.INIT.value:
+                            pass
+                        case MessageEnum.CHALLENGE_ANSWER.value:
+                            pass
+                        

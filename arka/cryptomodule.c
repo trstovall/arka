@@ -470,51 +470,50 @@ _error:
 
 
 static PyObject * mint(PyObject * self, PyObject * args) {
-    PyObject *py_key, *py_diff, *py_nonce;
-    Py_buffer c_key, c_diff, c_nonce;
-    uint8_t key[32], diff[2], nonce[32], buffer[66], digest[32];
+    PyObject *py_prehash, *py_diff, *py_nonce;
+    Py_buffer c_prehash, c_diff, c_nonce;
+    uint8_t prehash[32], diff[2], nonce[32], buffer[64], digest[32];
     uint64_t limit, offset;
     uint8_t exp, j;
     int success;
 
     if (!PyArg_ParseTuple(args, "OOOK",
-        & py_key, & py_diff, & py_nonce, & limit
+        & py_prehash, & py_diff, & py_nonce, & limit
     ))
         goto _error;
-    if (!(PyObject_CheckBuffer(py_key)
+    if (!(PyObject_CheckBuffer(py_prehash)
         && PyObject_CheckBuffer(py_diff)
         && PyObject_CheckBuffer(py_nonce) 
     ))
         goto _bad_buffers;
 
-    if (PyObject_GetBuffer(py_key, & c_key, 0))
-        goto _bad_key;
+    if (PyObject_GetBuffer(py_prehash, & c_prehash, 0))
+        goto _bad_prehash;
     if (PyObject_GetBuffer(py_diff, & c_diff, 0))
-        goto _bad_diff_deref_key;
+        goto _bad_diff_deref_prehash;
     if (PyObject_GetBuffer(py_nonce, & c_nonce, 0))
         goto _bad_nonce_deref_diff;
-    if (c_key.len != 32 || c_diff.len != 2 || c_nonce.len != 32)
+    if (c_prehash.len != 32 || c_diff.len != 2 || c_nonce.len != 32)
         goto _bad_buffer_len_deref_buffers;
 
-    if (PyBuffer_ToContiguous(key, & c_key, 32, 'C'))
+    if (PyBuffer_ToContiguous(prehash, & c_prehash, 32, 'C'))
         goto _buffer_copy_fail_deref_buffers;
     if (PyBuffer_ToContiguous(diff, & c_diff, 2, 'C'))
         goto _buffer_copy_fail_deref_buffers;
     if (PyBuffer_ToContiguous(nonce, & c_nonce, 32, 'C'))
         goto _buffer_copy_fail_deref_buffers;
 
-    PyBuffer_Release(& c_key);
+    PyBuffer_Release(& c_prehash);
     PyBuffer_Release(& c_diff);
     PyBuffer_Release(& c_nonce);
 
-    memcpy(buffer, key, 32);
-    memcpy(buffer+32, diff, 2);
-    memcpy(buffer+34, nonce, 32);
+    memcpy(buffer, prehash, 32);
+    memcpy(buffer+32, nonce, 32);
 
     for (uint64_t offset=0; offset < limit; offset++) {
         for (int i=0; i<8; i++)
-            buffer[34+i] ^= (offset >> (8*i)) & 0xff;
-        keccak800(digest, 32, buffer, 66);
+            buffer[32+i] = (offset >> (i << 3)) & 0xff;
+        keccak800(digest, 32, buffer, 64);
         if (digest[0] >= diff[0]) {
             exp = diff[1];
             j = 1;
@@ -524,34 +523,32 @@ static PyObject * mint(PyObject * self, PyObject * args) {
             }
             if (exp < 8) {
                 if (digest[j] & ((1 << exp) - 1) == 0) {
-                    return PyBytes_FromStringAndSize((const char *)buffer+34, 32);
+                    return PyBytes_FromStringAndSize((const char *)buffer+32, 32);
                 }
             }
         }
-        for (int i=0; i<8; i++)
-            buffer[34+i] ^= (offset >> (8*i)) & 0xff;
    }
 
     Py_RETURN_NONE;    
 
 _bad_buffers:
-    PyErr_SetString(PyExc_TypeError, "input key, diff, nonce must be buffers");
+    PyErr_SetString(PyExc_TypeError, "input prehash, diff, nonce must be buffers");
     goto _error;
 
-_bad_key:
-    PyErr_SetString(PyExc_ValueError, "Bad key");
+_bad_prehash:
+    PyErr_SetString(PyExc_ValueError, "Bad prehash");
     goto _error;
 
-_bad_diff_deref_key:
+_bad_diff_deref_prehash:
     PyErr_SetString(PyExc_ValueError, "Bad diff.");
-    goto _deref_key;
+    goto _deref_prehash;
 
 _bad_nonce_deref_diff:
     PyErr_SetString(PyExc_ValueError, "Bad nonce.");
     goto _deref_diff;
 
 _bad_buffer_len_deref_buffers:
-    PyErr_SetString(PyExc_ValueError, "input key, diff, nonce must be buffers of len 32, 2, 32.");
+    PyErr_SetString(PyExc_ValueError, "input prehash, diff, nonce must be buffers of len 32, 2, 32.");
     goto _deref_nonce;
 
 _buffer_copy_fail_deref_buffers:
@@ -562,8 +559,8 @@ _deref_nonce:
     PyBuffer_Release(& c_nonce);
 _deref_diff:
     PyBuffer_Release(& c_diff);
-_deref_key:
-    PyBuffer_Release(& c_key);
+_deref_prehash:
+    PyBuffer_Release(& c_prehash);
 _error:
     return NULL;
 }

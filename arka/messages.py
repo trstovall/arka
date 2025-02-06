@@ -6,7 +6,7 @@ from .crypto import keccak_800, keccak_1600, sign, verify
 
 
 
-class Parameters(object):
+class ParametersBuilder(object):
 
     def __init__(self,
         target: int,            # mint difficulty x * 2 ** y
@@ -19,21 +19,7 @@ class Parameters(object):
         self.utxo_fee = utxo_fee
         self.data_fee = data_fee
 
-    @classmethod
-    def from_memoryview(cls, data: memoryview) -> "Parameters":
-        if len(data) != 26:
-            raise ValueError("Cannot unpack Parameters from data.")
-        target = data[0] * (1 << data[1])
-        block_reward = sum(x << (8*i) for i,x in enumerate(data[2:10]))
-        utxo_fee = sum(x << (8*i) for i,x in enumerate(data[10:18]))
-        data_fee = sum(x << (8*i) for i,x in enumerate(data[18:26]))
-        return cls(target, block_reward, utxo_fee, data_fee)
-
-    @classmethod
-    def from_bytes(cls, data: bytes) -> "Parameters":
-        return cls.from_memoryview(memoryview(data))
-
-    def to_bytes(self) -> bytes:
+    def build(self) -> bytes:
         y = max(0, self.target.bit_length() - 8)
         x = self.target >> y
         return bytes(
@@ -44,7 +30,32 @@ class Parameters(object):
         )
 
 
+class ParametersView(object):
+
+    def __init__(self, view: memoryview):
+        if len(view) != 26:
+            raise ValueError("Cannot unpack Parameters from view.")
+        self.view = view
+
+    @property
+    def target(self) -> int:
+        return self.view[0] * (1 << self.view[1])
+
+    @property
+    def block_reward(self) -> int:
+        return sum(x << (8*i) for i,x in enumerate(self.view[2:10]))
+    
+    @property
+    def utxo_fee(self) -> int:
+        return sum(x << (8*i) for i,x in enumerate(self.view[10:18]))
+    
+    @property
+    def data_fee(self) -> int:
+        return sum(x << (8*i) for i,x in enumerate(self.view[18:26]))
+
+
 class UID(object):
+
     PUBLIC_KEY = 0
     TRUNCATED_HASH = 1
 
@@ -89,16 +100,113 @@ class UID(object):
         return dest[0:1+truncate]
 
 
+SPENDER_LIST = 0
+SPENDER_HASH = 1
+SPENDER_KEY = 2
+
+
+class SpenderHash(object):
+
+    def __init__(self, hash: bytes):
+        self.hash = hash
+
+    def encode(self) -> bytes:
+        return bytes([(len(self.hash) << 2) | SPENDER_HASH]) + self.hash
+
+
+class SpenderKey(object):
+
+    def __init__(self, key: bytes, truncate: int = 0):
+        self.key = key
+        self.truncate = truncate
+
+    def hash(self) -> SpenderHash:
+        return SpenderHash(
+            keccak_800(self.key)[:self.truncate]
+            if self.truncate else
+            self.key
+        )
+    
+    def encode(self) -> bytes:
+        return bytes([(self.truncate << 2) | SPENDER_KEY]) + self.key
+
+
+class SpenderList(object):
+
+    def __init__(self, spenders: list["SpenderList" | SpenderHash | SpenderKey],
+            threshold: int, truncate: int = 16):
+        self.spenders = spenders
+        self.threshold = threshold
+        self.truncate = truncate
+
+    def hash(self) -> SpenderHash:
+        def _hash(spender: "SpenderList" | SpenderHash | SpenderKey) -> SpenderHash:
+            return spender if type(spender) == SpenderHash else spender.hash()
+        if not self.spenders or not self.threshold:
+            raise ValueError("Cannot hash empty SpenderList.")
+        if len(self.spenders) == 1:
+            return _hash(self.spenders[0])
+        prefix = [(self.truncate << 2) | SPENDER_LIST]
+        if len(self.spenders) < 128:
+            prefix.append(len(self.spenders) << 1)
+        else:
+            prefix.append(((len(self.spenders) & 0x7f) << 1) | 1)
+            prefix.append((len(self.spenders) >> 7) & 0xff)
+        if self.threshold < 128:
+            prefix.append(self.threshold << 1)
+        else:
+            prefix.append(((self.threshold & 0x7f) << 1) | 1)
+            prefix.append((self.threshold >> 7) & 0xff)
+        prefix = bytes(prefix)
+        spenders = [_hash(s).hash for s in self.spenders]
+        buffer = bytearray(len(prefix) + sum(len(s) for s in spenders))
+        view = memoryview(buffer)
+        i = 0
+        view[i:i+len(prefix)] = prefix
+        i += len(prefix)
+        for s in spenders:
+            view[i:i+len(s)] = s
+            i += len(s)
+        return SpenderHash(keccak_1600(bytes(view))[:self.truncate])
+
+    def encode(self) -> bytes:
+        if not self.spenders or not self.threshold:
+            raise ValueError("Cannot encode empty SpenderList.")
+        if len(self.spenders) == 1:
+            return self.spenders[0].encode()
+        prefix = [(self.truncate << 2) | SPENDER_LIST]
+        if len(self.spenders) < 128:
+            prefix.append(len(self.spenders) << 1)
+        else:
+            prefix.append(((len(self.spenders) & 0x7f) << 1) | 1)
+            prefix.append((len(self.spenders) >> 7) & 0xff)
+        if self.threshold < 128:
+            prefix.append(self.threshold << 1)
+        else:
+            prefix.append(((self.threshold & 0x7f) << 1) | 1)
+            prefix.append((self.threshold >> 7) & 0xff)
+        prefix = bytes(prefix)
+        spenders = [s.encode() for s in self.spenders]
+        buffer = bytearray(len(prefix) + sum(len(s) for s in spenders))
+        view = memoryview(buffer)
+        i = 0
+        view[i:i+len(prefix)] = prefix
+        i += len(prefix)
+        for s in spenders:
+            view[i:i+len(s)] = s
+            i += len(s)
+        return bytes(view)
+
 
 class Block(object):
 
     def __init__(self,
         timestamp: int,                         # microseconds since UNIX epoch
         prev_hash: bytes,                       # hash digest of most recent block
-        uid: UID,                               # uid of block worker
+        uid: SpenderHash,                       # uid of block worker
         nonce: bytes | None = None,             # nonce required to hash block to target difficulty
-        parameters: Parameters | None = None,   # epoch blocks publish network parameters
-        payments: list = []                     # payment transactions to commit by this block
+        parameters: bytes | None = None,        # epoch blocks publish network parameters
+        payments: list[bytes] = []              # payment transactions to commit by this block
     ):
         self.timestamp = timestamp
         self.prev_hash = prev_hash

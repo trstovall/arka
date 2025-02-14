@@ -31,6 +31,8 @@ But, digital gold is as bad as gold.  Bitcoin isn't good money because it doesn'
 
 ## Blocks
 
+Updates to the `arka` database are structured as a fixed sequence of "blocks".  A block is an ordered list of the payments that have been published to the network since the last block.  This sequence of blocks forms a "blockchain", an openly auditable data structure that allows all users of the `arka` network to agree on the state of the database.  The structure of a block is as follows:
+
     ---
     # common to all blocks
     height: int                             # block id, strictly increasing
@@ -74,9 +76,9 @@ But, digital gold is as bad as gold.  Bitcoin isn't good money because it doesn'
       signatures: list[bytes]               # digital signatures of payment created by keys listed as spenders
 
 
-## Chain consensus with PoW
+## Blockchain consensus with Proof-of-Work (PoW)
 
-The block chain is a linked list which begins with a particular block that sets the parameters for the given chain followed by a sequence of blocks.  Blocks provide a `prev_block` field, which is the hash digest of the most recent previous block, forming a linked list block chain.  The chain is partitioned into subchains of 10,000 blocks that share the same parameters, as determined through voting.
+The blockchain is a linked list which begins with a particular block that sets the parameters for the given chain followed by a sequence of blocks.  Blocks provide a `prev_block` field, which is the hash digest of the most recent previous block, forming a linked list block chain.  The chain is partitioned into subchains of 10,000 blocks that share the same parameters, as determined through voting.
 
 Blocks are generated periodically by random peers performing computational work.  If the hash digest of a valid block is a member of a relatively small set determined by the work `target` consensus parameter, then the hash represents a valid proof of work.  The block adds a list of payments to the block chain.  Miners, computational units aimed at generating blocks, should listen for blocks and payments and adjust their own blocks accordingly.
 

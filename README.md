@@ -7,11 +7,19 @@
 
 ### Store of Value
 
-The first function of money is to serve as a store of value - that is, to be desirable.  Money is a placeholder that replaces goods and services in a barter system.  There is the expectation that when you sell goods, like a chair, for money, at some future time, you can buy goods of equivalent value, like a chair of similar quality, with that money.  The primary selling point of Bitcoin is that the value of its money has not only kept its value over time, but it has gained value.  This is in stark contrast to centralized money like the US Dollar whose value has significantly and predictably decayed every year.  While the monetary supply in `arka` is not fixed like in Bitcoin, the supply is managed by the community who are incentivized to achieve the goal of `arka` becoming a store of value.
+The first function of money is to serve as a store of value - that is, to be desirable.  Money is a placeholder that replaces goods and services in a barter system.  There is the expectation that when you sell goods, like a chair, for money, at some future time, you can buy goods of equivalent value, like a chair of similar quality, with that money.
+
+The primary selling point of Bitcoin is that the value of its money has not only kept its value over time, but it has gained value.  This is in stark contrast to centralized money like the US Dollar whose value has significantly and predictably decayed every year.
+
+While the monetary supply in `arka` is not fixed like in Bitcoin, the supply is managed by the community who are incentivized to achieve the goal of `arka` becoming a store of value.
 
 ### Unit of Account
 
-Units are fixed measurements.  Establishing a unit of account is required for understanding how much value is being offered when buying or selling.  Although the value of centralized money decays annually, that value is relatively predictable.  It is stable enough to establish an understanding of how much value is transferred in a monetary transaction.  The value of bitcoin has dramatically increased over time.  However, that history is marked by enormous increases and decreases in value, making it impossible to grasp how much value is transferred in a monetary transaction without converting to a currency whose value is better understood.  This is not expected to change.  The fixed supply of bitcoin encourages speculative bubbles and subsequent crashes, as demand for a currency is historically unstable.  Users of `arka` are empowered to set parameters that both inflate and deflate the supply of money.  They are incentivized to judge demand and set an appropriate supply of money that establishes a stable unit of account.  As the currency matures, stability will become self-reinforcing.
+Units are fixed measurements.  Establishing a unit of account is required for understanding how much value is being offered when buying or selling.  Although the value of centralized money decays annually, that value is relatively predictable.  It is stable enough to establish an understanding of how much value is transferred in a monetary transaction.
+
+The value of bitcoin has dramatically increased over time.  However, that history is marked by enormous increases and decreases in value, making it impossible to grasp how much value is transferred in a monetary transaction without converting to a currency whose value is better understood.  This is not expected to change.  The fixed supply of bitcoin encourages speculative bubbles and subsequent crashes, as demand for a currency is historically unstable.
+
+Users of `arka` are empowered to set parameters that both inflate and deflate the supply of money.  They are incentivized to judge demand and set an appropriate supply of money that establishes a stable unit of account.  As the currency matures, stability will become self-reinforcing.
 
 ### Medium of Exchange
 

@@ -1,15 +1,35 @@
 
-# Arka: A blockchain with monetary policy voting and data publishing
+# arka - "Adaptive Sound Money (ASM)"
 
-## Features
+## A Community Managed Digital Money Supply
 
-- ___Arka monetary inflation is determined through stakeholder voting.___  Payment outputs are colored with votes that determine network parameter adjustments for each epoch.  The blockchain is a sequence of Work blocks and Payment blocks.  Every epoch (every 10,000 work blocks or about 1 week), the votes are collected from those blocks and the associated payment blocks, and the median for each network parameter is computed.  The result determines the network parameters for the next epoch.  The network parameters control the function of many features in Arka.
-- To control the rate of inflation, you must first fairly measure time.  `target` is the only network parameter that is voted on by minters instead of stakeholders.  The miners are the time keepers, and are kept fair through proof of work voting.  In a proof-of-work, the target number of times a computation has been ran can be proven, without counting the iterations.  If you know approximately how long the computation takes, then you can fairly measure time.  Each work block has an associated timestamp, microseconds since 1970-01-01.  The timestamps in the epoch are collected and median voting determines the target for the next epoch.  The timestamps for each block are evaluated by the network when the work block is published to the network.  Each block is allowed a reward of `block_reward`.  The computation used is keccak-800 digest of the work block.
-- Offline minting can produce proof-of-work stamps that may be redeemed for arka coin.  This is useful for sending memos in the Arka network without associating the memo to an any particular payment activity.  It also provides a counterbalance to help stabilize the currency by providing a speculative asset that may be redeemed for the currency.  The offline minters should receive a reduced rate of reward when compared to the block minters, as block minting is crucial to network operation.  However, `stamp_reward` may be increased to reduce the rate of computation currently performed by the network and is used in conjuction with `block_reward`.
-- ___Monetary supply may be deflated___.  Blockchain data users are charged a usage fee that is paid to no party.  It is simply removed from the supply.  The usage rate is provided by `data_fee`.
-- Blocks in the blockchain are retired after an `expiry` number of epochs have passed.  This means that old and unspendable coin is reclaimed by the network, and data can be discarded.
+## Functions of Money
 
-### Blocks
+### Store of Value
+
+The first function of money is to serve as a store of value - that is, to be desirable.  Money is a placeholder that replaces goods and services in a barter system.  There is the expectation that when you sell goods, like a chair, for money, at some future time, you can buy goods of equivalent value, like a chair of similar quality, with that money.  The primary selling point of Bitcoin is that the value of its money has not only kept its value over time, but it has gained value.  This is in stark contrast to centralized money like the US Dollar whose value has significantly and predictably decayed every year.  While the monetary supply in `arka` is not fixed like in Bitcoin, the supply is managed by the community who are incentivized to achieve the goal of `arka` becoming a store of value.
+
+### Unit of Account
+
+Units are fixed measurements.  Establishing a unit of account is required for understanding how much value is being offered when buying or selling.  Although the value of centralized money decays annually, that value is relatively predictable.  It is stable enough to establish an understanding of how much value is transferred in a monetary transaction.  The value of bitcoin has dramatically increased over time.  However, that history is marked by enormous increases and decreases in value, making it impossible to grasp how much value is transferred in a monetary transaction without converting to a currency whose value is better understood.  This is not expected to change.  The fixed supply of bitcoin encourages speculative bubbles and subsequent crashes, as demand for a currency is historically unstable.  Users of `arka` are empowered to set parameters that both inflate and deflate the supply of money.  They are incentivized to judge demand and set an appropriate supply of money that establishes a stable unit of account.  As the currency matures, stability will become self-reinforcing.
+
+### Medium of Exchange
+
+When money is used as a medium of exchange, a market is created where goods and services are bought and sold in exchange for the money instead of other goods and services.  Hence, the money must not only be desireable and attain a value that is understood, but it must be transferrable.  In the U.S., the Federal Reserve issues paper notes and coins, called cash, to use as a medium of exchange.  This cash may be used to buy and sell goods and services in person.  However, commerce is becoming increasingly digital and global.  So, a vast bank network has been established where users sell their cash to banks for bank credit, then use the bank credit to exchange online.
+
+Bitcoin provides an alternative to this.  It is native to the digital world and globally available.  However, payment throughput is severely limited.  The developers of Bitcoin's software determine the maximum throughput of payments, and they have committed to selecting a low throughput to create an auction market for payments.  The network then prioritizes payments based on fees payed to the network, driving up the fees.  This greatly limits Bitcoin's potential as a medium of exchange.
+
+`arka` is also a digital native.  Payment fees are set by the community and the default limit to payment throughput is roughly 80 times greater than with Bitcoin.  It is important to note that the `arka` community is empowered to determine payment throughput by setting the payment fees, and the software is merely configured to avoid network congestion.  This is in contrast to Bitcoin where throughput (and, consequently, fees) is determined by software developers.  The expectation for `arka` is to achieve a high throughput of payments with very low fees.
+
+## "Better than Bitcoin"
+
+For a long time, gold was used as money.  It is a scarce resource with a (somewhat) fixed supply.  However, governments around the world decided that the supply of gold was not adaptive enough to match the demand.  So, those governments replaced gold with "fiat" - money supplied by centralized governmental bodies and backed only by the promise that the monetary supply will be managed responsibly.
+
+Bitcoin represents a reactionary return to gold, but for a modern world.  Bitcoiners insist that centralized money has not been managed responsibly.  So, instead, Bitcoin rejects the notion of a managed supply and reinstates a fixed supply.  Bitcoin is digital gold.
+
+But, digital gold is as bad as gold.  Bitcoin isn't good money because it doesn't provide a stable unit of account.  `arka` users maintain that centralized money has not been managed responsibly.  `arka` presents an opportunity have the community manage the monetary supply, avoiding both the political influence that has corrupted centralized money and demand/supply mismatch that plagues Bitcoin and precious metals.
+
+## Blocks
 
     ---
     # common to all blocks
@@ -33,8 +53,7 @@
 
       # spend a UTXO
       - index: (int, int, int)              # block index | payment index | output index
-        uid: bytes                          # spender's public key that hashes to or matches UTXO uid
-        signature: bytes                    # digital signature of H(index | uid | payment.to[]) using uid as key
+        spender: SpenderKey or SpenderList  # key set that hashes to or matches UTXO uid
 
       to:                                   # destinations are UTXOs
 
@@ -45,12 +64,14 @@
 
         # optional vote to adjust parameters, weighted by units and aggregated across epoch (10000 blocks)
         vote:
-          block_reward: int                     # units created by block creator
-          utxo_fee: int                         # rate of decay of UTXOs (age of UTXO * UTXO units)
-          data_fee: int                         # units per byte in each transaction are to be destroyed
+          block_reward: int                 # units created by block creator
+          utxo_fee: int                     # rate of decay of UTXOs (age of UTXO * UTXO units)
+          data_fee: int                     # units per byte in each transaction are to be destroyed
 
       # commit data
       - memo: bytes                         # can be used for layer 2 protocols
+
+      signatures: list[bytes]               # digital signatures of payment created by keys listed as spenders
 
 
 ## Chain consensus with PoW
@@ -59,6 +80,6 @@ The block chain is a linked list which begins with a particular block that sets 
 
 Blocks are generated periodically by random peers performing computational work.  If the hash digest of a valid block is a member of a relatively small set determined by the work `target` consensus parameter, then the hash represents a valid proof of work.  The block adds a list of payments to the block chain.  Miners, computational units aimed at generating blocks, should listen for blocks and payments and adjust their own blocks accordingly.
 
-To compute the hash digest of a block, deterministicly represent the object, minus the `nonce` field, as a binary string.  Hash the string with Keccak-f1600.  Then, concatenate the that hash digest with the `target` and `nonce` and hash again with Keccak-f800.  `target` consists of an 8-bit `base` and 8-bit `exp` such that `difficulty == (base + 1) * (2 ** exp) - 1`.  The proof of work is valid if the first 8-bit byte of the final hash digest is numerically greater than or equal to `base` and is followed by at least `exp` number of zero bits.
+To compute the hash digest of a block, deterministicly represent the object, minus the `nonce` field, as a binary string.  Hash the string with Keccak-f1600.  Then, concatenate the that hash digest with the `target` and `nonce` and hash again with Keccak-f800.  `target` consists of an 8-bit `base` and 8-bit `exp` such that `difficulty == base * (2 ** exp)`.  The proof of work is valid if the 8-bit prefix of the hash digest is numerically greater than or equal to `base` and is followed by at least `exp` number of zero bits.
 
 The `payment` list defines `from`, a list of unspent transaction outputs from previous blocks that claim previous payment outputs, and redistributes the total balance, minus a data fee, to `to` a new list of payment outputs.  Payment outputs are optionally associated to a list of votes which determine chain consensus parameters.  

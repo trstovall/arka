@@ -1,7 +1,5 @@
 
-from functools import cached_property
 from struct import pack_into, unpack_from
-
 from enum import IntEnum
 
 from .crypto import keccak_800, keccak_1600
@@ -423,7 +421,7 @@ class Block(object):
     def __init__(self,
         timestamp: int,                         # microseconds since UNIX epoch
         prev_hash: bytes,                       # hash digest of most recent block
-        uid: SpenderHash,                       # uid of block worker
+        uid: SpenderHash | SpenderKey,          # uid of block worker
         nonce: bytes | None = None,             # nonce required to hash block to target difficulty
         parameters: Parameters | None = None,   # epoch blocks publish network parameters
         payments: list[Payment] = []            # payment transactions to commit by this block
@@ -435,7 +433,6 @@ class Block(object):
         self.parameters = parameters
         self.payments = payments
 
-    @cached_property
     def header_prehash(self) -> bytes:
         if self.worker is None:
             raise Exception("No worker set for block.")
@@ -469,7 +466,6 @@ class Block(object):
         self.nonce = nonce
         return None
 
-    @cached_property
     def digest(self) -> bytes | None:
         if not self.nonce:
             return None

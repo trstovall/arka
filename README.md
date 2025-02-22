@@ -59,29 +59,29 @@ Updates to the `arka` database are structured as a fixed sequence of "blocks".  
     # each block includes a list of payments
     payments:
 
-    - from:                                 # sources are non-expired UTXOs
+      - from:                                 # sources are non-expired UTXOs
 
-      # spend a UTXO
-      - index: (int, int, int)              # block index | payment index | output index
-        spender: SpenderKey or SpenderList  # key set that hashes to or matches UTXO uid
+        # spend a UTXO
+        - index: (int, int, int)              # block index | payment index | output index
+          spender: SpenderKey or SpenderList  # key set that hashes to or matches UTXO uid
 
-      to:                                   # destinations are UTXOs
+        to:                                   # destinations are UTXOs
 
-      # create a UTXO
-      - uid: bytes                          # public key or truncated key hash digest of receipient
-        units: int                          # 1 coin = 2**30 units
-        memo: bytes                         # can be used for layer 2 protocols
+          # create a UTXO
+          - uid: bytes                          # public key or truncated key hash digest of receipient
+            units: int                          # 1 coin = 2**30 units
+            memo: bytes                         # can be used for layer 2 protocols
 
-        # optional vote to adjust parameters, weighted by units and aggregated across epoch (10000 blocks)
-        vote:
-          block_reward: int                 # units created by block creator
-          utxo_fee: int                     # rate of decay of UTXOs (age of UTXO * UTXO units)
-          data_fee: int                     # units per byte in each transaction are to be destroyed
+            # optional vote to adjust parameters, weighted by units and aggregated across epoch (10000 blocks)
+            vote:
+              block_reward: int                 # units created by block creator
+              utxo_fee: int                     # rate of decay of UTXOs (age of UTXO * UTXO units)
+              data_fee: int                     # units per byte in each transaction are to be destroyed
 
-      # commit data
-      - memo: bytes                         # can be used for layer 2 protocols
+          # commit data
+          - memo: bytes                         # can be used for layer 2 protocols
 
-      signatures: list[bytes]               # digital signatures of payment created by keys listed as spenders
+        signatures: list[bytes]               # digital signatures of payment created by keys listed as spenders
 
 
 ## Blockchain consensus with Proof-of-Work (PoW)

@@ -340,7 +340,7 @@ _error:
 
 static PyObject * keccak_800(PyObject * self, PyObject * args) {
 
-    PyObject * py_x, * value;
+    PyObject * py_x;
     Py_buffer c_x;
     uint8_t *x, y[4096];
     uint32_t outlen = 32;
@@ -367,13 +367,12 @@ static PyObject * keccak_800(PyObject * self, PyObject * args) {
 
     keccak800(y, outlen, x, c_x.len);
 
-    value = PyBytes_FromStringAndSize((const char *)y, outlen);
-
     free(x);
-    return value;
+
+    return PyBytes_FromStringAndSize((const char *)y, outlen);
 
 _buffer_copy_fail:
-    PyErr_SetString(PyExc_TypeError, "input value must be buffer of len 32.");
+    PyErr_SetString(PyExc_TypeError, "Unable to copy input buffer to C.");
     goto _deref_x;
 
 _oom_deref_x:
@@ -406,7 +405,7 @@ _error:
 static PyObject * keccak_1600(PyObject * self, PyObject * args) {
 
 
-    PyObject * py_x, * value;
+    PyObject * py_x;
     Py_buffer c_x;
     uint8_t *x, y[4096];
     uint64_t outlen = 32;
@@ -433,13 +432,12 @@ static PyObject * keccak_1600(PyObject * self, PyObject * args) {
 
     keccak1600(y, outlen, x, c_x.len);
 
-    value = PyBytes_FromStringAndSize((const char *)y, outlen);
-
     free(x);
-    return value;
+
+    return PyBytes_FromStringAndSize((const char *)y, outlen);
 
 _buffer_copy_fail:
-    PyErr_SetString(PyExc_TypeError, "input value must be buffer of len 32.");
+    PyErr_SetString(PyExc_TypeError, "Unable to copy input buffer to C.");
     goto _deref_x;
 
 _oom_deref_x:
@@ -474,7 +472,7 @@ static PyObject * mint(PyObject * self, PyObject * args) {
     Py_buffer c_prehash, c_diff, c_nonce;
     uint8_t prehash[32], diff[2], nonce[32], buffer[64], digest[32];
     uint64_t limit, offset;
-    uint8_t exp, j;
+    uint8_t j;
     int success;
 
     if (!PyArg_ParseTuple(args, "OOOK",
@@ -511,22 +509,29 @@ static PyObject * mint(PyObject * self, PyObject * args) {
     memcpy(buffer+32, nonce, 32);
 
     for (uint64_t offset=0; offset < limit; offset++) {
+
         for (int i=0; i<8; i++)
             buffer[32+i] = (offset >> (i << 3)) & 0xff;
+
         keccak800(digest, 32, buffer, 64);
-        if (digest[0] >= diff[0]) {
-            exp = diff[1];
-            j = 1;
-            while (exp >= 8 && !digest[j]) {
-                j += 1;
-                exp -= 8;
+        
+        if (((digest[0] | (digest[1] << 8)) * diff[0]) >> 16)
+            continue;
+
+        success = 1;
+        for (j=2; j < 2 + (diff[1] >> 3); j++)
+            if (digest[j]) {
+                success = 0;
+                break;
             }
-            if (exp < 8) {
-                if (digest[j] & ((1 << exp) - 1) == 0) {
-                    return PyBytes_FromStringAndSize((const char *)buffer+32, 32);
-                }
-            }
-        }
+
+        if (!success)
+            continue;
+
+        if ((diff[1] & 7) && (digest[j] & ((1 << (diff[1] & 7)) - 1)))
+            continue;
+        
+        return PyBytes_FromStringAndSize((const char *)nonce, 32);
    }
 
     Py_RETURN_NONE;    

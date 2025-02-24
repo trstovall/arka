@@ -296,56 +296,56 @@ void keccak1600 (uint8_t * output, uint64_t outlen, const uint8_t * input, const
 }
 
 
-void mint_midstate (uint32_t * midstate, const uint8_t * key, const uint8_t * diff, const uint8_t * nonce) {
-    uint32_t A[25] = {0};
-    uint8_t buffer[36] = {0};
-    #pragma unroll
-    for (int i=0; i < 8; i++) {
-        A[i] ^= load32(key + (4 * i));
-    }
-    memcpy(buffer, diff, 2);
-    memcpy(buffer + 2, nonce, 2);
-    A[9] ^= load32(buffer);
-    keccak_f800(A);
-    memcpy(buffer, nonce + 2, 30);
-    buffer[30] ^= 1;
-    buffer[35] ^= 0x80;
-    #pragma unroll
-    for (int i=0; i < 9; i++) {
-        A[i] ^= load32(buffer + (4 * i));
-    }
-    memcpy(midstate, A, 4*25);
-}
+// void mint_midstate (uint32_t * midstate, const uint8_t * key, const uint8_t * diff, const uint8_t * nonce) {
+//     uint32_t A[25] = {0};
+//     uint8_t buffer[36] = {0};
+//     #pragma unroll
+//     for (int i=0; i < 8; i++) {
+//         A[i] ^= load32(key + (4 * i));
+//     }
+//     memcpy(buffer, diff, 2);
+//     memcpy(buffer + 2, nonce, 2);
+//     A[9] ^= load32(buffer);
+//     keccak_f800(A);
+//     memcpy(buffer, nonce + 2, 30);
+//     buffer[30] ^= 1;
+//     buffer[35] ^= 0x80;
+//     #pragma unroll
+//     for (int i=0; i < 9; i++) {
+//         A[i] ^= load32(buffer + (4 * i));
+//     }
+//     memcpy(midstate, A, 4*25);
+// }
 
 
-int mint_iterate(uint64_t * offset, const uint32_t * midstate, const uint8_t *diff, uint64_t limit) {
+// int mint_iterate(uint64_t * offset, const uint32_t * midstate, const uint8_t *diff, uint64_t limit) {
 
-    uint32_t A[25];
-    uint8_t buffer[32];
-    uint8_t exp, j;
+//     uint32_t A[25];
+//     uint8_t buffer[32];
+//     uint8_t exp, j;
 
-    for (uint64_t i=0; i < limit; i++) {
-        memcpy(A, midstate, 4*25);
-        A[0] ^= i & 0xffffffff;
-        A[1] ^= (i >> 32) & 0xffffffff;
-        keccak_f800(A);
-        if ((A[0] & 0xff) >= diff[0]) {
-            for (j=0; j<8; j++)
-                store32(buffer + 4*j, A[j]);
-            exp = diff[1];
-            j = 1;
-            while (exp >= 8 && !buffer[j]){
-                j += 1;
-                exp -= 8;
-            }
-            if (exp < 8) {
-                if (buffer[j] & ((1 << exp) - 1) == 0) {
-                    *offset = i;
-                    return 1;
-                }
-            }
-        }
-    }
-    *offset = limit;
-    return 0;
-}
+//     for (uint64_t i=0; i < limit; i++) {
+//         memcpy(A, midstate, 4*25);
+//         A[0] ^= i & 0xffffffff;
+//         A[1] ^= (i >> 32) & 0xffffffff;
+//         keccak_f800(A);
+//         if ((A[0] & 0xff) >= diff[0]) {
+//             for (j=0; j<8; j++)
+//                 store32(buffer + 4*j, A[j]);
+//             exp = diff[1];
+//             j = 1;
+//             while (exp >= 8 && !buffer[j]){
+//                 j += 1;
+//                 exp -= 8;
+//             }
+//             if (exp < 8) {
+//                 if (buffer[j] & ((1 << exp) - 1) == 0) {
+//                     *offset = i;
+//                     return 1;
+//                 }
+//             }
+//         }
+//     }
+//     *offset = limit;
+//     return 0;
+// }

@@ -29,11 +29,10 @@ class Parameters(object):
 
     @classmethod
     def decode(cls, view: memoryview) -> tuple["Parameters", int]:
-        try:
-            target = view[0] * (1 << view[1])
-            block_reward, utxo_fee, data_fee = unpack_from('<QQQ', view, 2)
-        except IndexError as e:
+        if len(view) < 26:
             raise ValueError('`view` too short to decode `Parameters`.')
+        target = view[0] * (1 << view[1])
+        block_reward, utxo_fee, data_fee = unpack_from('<QQQ', view, 2)
         return cls(target, block_reward, utxo_fee, data_fee), 26
 
 
@@ -90,16 +89,13 @@ class SpenderKey(object):
 
     @classmethod
     def decode(cls, view: memoryview) -> tuple["SpenderKey", int]:
-        try:
-            truncate = view[0] >> 2
-            if truncate == 0 or 16 <= truncate <= 32:
-                key = bytes(view[1:33])
-            else:
-                raise ValueError('Invalid `truncate` value encoded for `SpenderKey`.')
-            if len(key) < 32:
-                raise IndexError()
-        except IndexError as e:
+        if len(view) < 33:
             raise ValueError('`view` too short to decode `SpenderKey`.')
+        truncate = view[0] >> 2
+        if truncate == 0 or 16 <= truncate <= 32:
+            key = bytes(view[1:33])
+        else:
+            raise ValueError('Invalid `truncate` value encoded for `SpenderKey`.')
         return cls(key, truncate), 33
 
 
@@ -309,7 +305,7 @@ class PaymentInput(object):
                 raise ValueError('Invalid `UTXORef*` type encoded in `view`.')
         if len(view) == i:
             raise ValueError('`view` too short to decode `PaymentInput`.')
-        match view[i]:
+        match view[i] & 3:
             case SpenderEnum.SPENDER_KEY.value:
                 spender, n = SpenderKey.decode(view[i:])
             case SpenderEnum.SPENDER_LIST.value:
@@ -349,12 +345,16 @@ class PaymentOutput(object):
     def __init__(self,
         spender: SpenderHash | SpenderKey | None,   # 16-32 bytes digest of receipient's public key
         units: int = 0,                             # 1 coin = 10**9 units
-        vote: Vote | None = None,                   # adjustments to blockchain parameters
+        block_reward_vote: int | None = None,       # adjustment to block_reward
+        utxo_fee_vote: int | None = None,           # adjustment to utxo_fee
+        data_fee_vote: int | None = None,           # adjustment to data_fee
         memo: bytes | None = None                   # raw data to add to blockchain
     ):
         self.spender = spender
         self.units = units
-        self.vote = vote
+        self.block_reward_vote = block_reward_vote
+        self.utxo_fee_vote = utxo_fee_vote
+        self.data_fee_vote = data_fee_vote
         self.memo = memo
 
     def encode(self) -> bytearray:
@@ -366,16 +366,21 @@ class PaymentOutput(object):
         if self.units:
             flags += 2
             i += 8
-        if self.vote:
+        if self.block_reward_vote is not None:
             flags += 4
-            vote = self.vote.encode()
-            i += len(vote)
+            i += 8
+        if self.utxo_fee_vote is not None:
+            flags += 8
+            i += 8
+        if self.data_fee_vote is not None:
+            flags += 16
+            i += 8
         if self.memo:
             if len(self.memo) < 256:
-                flags += 8
+                flags += 32
                 i += 1
             elif len(self.memo) < 0x10000:
-                flags += 16
+                flags += 64
                 i += 2
             else:
                 raise ValueError('`memo` too large to encode.')
@@ -390,9 +395,15 @@ class PaymentOutput(object):
         if self.units:
             pack_into('<Q', view, i, self.units)
             i += 8
-        if self.vote:
-            view[i:i+len(vote)] = vote
-            i += len(vote)
+        if self.block_reward_vote is not None:
+            pack_into('<Q', view, i, self.block_reward_vote)
+            i += 8
+        if self.utxo_fee_vote is not None:
+            pack_into('<Q', view, i, self.utxo_fee_vote)
+            i += 8
+        if self.data_fee_vote is not None:
+            pack_into('<Q', view, i, self.data_fee_vote)
+            i += 8
         if self.memo:
             if len(self.memo) < 256:
                 view[i] = len(self.memo)
@@ -403,22 +414,170 @@ class PaymentOutput(object):
             view[i:i+len(self.memo)] = self.memo
         return buffer
 
+    @classmethod
+    def decode(cls, view: memoryview) -> tuple['PaymentOutput', int]:
+        if len(view) < 1:
+            raise ValueError('`view` too short to decode `PaymentOutput`.')
+        flags, i = view[0], 1
+        # unpack spender
+        if flags & 1:
+            if len(view) < i + 1:
+                raise ValueError('`view` too short to decode `PaymentOutput`.')
+            match view[i] & 3:
+                case SpenderEnum.SPENDER_HASH.value:
+                    spender, n = SpenderHash.decode(view[i:])
+                case SpenderEnum.SPENDER_KEY.value:
+                    spender, n = SpenderKey.decode(view[i:])
+                case _:
+                    raise ValueError('Invalid `Spender*` type encoded in `PaymentOutput`.')
+            i += n
+        else:
+            spender = None
+        # unpack units
+        if flags & 2:
+            if len(view) < i + 8:
+                raise ValueError('`view` too short to decode `PaymentOutput`.')
+            units = unpack_from('<Q', view, i)[0]
+            i += 8
+        else:
+            units = None
+        # unpack block_reward_vote
+        if flags & 4:
+            if len(view) < i + 8:
+                raise ValueError('`view` too short to decode `PaymentOutput`.')
+            block_reward_vote = unpack_from('<Q', view, i)[0]
+            i += 8
+        else:
+            block_reward_vote = None
+        # unpack utxo_fee_vote
+        if flags & 8:
+            if len(view) < i + 8:
+                raise ValueError('`view` too short to decode `PaymentOutput`.')
+            utxo_fee_vote = unpack_from('<Q', view, i)[0]
+            i += 8
+        else:
+            utxo_fee_vote = None
+        # unpack data_fee_vote
+        if flags & 16:
+            if len(view) < i + 8:
+                raise ValueError('`view` too short to decode `PaymentOutput`.')
+            data_fee_vote = unpack_from('<Q', view, i)[0]
+            i += 8
+        else:
+            data_fee_vote = None
+        # unpack memo
+        if flags & 96 == 96:
+            raise ValueError('Invalid `memo_len` flag encoded in `PaymentOutput`.')
+        if flags & 32:
+            if len(view) < i + 1:
+                raise ValueError('`view` too short to decode `PaymentOutput`.')
+            memo_len = view[i]
+            i += 1
+            if len(view) < i + memo_len:
+                raise ValueError('`view` too short to decode `PaymentOutput`.')
+            memo = view[i:i+memo_len]
+            i += memo_len
+        elif flags & 64:
+            if len(view) < i + 2:
+                raise ValueError('`view` too short to decode `PaymentOutput`.')
+            memo_len = unpack_from('<H', view, i)
+            i += 2
+            if len(view) < i + memo_len:
+                raise ValueError('`view` too short to decode `PaymentOutput`.')
+            memo = view[i:i+memo_len]
+            i += memo_len
+        else:
+            memo = None
+        return cls(spender, units, block_reward_vote, utxo_fee_vote, data_fee_vote, memo), i
+
 
 class Payment(object):
 
     def __init__(self,
         inputs: list[PaymentInput],
         outputs: list[PaymentOutput],
-        signatures: list[bytes]
+        signatures: list[bytes],
+        encoded_buffer: bytearray | None = None
     ):
         self.inputs = inputs
         self.outputs = outputs
         self.signatures = signatures
+        self.encoded_buffer = encoded_buffer
+
+    @property
+    def digest(self) -> bytes:
+        if self.encoded_buffer is None:
+            self.encoded_buffer = self.encode()
+        return keccak_1600(self.encoded_buffer)
+
+    @property
+    def digest_no_signatures(self) -> bytes:
+        if self.encoded_buffer is None:
+            self.encoded_buffer = self.encode()
+        return keccak_1600(self.encoded_buffer[:-64*len(self.signatures)])
+
+    def encode(self) -> bytearray:
+        inputs = [x.encode() for x in self.inputs]
+        inputs_size = sum(len(x) for x in inputs)
+        outputs = [x.encode() for x in self.outputs]
+        outputs_size = sum(len(x) for x in outputs)
+        if any(len(x) != 64 for x in self.signatures):
+            raise ValueError('Invalid signature length for `Payment`.')
+        sigs_size = 64 * len(self.signatures)
+        nbytes = 4 + inputs_size + outputs_size + sigs_size
+        if nbytes >= 0x10000:
+            raise ValueError('`Payment` encoding is too long.')
+        buffer = bytearray(nbytes)
+        view = memoryview(buffer)
+        pack_into('<HH', view, 0, inputs_size, outputs_size)
+        # encode inputs
+        offset = 4
+        for input in inputs:
+            view[offset:offset+len(input)] = input
+            offset += len(input)
+        # encode outputs
+        for output in outputs:
+            view[offset:offset+len(output)] = output
+            offset += len(output)
+        # encode signatures
+        for signature in self.signatures:
+            view[offset:offset+64] = signature
+            offset += 64
+        return buffer
+    
+    @classmethod
+    def decode(cls, view: memoryview) -> tuple['Payment', int]:
+        if len(view) < 4:
+            raise ValueError('`view` is too short to decode `Payment`.')
+        inputs_size, outputs_size = unpack_from('<HH', view, 0)
+        sigs_size = len(view) - 4 - inputs_size - outputs_size
+        if sigs_size < 0 or sigs_size & 63:
+            raise ValueError('Malformed signature block for `Payment`.')
+        # decode inputs
+        inputs: list[PaymentInput] = []
+        offset = 4
+        while offset < 4 + inputs_size:
+            x, nbytes = PaymentInput.decode(view[offset:])
+            inputs.append(x)
+            offset += nbytes
+        # decode outputs
+        outputs: list[PaymentOutput] = []
+        while offset < 4 + inputs_size + outputs_size:
+            x, nbytes = PaymentOutput.decode(view[offset:])
+            outputs.append(x)
+            offset += nbytes
+        # decode signatures
+        signatures: list[bytes] = []
+        while offset < len(view):
+            signatures.append(bytes(view[offset:offset+64]))
+            offset += 64
+        return cls(inputs, outputs, signatures, bytearray(view[:offset])), offset
 
 
 class Block(object):
 
     def __init__(self,
+        id: int,                                # block number
         timestamp: int,                         # microseconds since UNIX epoch
         prev_hash: bytes,                       # hash digest of most recent block
         uid: SpenderHash | SpenderKey,          # uid of block worker
@@ -426,6 +585,7 @@ class Block(object):
         parameters: Parameters | None = None,   # epoch blocks publish network parameters
         payments: list[Payment] = []            # payment transactions to commit by this block
     ):
+        self.id = id
         self.timestamp = timestamp
         self.prev_hash = prev_hash
         self.uid = uid
@@ -433,9 +593,17 @@ class Block(object):
         self.parameters = parameters
         self.payments = payments
 
+    @property
     def header_prehash(self) -> bytes:
-        if self.worker is None:
-            raise Exception("No worker set for block.")
+        offset = 44
+        uid = self.uid.encode()
+        offset += len(uid)
+        if self.id % 10000:
+            parameters = b''
+        else:
+            parameters = self.parameters.encode()
+            offset += len(parameters)
+        payment_hashes = bytearray(32 * len(self.payments))
         data = b''.join([
             self.index_bytes,
             self.prev_block,
@@ -446,39 +614,5 @@ class Block(object):
         ])
         return keccak_1600(data)
     
-    def mint(self, limit: int = 1000, nonce: bytes | None = None) -> bytes | None:
-        key = self.work_key
-        target = self.parameters.target
-        nonce = nonce or self.nonce or (b'\x00' * 32)
-        base, exp = target
-        len = (exp + 7) // 8
-        for iteration in range(limit):
-            digest = keccak_800(b''.join(key, target, nonce))
-            if base >= digest[0]:
-                exp_sum = sum(digest[i+1] << (8*i) for i in range(len))
-                if not exp_sum % (1 << exp):
-                    self.nonce = nonce
-                    return digest
-            new_nonce = sum(x << (8*i) for i,x in enumerate(nonce)) + 1
-            nonce = bytes([
-                (new_nonce >> (8*i)) % 0xff for i in range(len(nonce))
-            ])
-        self.nonce = nonce
-        return None
-
-    def digest(self) -> bytes | None:
-        if not self.nonce:
-            return None
-        data = b''.join(
-            self.work_key,
-            self.parameters.target,
-            self.nonce
-        )
-        digest = keccak_800(data)
-        base, exp = self.parameters.target
-        if base >= digest[0]:
-            exp_sum = sum(digest[i+1] << (8*i) for i in range((exp + 7) // 8))
-            if not exp_sum % (1 << exp):
-                return digest
-        return None
-
+    def digest(self) -> bytes:
+        return keccak_800(self.header_prehash + self.nonce)

@@ -11463,8 +11463,8 @@ int ed25519_sign(
     unsigned char * sm,
     unsigned long long * smlen,
     const unsigned char * m,
-        unsigned long long mlen,
-        const unsigned char * sk
+    unsigned long long mlen,
+    const unsigned char * sk
 ) {
     unsigned char pk[32];
     unsigned char az[64];

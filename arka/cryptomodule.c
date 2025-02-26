@@ -343,9 +343,13 @@ static PyObject * keccak_800(PyObject * self, PyObject * args) {
     PyObject * py_x;
     Py_buffer c_x;
     uint8_t *x, y[32];
+    uint32_t outlen = 32;
 
-    if (!PyArg_ParseTuple(args, "O", & py_x))
+    if (!PyArg_ParseTuple(args, "O|i", & py_x, & outlen))
         goto _error;
+
+    if (outlen > 32)
+        goto _bad_outlen;
 
     if (!PyObject_CheckBuffer(py_x))
         goto _bad_py_x;
@@ -361,11 +365,11 @@ static PyObject * keccak_800(PyObject * self, PyObject * args) {
 
     PyBuffer_Release(& c_x);
 
-    keccak800(y, 32, x, c_x.len);
+    keccak800(y, outlen, x, c_x.len);
 
     free(x);
 
-    return PyBytes_FromStringAndSize((const char *)y, 32);
+    return PyBytes_FromStringAndSize((const char *)y, outlen);
 
 _buffer_copy_fail:
     PyErr_SetString(PyExc_TypeError, "Unable to copy input buffer to C.");
@@ -381,6 +385,10 @@ _oom_deref_c_x:
 
 _bad_py_x:
     PyErr_SetString(PyExc_TypeError, "input value must be buffer.");
+    goto _error;
+
+_bad_outlen:
+    PyErr_SetString(PyExc_ValueError, "Output len must be >= 0 and <= 32.");
     goto _error;
 
 _deref_x:
@@ -400,9 +408,13 @@ static PyObject * keccak_1600(PyObject * self, PyObject * args) {
     PyObject * py_x;
     Py_buffer c_x;
     uint8_t *x, y[32];
+    uint64_t outlen = 32;
 
-    if (!PyArg_ParseTuple(args, "O", & py_x))
+    if (!PyArg_ParseTuple(args, "O|i", & py_x, & outlen))
         goto _error;
+    
+    if (outlen > 32)
+        goto _bad_outlen;
 
     if (!PyObject_CheckBuffer(py_x))
         goto _bad_py_x;
@@ -418,11 +430,11 @@ static PyObject * keccak_1600(PyObject * self, PyObject * args) {
 
     PyBuffer_Release(& c_x);
 
-    keccak1600(y, 32, x, c_x.len);
+    keccak1600(y, outlen, x, c_x.len);
 
     free(x);
 
-    return PyBytes_FromStringAndSize((const char *)y, 32);
+    return PyBytes_FromStringAndSize((const char *)y, outlen);
 
 _buffer_copy_fail:
     PyErr_SetString(PyExc_TypeError, "Unable to copy input buffer to C.");
@@ -438,6 +450,10 @@ _oom_deref_c_x:
 
 _bad_py_x:
     PyErr_SetString(PyExc_TypeError, "input value must be buffer.");
+    goto _error;
+
+_bad_outlen:
+    PyErr_SetString(PyExc_ValueError, "Output len must be >= 0 and <= 32.");
     goto _error;
 
 _deref_x:

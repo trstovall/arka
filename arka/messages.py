@@ -503,12 +503,15 @@ class Payment(object):
         self.outputs = outputs
         self.signatures = signatures
         self.encoded_buffer = encoded_buffer
+        self._digest = None
 
     @property
     def digest(self) -> bytes:
-        if self.encoded_buffer is None:
-            self.encoded_buffer = self.encode()
-        return keccak_1600(self.encoded_buffer)
+        if self._digest is None:
+            if self.encoded_buffer is None:
+                self.encoded_buffer = self.encode()
+            self._digest = keccak_1600(self.encoded_buffer)
+        return self._digest
 
     @property
     def digest_no_signatures(self) -> bytes:
@@ -574,6 +577,46 @@ class Payment(object):
         return cls(inputs, outputs, signatures, bytearray(view[:offset])), offset
 
 
+class BlockHeader(object):
+
+    def __init__(self, id: int, timestamp: int, prev_hash: bytes,
+        uid: SpenderHash | SpenderKey, payments_digest: bytes,
+        parameters: Parameters | None = None, nonce: bytes | None = None
+    ):
+        self.id = id
+        self.timestamp = timestamp
+        self.prev_hash = prev_hash
+        self.uid = uid
+        self.payments_digest = payments_digest
+        self.parameters = parameters
+        self.nonce = nonce
+
+    @property
+    def prehash(self) -> bytes:
+        size = 76
+        uid = self.uid.encode()
+        size += len(uid)
+        if self.parameters:
+            parameters = self.parameters.encode()
+            size += len(parameters)
+        buffer = bytearray(size)
+        view = memoryview(buffer)
+        pack_into('<IQ', view, 0, self.id, self.timestamp)
+        view[12:44] = self.prev_hash
+        offset = 44
+        view[offset:offset+len(uid)] = uid
+        offset += len(uid)
+        if self.parameters:
+            view[offset:offset+len(parameters)] = parameters
+            offset += len(parameters)
+        view[offset:offset+32] = self.payments_digest
+        return keccak_1600(buffer)
+
+    @property
+    def digest(self) -> bytes:
+        return keccak_800(self.prehash + self.nonce)
+
+
 class Block(object):
 
     def __init__(self,
@@ -592,27 +635,12 @@ class Block(object):
         self.nonce = nonce
         self.parameters = parameters
         self.payments = payments
+        self.payment_hashes = [x.digest for x in payments]
 
     @property
-    def header_prehash(self) -> bytes:
-        offset = 44
-        uid = self.uid.encode()
-        offset += len(uid)
-        if self.id % 10000:
-            parameters = b''
-        else:
-            parameters = self.parameters.encode()
-            offset += len(parameters)
-        payment_hashes = bytearray(32 * len(self.payments))
-        data = b''.join([
-            self.index_bytes,
-            self.prev_block,
-            self.prev_link,
-            self.timestamp_bytes,
-            self.total_work_bytes,
-            self.worker
-        ])
-        return keccak_1600(data)
-    
-    def digest(self) -> bytes:
-        return keccak_800(self.header_prehash + self.nonce)
+    def header(self) -> BlockHeader:
+        payments_digest = keccak_1600(b''.join(self.payment_hashes))
+        return BlockHeader(
+            self.id, self.timestamp, self.prev_hash, self.uid,
+            payments_digest, self.parameters, self.nonce
+        )

@@ -48,64 +48,41 @@ class SpenderHash(object):
         self.hash = hash
 
     def encode(self) -> bytearray:
-        buffer = bytearray(1 + len(self.hash))
-        view = memoryview(buffer)
-        view[0] = (len(self.hash) << 2) | SpenderEnum.SPENDER_HASH.value
-        view[1:1+len(self.hash)] = self.hash
-        return buffer
+        return bytearray([SpenderEnum.SPENDER_HASH.value]) + self.hash
        
     @classmethod
     def decode(cls, view: memoryview) -> tuple["SpenderHash", int]:
-        try:
-            hash_len = view[0] >> 2
-            if 16 <= hash_len <= 32:
-                hash = bytes(view[1:1+hash_len])
-            else:
-                raise ValueError('Invalid hash length encoded for `SpenderHash`.')
-            if len(hash) < hash_len:
-                raise IndexError()
-        except IndexError as e:
+        if len(view) < 21:
             raise ValueError('`view` too short to decode `SpenderHash`.')
-        return cls(hash), 1 + hash_len
+        return cls(bytes(view[1:21])), 21
 
 
 class SpenderKey(object):
 
-    def __init__(self, key: bytes, truncate: int = 0):
+    def __init__(self, key: bytes):
         self.key = key
-        self.truncate = truncate
 
     def hash(self) -> SpenderHash:
-        if not self.truncate:
-            raise ValueError('`SpenderKey` is not to be hashed.')
-        return SpenderHash(keccak_800(self.key)[:self.truncate])
+        return SpenderHash(keccak_800(self.key, 20))
     
     def encode(self) -> bytearray:
-        buffer = bytearray(33)
-        view = memoryview(buffer)
-        view[0] = (self.truncate << 2) | SpenderEnum.SPENDER_KEY.value
-        view[1:33] = self.key
-        return buffer
+        return bytearray([SpenderEnum.SPENDER_KEY.value]) + self.key
 
     @classmethod
     def decode(cls, view: memoryview) -> tuple["SpenderKey", int]:
         if len(view) < 33:
             raise ValueError('`view` too short to decode `SpenderKey`.')
-        truncate = view[0] >> 2
-        if truncate == 0 or 16 <= truncate <= 32:
-            key = bytes(view[1:33])
-        else:
-            raise ValueError('Invalid `truncate` value encoded for `SpenderKey`.')
-        return cls(key, truncate), 33
+        return cls(bytes(view[1:33])), 33
 
 
 class SpenderList(object):
 
-    def __init__(self, spenders: list["SpenderList" | SpenderHash | SpenderKey],
-            threshold: int, truncate: int = 16):
+    def __init__(self,
+        spenders: list["SpenderList" | SpenderHash | SpenderKey],
+        threshold: int
+    ):
         self.spenders = spenders
         self.threshold = threshold
-        self.truncate = truncate
 
     @property
     def keys(self) -> list[bytes]:
@@ -136,7 +113,7 @@ class SpenderList(object):
             + (1 if len(self.spenders) < 128 else 2)
             + (1 if self.threshold < 128 else 2)
         )
-        prefix[0] = (self.truncate << 2) | SpenderEnum.SPENDER_LIST.value
+        prefix[0] = SpenderEnum.SPENDER_LIST.value
         if len(self.spenders) < 128:
             prefix[1] = len(self.spenders) << 1
             i = 2
@@ -149,22 +126,22 @@ class SpenderList(object):
         else:
             prefix[i] = ((self.threshold & 0x7f) << 1) | 1
             prefix[i+1] = (self.threshold >> 7) & 0xff
-        spenders: list[bytes] = []
+        hashes: list[bytes] = []
         for s in self.spenders:
             match s:
                 case SpenderHash():
-                    spenders.append(s.hash)
+                    hashes.append(s.hash)
                 case SpenderKey() | SpenderList():
-                    spenders.append(s.hash().hash)
-        buffer = bytearray(len(prefix) + sum(len(s) for s in spenders))
+                    hashes.append(s.hash().hash)
+        buffer = bytearray(len(prefix) + 20 * len(hashes))
         view = memoryview(buffer)
         i = 0
         view[i:i+len(prefix)] = prefix
         i += len(prefix)
-        for s in spenders:
-            view[i:i+len(s)] = s
-            i += len(s)
-        return SpenderHash(keccak_1600(buffer)[:self.truncate])
+        for h in hashes:
+            view[i:i+len(h)] = h
+            i += len(h)
+        return SpenderHash(keccak_1600(buffer, 20))
 
     def encode(self) -> bytearray:
         if not self.spenders or not self.threshold:
@@ -173,7 +150,7 @@ class SpenderList(object):
             + (1 if len(self.spenders) < 128 else 2)
             + (1 if self.threshold < 128 else 2)
         )
-        prefix[0] = (self.truncate << 2) | SpenderEnum.SPENDER_LIST.value
+        prefix[0] = SpenderEnum.SPENDER_LIST.value
         if len(self.spenders) < 128:
             prefix[1] = len(self.spenders) << 1
             i = 2
@@ -201,9 +178,6 @@ class SpenderList(object):
     def decode(cls, view: memoryview) -> tuple["SpenderList", int]:
         try:
             spenders: list[SpenderHash | SpenderKey | SpenderList] = []
-            truncate = view[0] >> 2
-            if truncate < 16 or truncate > 32:
-                raise ValueError('Invalid `truncate` value encoded for `SpenderList`.')
             nspenders = view[1]
             i = 2
             if nspenders & 1:
@@ -219,7 +193,7 @@ class SpenderList(object):
             if not nspenders or not threshold:
                 raise ValueError('Decoded `SpenderList` must not be empty.')
             for j in range(nspenders):
-                match view[i] & 3:
+                match view[i]:
                     case SpenderEnum.SPENDER_HASH.value:
                         x, n = SpenderHash.decode(view[i:])
                     case SpenderEnum.SPENDER_KEY.value:
@@ -232,13 +206,7 @@ class SpenderList(object):
                 i += n
         except IndexError as e:
             raise ValueError('`view` too short to decode `SpenderList`.')
-        return SpenderList(spenders, threshold, truncate), i
-
-
-class UTXORefEnum(IntEnum):
-
-    BY_INDEX = 0
-    BY_HASH = 1
+        return SpenderList(spenders, threshold), i
 
 
 class UTXORefByIndex(object):
@@ -247,45 +215,23 @@ class UTXORefByIndex(object):
         self.block, self.payment, self.output = block, payment, output
     
     def encode(self) -> bytearray:
-        buffer = bytearray(11)
-        pack_into('<BIIH', buffer, 0,
-            UTXORefEnum.BY_INDEX.value, self.block, self.payment, self.output
+        buffer = bytearray(10)
+        pack_into('<IIH', buffer, 0,
+            self.block, self.payment, self.output
         )
         return buffer
 
     @classmethod
     def decode(cls, view) -> tuple['UTXORefByIndex', int]:
-        if len(view) < 11:
+        if len(view) < 10:
             raise ValueError('`view` too short to decode `UTXORefByIndex`.')
-        return cls(*unpack_from('<IIH', view, 1)), 11
-
-
-class UTXORefByHash(object):
-
-    def __init__(self, payment: bytes, output: int):
-        self.payment, self.output = payment, output
-
-    def encode(self) -> bytearray:
-        buffer = bytearray(35)
-        view = memoryview(buffer)
-        view[0] = UTXORefEnum.BY_HASH.value
-        view[1:33] = self.payment
-        pack_into('<H', view, 33, self.output)
-        return buffer
-
-    @classmethod
-    def decode(cls, view: memoryview) -> tuple["UTXORefByHash", int]:
-        if len(view) < 35:
-            raise ValueError('`view` too short to decode `UTXORefByHash`.')
-        payment = bytes(view[1:33])
-        output = unpack_from('<H', view, 33)[0]
-        return cls(payment, output), 35
+        return cls(*unpack_from('<IIH', view, 0)), 10
 
 
 class PaymentInput(object):
 
     def __init__(self,
-        utxo: UTXORefByIndex | UTXORefByHash, spender: SpenderKey | SpenderList
+        utxo: UTXORefByIndex, spender: SpenderKey | SpenderList
     ):
         self.utxo, self.spender = utxo, spender
 
@@ -294,18 +240,10 @@ class PaymentInput(object):
 
     @classmethod
     def decode(cls, view: memoryview) -> tuple['PaymentInput', int]:
-        if len(view) == 0:
-            raise ValueError('`view` too short to decode `PaymentInput`.')
-        match view[0]:
-            case UTXORefEnum.BY_INDEX.value:
-                utxo, i = UTXORefByIndex.decode(view)
-            case UTXORefEnum.BY_HASH.value:
-                utxo, i = UTXORefByHash.decode(view)
-            case _:
-                raise ValueError('Invalid `UTXORef*` type encoded in `view`.')
+        utxo, i = UTXORefByIndex.decode(view)
         if len(view) == i:
             raise ValueError('`view` too short to decode `PaymentInput`.')
-        match view[i] & 3:
+        match view[i]:
             case SpenderEnum.SPENDER_KEY.value:
                 spender, n = SpenderKey.decode(view[i:])
             case SpenderEnum.SPENDER_LIST.value:
@@ -343,12 +281,12 @@ class Vote(object):
 class PaymentOutput(object):
 
     def __init__(self,
-        spender: SpenderHash | SpenderKey | None,   # 16-32 bytes digest of receipient's public key
-        units: int = 0,                             # 1 coin = 10**9 units
-        block_reward_vote: int | None = None,       # adjustment to block_reward
-        utxo_fee_vote: int | None = None,           # adjustment to utxo_fee
-        data_fee_vote: int | None = None,           # adjustment to data_fee
-        memo: bytes | None = None                   # raw data to add to blockchain
+        spender: SpenderHash | None,            # 16-32 bytes digest of receipient's public key
+        units: int = 0,                         # 1 coin = 10**9 units
+        block_reward_vote: int | None = None,   # adjustment to block_reward
+        utxo_fee_vote: int | None = None,       # adjustment to utxo_fee
+        data_fee_vote: int | None = None,       # adjustment to data_fee
+        memo: bytes | None = None               # raw data to add to blockchain
     ):
         self.spender = spender
         self.units = units
@@ -361,7 +299,7 @@ class PaymentOutput(object):
         flags, i = 0, 1
         if self.spender:
             flags += 1
-            spender = self.spender.encode()
+            spender = self.spender.hash
             i += len(spender)
         if self.units:
             flags += 2
@@ -421,16 +359,10 @@ class PaymentOutput(object):
         flags, i = view[0], 1
         # unpack spender
         if flags & 1:
-            if len(view) < i + 1:
+            if len(view) < i + 20:
                 raise ValueError('`view` too short to decode `PaymentOutput`.')
-            match view[i] & 3:
-                case SpenderEnum.SPENDER_HASH.value:
-                    spender, n = SpenderHash.decode(view[i:])
-                case SpenderEnum.SPENDER_KEY.value:
-                    spender, n = SpenderKey.decode(view[i:])
-                case _:
-                    raise ValueError('Invalid `Spender*` type encoded in `PaymentOutput`.')
-            i += n
+            spender = SpenderHash(bytes(view[i:i+20]))
+            i += 20
         else:
             spender = None
         # unpack units
@@ -580,22 +512,28 @@ class Payment(object):
 class BlockHeader(object):
 
     def __init__(self, id: int, timestamp: int, prev_hash: bytes,
-        uid: SpenderHash | SpenderKey, payments_digest: bytes,
-        parameters: Parameters | None = None, nonce: bytes | None = None
+        uid: SpenderHash, payments_digest: bytes,
+        nonce: bytes, parameters: Parameters | None = None
     ):
         self.id = id
         self.timestamp = timestamp
         self.prev_hash = prev_hash
         self.uid = uid
         self.payments_digest = payments_digest
-        self.parameters = parameters
         self.nonce = nonce
+        self.parameters = parameters
 
     @property
     def prehash(self) -> bytes:
-        size = 76
-        uid = self.uid.encode()
-        size += len(uid)
+        return keccak_1600(self.encode()[:-32])
+
+    @property
+    def digest(self) -> bytes:
+        return keccak_800(self.prehash + self.nonce)
+
+    def encode(self) -> bytearray:
+        size = 128
+        uid = self.uid.hash
         if self.parameters:
             parameters = self.parameters.encode()
             size += len(parameters)
@@ -610,11 +548,40 @@ class BlockHeader(object):
             view[offset:offset+len(parameters)] = parameters
             offset += len(parameters)
         view[offset:offset+32] = self.payments_digest
-        return keccak_1600(buffer)
+        offset += 32
+        view[offset:offset+32] = self.nonce
+        return buffer
 
-    @property
-    def digest(self) -> bytes:
-        return keccak_800(self.prehash + self.nonce)
+    @classmethod
+    def decode(cls, view: memoryview) -> tuple['BlockHeader', int]:
+        if len(view) < 44:
+            raise ValueError('`view` is too short to decode `BlockHeader`.')
+        id, timestamp = unpack_from('<IQ', view, 0)
+        prev_hash = bytes(view[12:44])
+        offset = 44
+        if len(view) < offset + 1:
+            raise ValueError('`view` is too short to decode `BlockHeader`.')
+        match view[offset] & 3:
+            case SpenderEnum.SPENDER_HASH.value:
+                uid, n = SpenderHash.decode(view[offset:])
+            case SpenderEnum.SPENDER_KEY.value:
+                uid, n = SpenderKey.decode(view[offset:])
+                if uid.truncate:
+                    raise ValueError('`BlockHeader` `SpenderKey` must not be truncated.')
+        offset += n
+        if id % 10000 == 0:
+            parameters, n = Parameters.decode(view[offset:])
+            offset += n
+        else:
+            parameters = None
+        if len(view) < offset + 64:
+            raise ValueError('`view` is too short to decode `BlockHeader`.')
+        payments_hash = bytes(view[offset:offset+32])
+        nonce = bytes(view[offset+32:offset+64])
+        offset += 64
+        return cls(
+            id, timestamp, prev_hash, uid, payments_hash, nonce, parameters
+        ), offset
 
 
 class Block(object):
@@ -623,12 +590,14 @@ class Block(object):
         id: int,                                # block number
         timestamp: int,                         # microseconds since UNIX epoch
         prev_hash: bytes,                       # hash digest of most recent block
+        nonce: bytes,                           # nonce required to hash block to target difficulty
         uid: SpenderHash | SpenderKey,          # uid of block worker
-        nonce: bytes | None = None,             # nonce required to hash block to target difficulty
         parameters: Parameters | None = None,   # epoch blocks publish network parameters
         payments: list[Payment] = []            # payment transactions to commit by this block
     ):
         self.id = id
+        if id % 10000 and parameters is not None:
+            raise ValueError('non-epoch blocks should not hold parameters.')
         self.timestamp = timestamp
         self.prev_hash = prev_hash
         self.uid = uid
@@ -642,5 +611,5 @@ class Block(object):
         payments_digest = keccak_1600(b''.join(self.payment_hashes))
         return BlockHeader(
             self.id, self.timestamp, self.prev_hash, self.uid,
-            payments_digest, self.parameters, self.nonce
+            payments_digest, self.nonce, self.parameters
         )

@@ -37,17 +37,13 @@ MSG_ERROR = 255
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
 
-def msg_init(peer_id: bytes, challenge: bytes) -> bytearray:
-        msg = bytearray(69)
-        view = memoryview(msg)
-        view[0] = MSG_INIT          # message id: 1 byte
-        view[1:5] = ARKA_BANNER     # arka banner: 4 bytes
-        view[5:37] = peer_id        # local node key: 32 bytes
-        view[37:69] = challenge     # challenge for remote node: 32 bytes
-        return msg
+def msg_init(peer_id: bytes, challenge: bytes) -> bytes:
+        return b''.join([
+            bytes([MSG_INIT]), ARKA_BANNER, peer_id, challenge
+        ])
 
 
-def msg_challenge_answer(answer: bytes) -> bytearray:
+def msg_challenge_answer(answer: bytes) -> bytes:
         return bytes([MSG_CHALLENGE_ANSWER]) + answer
 
 
@@ -67,7 +63,10 @@ def msg_pub_peers_update(added: set, removed: set) -> bytes:
         num_removed = struct.pack('<H', (num_removed << 1) | 1)
     else:
         raise ValueError('Too many peers removed.')
-    return msg_type + num_added + num_removed + b''.join(list(added) + list(removed))
+    return b''.join(
+        [msg_type, num_added, num_removed]
+        + list(added) + list(removed)
+    )
 
 
 def msg_meet_request(neighbor: bytes) -> bytes:
@@ -131,8 +130,8 @@ class PubPeersUpdateMessage(Message):
         if self.view[offset] & 1:
             self.num_removed = struct.unpack_from('<H', self.view, offset)[0] >> 1
             offset += 2
-        if len(msg) < offset + 32 * (self.num_added + self.num_removed):
-            raise ValueError('msg is too short to unpack `PubPeersUpdateMessage`.')
+        if len(msg) != offset + 32 * (self.num_added + self.num_removed):
+            raise ValueError('Invalid msg passed to `PubPeersUpdateMessage`.')
         self.offset = offset
 
     @property

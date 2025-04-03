@@ -87,7 +87,7 @@ static PyObject* keypair(PyObject* self, PyObject* args) {
     PyBuffer_Release(&seed_buffer);
 
     // Convert the 64-byte keypair to a Python bytes object
-    result = Py_Bytes_FromStringAndSize((const char*)keypair, 64);
+    result = PyBytes_FromStringAndSize((const char*)keypair, 64);
 
     // Return the keypair as a Python bytes object
     return result;
@@ -140,7 +140,7 @@ static PyObject* sign(PyObject* self, PyObject* args) {
     PyBuffer_Release(&message_hash_buffer);
 
     // Convert the 64-byte signature to a Python bytes object
-    result = Py_Bytes_FromStringAndSize((const char*)signature, 64);
+    result = PyBytes_FromStringAndSize((const char*)signature, 64);
     if (result == NULL) {
         return NULL;
     }
@@ -262,7 +262,7 @@ static PyObject* key_exchange_vartime(PyObject* self, PyObject* args) {
     }
     else {
         // Return the 32-byte seed as bytes
-        return Py_Bytes_FromStringAndSize((const char*)seed, 32);
+        return PyBytes_FromStringAndSize((const char*)seed, 32);
     }
 }
 

@@ -1,6 +1,7 @@
 
 from struct import pack_into, unpack_from
 from enum import IntEnum
+from typing import Self
 
 from ._crypto import keccak_800, keccak_1600
 
@@ -28,7 +29,7 @@ class Parameters(object):
         return buffer
 
     @classmethod
-    def decode(cls, view: memoryview) -> tuple["Parameters", int]:
+    def decode(cls, view: memoryview) -> tuple[Self, int]:
         if len(view) < 26:
             raise ValueError('`view` too short to decode `Parameters`.')
         target = view[0] * (1 << view[1])
@@ -78,7 +79,7 @@ class SpenderKey(object):
 class SpenderList(object):
 
     def __init__(self,
-        spenders: list["SpenderList" | SpenderHash | SpenderKey],
+        spenders: list[Self | SpenderHash | SpenderKey],
         threshold: int
     ):
         self.spenders = spenders

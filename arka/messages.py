@@ -2,7 +2,7 @@
 from struct import pack_into, unpack_from
 from enum import IntEnum
 
-from .crypto import keccak_800, keccak_1600
+from ._crypto import keccak_800, keccak_1600
 
 
 

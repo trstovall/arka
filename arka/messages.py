@@ -1,7 +1,8 @@
 
+from __future__ import annotations
+
 from struct import pack_into, unpack_from
 from enum import IntEnum
-from __future__ import annotations
 from ._crypto import keccak_800, keccak_1600
 
 

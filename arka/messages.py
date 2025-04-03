@@ -1,7 +1,7 @@
 
 from struct import pack_into, unpack_from
 from enum import IntEnum
-from typing_extensions import Self
+from __future__ import annotations
 from ._crypto import keccak_800, keccak_1600
 
 
@@ -78,7 +78,7 @@ class SpenderKey(object):
 class SpenderList(object):
 
     def __init__(self,
-        spenders: list[Self | SpenderHash | SpenderKey],
+        spenders: list[SpenderList | SpenderHash | SpenderKey],
         threshold: int
     ):
         self.spenders = spenders

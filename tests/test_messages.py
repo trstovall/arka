@@ -1,5 +1,5 @@
 
-import messages
+from . import messages
 
 def test_auto():
     #

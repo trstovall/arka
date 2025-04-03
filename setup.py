@@ -3,7 +3,7 @@ from setuptools import setup, find_packages, Extension
 
 
 _crypto = Extension(
-    name="arka.crypto",
+    name="arka._crypto",
     sources=["arka/cryptomodule.c"],
     include_dirs=["arka"],
 )

@@ -13,559 +13,522 @@
 static PyObject * keypair(PyObject * self, PyObject * args);
 static PyObject * sign(PyObject * self, PyObject * args);
 static PyObject * verify(PyObject * self, PyObject * args);
-static PyObject * key_exchange(PyObject * self, PyObject * args);
-static PyObject * djb2(PyObject * self, PyObject * args);
-static PyObject * keccak_800(PyObject * self, PyObject * args);
-static PyObject * keccak_1600(PyObject * self, PyObject * args);
+static PyObject * key_exchange_vartime(PyObject * self, PyObject * args);
+static PyObject * keccak_800(PyObject * self, PyObject * args, PyObject * kwargs);
+static PyObject * keccak_1600(PyObject * self, PyObject * args, PyObject * kwargs);
 static PyObject * mint(PyObject * self, PyObject * args);
+static PyObject * check_mint(PyObject * self, PyObject * args);
+static PyObject * djb2(PyObject * self, PyObject * args);
 
 
+// Method definition table
 static PyMethodDef crypto_methods[] = {
     {"keypair", keypair, METH_VARARGS, "Generate 64-byte ed25519 keypair of (32-byte seed, 32-byte public key)."},
-    {"sign", sign, METH_VARARGS, "Use 32-byte secret key and 32-byte message hash to generate 64-byte ed25519 signature."},
+    {"sign", sign, METH_VARARGS, "Use 64-byte keypair and 32-byte message hash to generate 64-byte ed25519 signature."},
     {"verify", verify, METH_VARARGS, "Validate ed25519 signature for 32-byte message hash and 32-byte public key."},
-    {"key_exchange", key_exchange, METH_VARARGS, "Generate ed25519 keypair from 32-byte secret, 32-byte public key, and 32-byte nonce."},
+    {"key_exchange_vartime", key_exchange_vartime, METH_VARARGS, "Perform a variable-time key exchange using ed25519."},
+    {"keccak_800", (PyCFunction)keccak_800, METH_VARARGS | METH_KEYWORDS, "Compute a Keccak-800 hash of a message."},
+    {"keccak_1600", (PyCFunction)keccak_1600, METH_VARARGS | METH_KEYWORDS, "Compute a Keccak-1600 hash of a message."},
+    {"mint", mint, METH_VARARGS, "Find nonce such that keccak800(prefix|iteration) ~= 0."},
+    {"check_mint", check_mint, METH_VARARGS, "Check preimage against target difficulty."},
     {"djb2", djb2, METH_VARARGS, "Hash string to 32-bit digest."},
-    {"keccak_800", keccak_800, METH_VARARGS, "Perform 32-bit Keccak hash with 10*1 padding."},
-    {"keccak_1600", keccak_1600, METH_VARARGS, "Perform 64-bit Keccak hash with 10*1 padding."},
-    {"mint", mint, METH_VARARGS, "Find nonce such that H(key|diff|nonce) ~= 0."},
+    {NULL, NULL, 0, NULL}  // Sentinel
 };
 
 
+// Module definition
 static struct PyModuleDef cryptomodule = {
     PyModuleDef_HEAD_INIT,
-    "crypto",
-    NULL,
-    -1,
+    "_crypto",  // Module name
+    "A Python extension module for cryptographic operations.",
+    -1,         // Module state (not used here)
     crypto_methods
 };
 
 
-PyMODINIT_FUNC PyInit_crypto(void)
-{
-    PyObject * mod;
+// Module initialization function
+PyMODINIT_FUNC PyInit__crypto(void) {
+    return PyModule_Create(&cryptomodule);
+}
 
-    if (!(mod = PyModule_Create(&cryptomodule)))
+
+// Function to generate an ed25519 keypair from a seed
+static PyObject* keypair(PyObject* self, PyObject* args) {
+    Py_buffer seed_buffer;
+    PyObject* result = NULL;
+    PyThreadState* _save;
+
+    // Parse the input argument (a buffer containing the seed)
+    if (!PyArg_ParseTuple(args, "y*", &seed_buffer)) {
+        return NULL;  // Return NULL on parsing failure (exception is set)
+    }
+
+    // Check if the seed is exactly 32 bytes
+    if (seed_buffer.len != 32) {
+        PyErr_SetString(PyExc_ValueError, "Seed must be exactly 32 bytes");
+        PyBuffer_Release(&seed_buffer);
         return NULL;
+    }
 
-    return mod;
+    // Get buffer for seed
+    uint8_t* seed = (uint8_t*)seed_buffer.buf;
+    uint8_t keypair[64];  // 32-byte secret key + 32-byte public key
+
+    // Release the GIL before calling the library function
+    _save = PyEval_SaveThread();
+
+    // Call the ed25519_keypair function from the ed25519 library
+    ed25519_keypair(keypair, seed);
+
+    // Reacquire the GIL after the library call
+    PyEval_RestoreThread(_save);
+
+    // Release the Python buffer
+    PyBuffer_Release(&seed_buffer);
+
+    // Convert the 64-byte keypair to a Python bytes object
+    result = Py_Bytes_FromStringAndSize((const char*)keypair, 64);
+
+    // Return the keypair as a Python bytes object
+    return result;
 }
 
 
+// Function to sign a message hash using an ed25519 keypair
+static PyObject* sign(PyObject* self, PyObject* args) {
+    Py_buffer keypair_buffer, message_hash_buffer;
+    PyObject* result = NULL;
+    PyThreadState* _save;
 
-static PyObject * keypair(PyObject * self, PyObject * args) {
+    // Parse the input arguments (keypair and message_hash buffers)
+    if (!PyArg_ParseTuple(args, "y*y*", &keypair_buffer, &message_hash_buffer)) {
+        return NULL;
+    }
 
-    PyObject *buff;
-    Py_buffer pybuf;
-    uint8_t seed[32], sk[64], pk[32];
+    // Check if the keypair is exactly 64 bytes
+    if (keypair_buffer.len != 64) {
+        PyErr_SetString(PyExc_ValueError, "Keypair must be exactly 64 bytes");
+        PyBuffer_Release(&keypair_buffer);
+        PyBuffer_Release(&message_hash_buffer);
+        return NULL;
+    }
 
+    // Check if the message_hash is exactly 32 bytes
+    if (message_hash_buffer.len != 32) {
+        PyErr_SetString(PyExc_ValueError, "Message hash must be exactly 32 bytes");
+        PyBuffer_Release(&keypair_buffer);
+        PyBuffer_Release(&message_hash_buffer);
+        return NULL;
+    }
 
-    if (!PyArg_ParseTuple(args, "O", & buff))
-        goto _error;
-    if (!PyObject_CheckBuffer(buff))
-        goto _bad_buffer;
-    if (PyObject_GetBuffer(buff, & pybuf, 0))
-        goto _bad_buffer;
-    if (pybuf.len != 32)
-        goto _bad_buffer_len_deref_pybuf;
-    if (PyBuffer_ToContiguous(seed, & pybuf, pybuf.len, 'C'))
-        goto _bad_buffer_deref_pybuf;
+    // Prepare buffer for the signature
+    uint8_t signature[64];
+    uint8_t* keypair = (uint8_t*)keypair_buffer.buf;
+    uint8_t* message_hash = (uint8_t*)message_hash_buffer.buf;
 
-    PyBuffer_Release(& pybuf);
-    ed25519_keypair(pk, sk, seed);
+    // Release the GIL before calling the library function
+    _save = PyEval_SaveThread();
 
-    return PyBytes_FromStringAndSize((const char *)sk, 64);
+    // Call the ed25519_sign function from the ed25519 library
+    ed25519_sign(signature, message_hash, keypair);
 
-_bad_buffer:
-    PyErr_SetString(PyExc_ValueError, "input seed must be buffer of len 32.");
-    goto _error;
+    // Reacquire the GIL
+    PyEval_RestoreThread(_save);
 
-_bad_buffer_deref_pybuf:
-    PyErr_SetString(PyExc_ValueError, "input seed must be buffer of len 32.");
-    goto _deref_pybuf;
+    // Release the Python buffers
+    PyBuffer_Release(&keypair_buffer);
+    PyBuffer_Release(&message_hash_buffer);
 
-_bad_buffer_len_deref_pybuf:
-    PyErr_SetString(PyExc_ValueError, "input seed must be buffer of len 32.");
-    goto _deref_pybuf;
+    // Convert the 64-byte signature to a Python bytes object
+    result = Py_Bytes_FromStringAndSize((const char*)signature, 64);
+    if (result == NULL) {
+        return NULL;
+    }
 
-_deref_pybuf:
-    PyBuffer_Release(& pybuf);
-_error:
-    return NULL;
+    // Return the signature
+    return result;
 }
 
 
-static PyObject * sign(PyObject * self, PyObject * args) {
-    // srm = sign(keypair, hash_digest)
+// Function to verify a signature using an ed25519 public key
+static PyObject* verify(PyObject* self, PyObject* args) {
+    Py_buffer pub_key_buffer, signature_buffer, message_hash_buffer;
+    PyThreadState* _save;
+    int result;
 
-    PyObject *py_x_A, *py_m;
-    Py_buffer c_x_A, c_m;
-    uint8_t sm[64+32], m[32], x_A[64];
-    unsigned long long smlen = 0;
+    // Parse the input arguments (pub_key, signature, and message_hash buffers)
+    if (!PyArg_ParseTuple(args, "y*y*y*", &pub_key_buffer, &signature_buffer, &message_hash_buffer)) {
+        return NULL;
+    }
 
-    if (!PyArg_ParseTuple(args, "OO", & py_x_A, & py_m))
-        goto _error;
+    // Check if the pub_key is exactly 32 bytes
+    if (pub_key_buffer.len != 32) {
+        PyErr_SetString(PyExc_ValueError, "Public key must be exactly 32 bytes");
+        PyBuffer_Release(&pub_key_buffer);
+        PyBuffer_Release(&signature_buffer);
+        PyBuffer_Release(&message_hash_buffer);
+        return NULL;
+    }
 
-    if (!(PyObject_CheckBuffer(py_x_A) && PyObject_CheckBuffer(py_m)))
-        goto _bad_buffs;
+    // Check if the signature is exactly 64 bytes
+    if (signature_buffer.len != 64) {
+        PyErr_SetString(PyExc_ValueError, "Signature must be exactly 64 bytes");
+        PyBuffer_Release(&pub_key_buffer);
+        PyBuffer_Release(&signature_buffer);
+        PyBuffer_Release(&message_hash_buffer);
+        return NULL;
+    }
 
-    if (PyObject_GetBuffer(py_x_A, & c_x_A, 0))
-        goto _bad_buffs;
+    // Check if the message_hash is exactly 32 bytes
+    if (message_hash_buffer.len != 32) {
+        PyErr_SetString(PyExc_ValueError, "Message hash must be exactly 32 bytes");
+        PyBuffer_Release(&pub_key_buffer);
+        PyBuffer_Release(&signature_buffer);
+        PyBuffer_Release(&message_hash_buffer);
+        return NULL;
+    }
 
-    if (PyObject_GetBuffer(py_m, & c_m, 0))
-        goto _bad_buffs_deref_c_x_A;
+    // Pointers to the buffer data
+    uint8_t* pub_key = (uint8_t*)pub_key_buffer.buf;
+    uint8_t* signature = (uint8_t*)signature_buffer.buf;
+    uint8_t* message_hash = (uint8_t*)message_hash_buffer.buf;
 
-    if (c_x_A.len != 64 || c_m.len != 32)
-        goto _bad_buffs_len_deref_buffs;
+    // Release the GIL before calling the library function
+    _save = PyEval_SaveThread();
 
-    if (PyBuffer_ToContiguous(x_A, & c_x_A, 64, 'C'))
-        goto _bad_buffs_deref_buffs;
+    // Call the ed25519_verify function from the ed25519 library
+    result = ed25519_verify(pub_key, signature, message_hash);
 
-    if (PyBuffer_ToContiguous(m, & c_m, 32, 'C'))
-        goto _bad_buffs_deref_buffs;
+    // Reacquire the GIL
+    PyEval_RestoreThread(_save);
 
-    PyBuffer_Release(& c_x_A);
-    PyBuffer_Release(& c_m);
+    // Release the Python buffers
+    PyBuffer_Release(&pub_key_buffer);
+    PyBuffer_Release(&signature_buffer);
+    PyBuffer_Release(&message_hash_buffer);
 
-    ed25519_sign(sm, &smlen, m, 32, x_A);
-
-    if (smlen != 96)
-        goto _bad_signature_deref_buffs;
-
-    return PyBytes_FromStringAndSize((const char *)sm, 96);
-
-_bad_signature_deref_buffs:
-    PyErr_SetString(PyExc_Exception, "Unknown error when signing.");
-    goto _deref_c_m;
-
-_bad_buffs_deref_buffs:
-    PyErr_SetString(PyExc_TypeError, "input keypair must be 64 bytes and hash_digest must be of len 32.");
-    goto _deref_c_m;
-
-_bad_buffs_len_deref_buffs:
-    PyErr_SetString(PyExc_TypeError, "input keypair must be 64 bytes and hash_digest must be of len 32.");
-    goto _deref_c_m;
-
-_bad_buffs_deref_c_x_A:
-    PyErr_SetString(PyExc_TypeError, "input keypair must be 64 bytes and hash_digest must be of len 32.");
-    goto _deref_c_x_A;
-
-_bad_buffs:
-    PyErr_SetString(PyExc_TypeError, "input keypair must be 64 bytes and hash_digest must be of len 32.");
-    goto _error;
-
-_deref_c_m:
-    PyBuffer_Release(& c_m);
-_deref_c_x_A:
-    PyBuffer_Release(& c_x_A);
-_error:
-    return NULL;
+    // Return True if verification succeeded (non-zero), False otherwise
+    return PyBool_FromLong(result);
 }
 
 
-static PyObject * verify(PyObject * self, PyObject * args) {
-    // p = verify(key, signed_message_digest)
+// Function to perform a variable-time key exchange using ed25519
+static PyObject* key_exchange_vartime(PyObject* self, PyObject* args) {
+    Py_buffer priv_key_buffer, pub_key_buffer;
+    PyThreadState* _save;
 
-    PyObject *py_pk, *py_sm;
-    Py_buffer c_pk, c_sm;
-    uint8_t m[32], sm[64+32], pk[32];
-    unsigned long long mlen = 0;
+    // Parse the input arguments (priv_key and pub_key buffers)
+    if (!PyArg_ParseTuple(args, "y*y*", &priv_key_buffer, &pub_key_buffer)) {
+        return NULL;
+    }
 
-     if (!PyArg_ParseTuple(args, "OO", & py_pk, & py_sm))
-        goto _error;
+    // Check if the priv_key is exactly 32 bytes
+    if (priv_key_buffer.len != 32) {
+        PyErr_SetString(PyExc_ValueError, "Private key must be exactly 32 bytes");
+        PyBuffer_Release(&priv_key_buffer);
+        PyBuffer_Release(&pub_key_buffer);
+        return NULL;
+    }
 
-    if (!(PyObject_CheckBuffer(py_sm) && PyObject_CheckBuffer(py_pk)))
-        goto _bad_buffs;
+    // Check if the pub_key is exactly 32 bytes
+    if (pub_key_buffer.len != 32) {
+        PyErr_SetString(PyExc_ValueError, "Public key must be exactly 32 bytes");
+        PyBuffer_Release(&priv_key_buffer);
+        PyBuffer_Release(&pub_key_buffer);
+        return NULL;
+    }
 
-    if (PyObject_GetBuffer(py_sm, & c_sm, 0))
-        goto _bad_buffs;
+    // Prepare buffers for the seed output and inputs
+    uint8_t seed[32];
+    uint8_t* priv_key = (uint8_t*)priv_key_buffer.buf;
+    uint8_t* pub_key = (uint8_t*)pub_key_buffer.buf;
 
-    if (PyObject_GetBuffer(py_pk, & c_pk, 0))
-        goto _bad_buffs_deref_c_sm;
+    // Release the GIL before calling the library function
+    _save = PyEval_SaveThread();
 
-    if (c_sm.len != 96 || c_pk.len != 32)
-        goto _bad_buffs_len_deref_buffs;
+    // Call the ed25519_key_exchange_vartime function from the ed25519 library
+    int err = ed25519_key_exchange_vartime(seed, priv_key, pub_key);
 
-    if (PyBuffer_ToContiguous(sm, & c_sm, 96, 'C'))
-        goto _bad_buffs_deref_buffs;
+    // Reacquire the GIL
+    PyEval_RestoreThread(_save);
 
-    if (PyBuffer_ToContiguous(pk, & c_pk, 32, 'C'))
-        goto _bad_buffs_deref_buffs;
+    // Release the Python buffers
+    PyBuffer_Release(&priv_key_buffer);
+    PyBuffer_Release(&pub_key_buffer);
 
-    PyBuffer_Release(& c_sm);
-    PyBuffer_Release(& c_pk);
-   
-    if (ed25519_verify(m, & mlen, sm, 96, pk) || mlen != 32)
-        Py_RETURN_FALSE;
-
-    Py_RETURN_TRUE;
-
-_bad_buffs_deref_buffs:
-    PyErr_SetString(PyExc_TypeError, "input signed_message_digest must be 96 bytes and pk must be of len 32.");
-    goto _deref_c_pk;
-
-_bad_buffs_len_deref_buffs:
-    PyErr_SetString(PyExc_TypeError, "input signed_message_digest must be 96 bytes and pk must be of len 32.");
-    goto _deref_c_pk;
-
-_bad_buffs_deref_c_sm:
-    PyErr_SetString(PyExc_TypeError, "input signed_message_digest must be 96 bytes and pk must be of len 32.");
-    goto _deref_c_sm;
-
-_bad_buffs:
-    PyErr_SetString(PyExc_TypeError, "input signed_message_digest must be 96 bytes and pk must be of len 32.");
-    goto _error;
-
-_deref_c_pk:
-    PyBuffer_Release(& c_pk);
-_deref_c_sm:
-    PyBuffer_Release(& c_sm);
-_error:
-    return NULL;
+    if (err) {
+        PyErr_SetString(PyExc_ValueError, "Key exchange failed.");
+        return NULL;
+    }
+    else {
+        // Return the 32-byte seed as bytes
+        return Py_Bytes_FromStringAndSize((const char*)seed, 32);
+    }
 }
 
 
-static PyObject * key_exchange(PyObject * self, PyObject * args) {
+// Function to compute a Keccak-800 hash
+static PyObject* keccak_800(PyObject* self, PyObject* args, PyObject* kwargs) {
+    Py_buffer message_buffer;
+    uint64_t out_len = 32;  // Default output length
+    PyObject* result = NULL;
+    PyThreadState* _save;
+    static char* kwlist[] = {"message", "out_len", NULL};
 
-    PyObject *py_x, *py_Q;
-    Py_buffer c_x, c_Q;
-    uint8_t x[32], Q[32], seed[32];
+    // Parse the input arguments (message buffer and optional out_len)
+    if (!PyArg_ParseTupleAndKeywords(args, kwargs, "y*|K", kwlist, &message_buffer, &out_len)) {
+        return NULL;
+    }
 
+    // Create a Python bytes object for the output
+    result = PyBytes_FromStringAndSize(NULL, out_len);
+    if (result == NULL) {
+        PyBuffer_Release(&message_buffer);
+        return NULL;
+    }
 
-    if (!PyArg_ParseTuple(args, "OO", & py_x, & py_Q))
-        goto _error;
-    if (!(PyObject_CheckBuffer(py_x) && PyObject_CheckBuffer(py_Q)))
-        goto _bad_buffers;
+    // Get the writable buffer from the bytes object
+    uint8_t* output = (uint8_t*)PyBytes_AS_STRING(result);
+    uint8_t* message = (uint8_t*)message_buffer.buf;
+    uint64_t msg_len = (uint64_t)message_buffer.len;
 
-    if (PyObject_GetBuffer(py_x, & c_x, 0))
-        goto _bad_x;
-    if (PyObject_GetBuffer(py_Q, & c_Q, 0))
-        goto _bad_Q_deref_x;
-    if (c_x.len != 32 || c_Q.len != 32)
-        goto _bad_buffer_len_deref_buffers;
+    // Release the GIL before calling the library function
+    _save = PyEval_SaveThread();
 
-    if (PyBuffer_ToContiguous(x, & c_x, 32, 'C'))
-        goto _buffer_copy_fail_deref_buffers;
-    if (PyBuffer_ToContiguous(Q, & c_Q, 32, 'C'))
-        goto _buffer_copy_fail_deref_buffers;
+    // Call the keccak800 function from the library
+    keccak800(output, out_len, message, msg_len);
 
-    PyBuffer_Release(& c_x);
-    PyBuffer_Release(& c_Q);
-    ed25519_key_exchange_vartime(seed, x, Q);
+    // Reacquire the GIL
+    PyEval_RestoreThread(_save);
 
-    return PyBytes_FromStringAndSize((const char *)seed, 32);
+    // Release the Python buffer
+    PyBuffer_Release(&message_buffer);
 
-_bad_buffers:
-    PyErr_SetString(PyExc_TypeError, "input seed, key must be buffers");
-    goto _error;
-
-_bad_x:
-    PyErr_SetString(PyExc_ValueError, "Bad seed");
-    goto _error;
-
-_bad_Q_deref_x:
-    PyErr_SetString(PyExc_ValueError, "Bad peer key.");
-    goto _deref_x;
-
-_bad_buffer_len_deref_buffers:
-    PyErr_SetString(PyExc_ValueError, "input seed and peer key must be buffers of len 32, 32.");
-    goto _deref_Q;
-
-_buffer_copy_fail_deref_buffers:
-    PyErr_SetString(PyExc_ValueError, "Failed to copy Py_buffers to C.");
-    goto _deref_Q;
-
-_deref_Q:
-    PyBuffer_Release(& c_Q);
-_deref_x:
-    PyBuffer_Release(& c_x);
-_error:
-    return NULL;
+    // Return the result
+    return result;
 }
 
 
-static PyObject * djb2(PyObject * self, PyObject * args) {
+// Function to compute a Keccak-1600 hash
+static PyObject* keccak_1600(PyObject* self, PyObject* args, PyObject* kwds) {
+    Py_buffer message_buffer;
+    uint64_t out_len = 32;  // Default output length
+    PyObject* result = NULL;
+    PyThreadState* _save;
+    static char* kwlist[] = {"message", "out_len", NULL};
 
-    PyObject *py_x;
-    Py_buffer c_x;
-    uint8_t x[32], y[4];
-    uint32_t value = 5381;
+    // Parse the input arguments (message buffer and optional out_len)
+    if (!PyArg_ParseTupleAndKeywords(args, kwds, "y*|K", kwlist, &message_buffer, &out_len)) {
+        return NULL;
+    }
 
-    if (!PyArg_ParseTuple(args, "O", & py_x))
-        goto _error;
-    
-    if (!PyObject_CheckBuffer(py_x))
-        goto _bad_py_x;
+    // Create a Python bytes object for the output with length out_len
+    result = PyBytes_FromStringAndSize(NULL, (Py_ssize_t)out_len);
+    if (result == NULL) {
+        PyBuffer_Release(&message_buffer);
+        return NULL;
+    }
 
-    if (PyObject_GetBuffer(py_x, & c_x, 0))
-        goto _bad_py_x;
+    // Get the writable buffer from the bytes object
+    uint8_t* output = (uint8_t*)PyBytes_AS_STRING(result);
+    uint8_t* message = (uint8_t*)message_buffer.buf;
+    uint64_t msg_len = (uint64_t)message_buffer.len;
 
-    if (c_x.len != 32)
-        goto _bad_x_len_deref_c_x;
+    // Release the GIL before calling the library function
+    _save = PyEval_SaveThread();
 
-    if (PyBuffer_ToContiguous(x, & c_x, 32, 'C'))
-        goto _buffer_copy_fail_deref_c_x;
+    // Call the keccak1600 function from the library
+    keccak1600(output, out_len, message, msg_len);
 
-    PyBuffer_Release(& c_x);
+    // Reacquire the GIL
+    PyEval_RestoreThread(_save);
 
-    for (int i=0; i<32; i++)
-        value = 33 * value + x[i];
+    // Release the Python message buffer
+    PyBuffer_Release(&message_buffer);
 
-    y[0] = value & 0xff;
-    y[1] = (value >> 8) & 0xff;
-    y[2] = (value >> 16) & 0xff;
-    y[3] = (value >> 24) & 0xff;
-
-    return PyBytes_FromStringAndSize((const char *)y, 4);
-
-_buffer_copy_fail_deref_c_x:
-    PyErr_SetString(PyExc_TypeError, "input value must be buffer of len 32.");
-    goto _deref_c_x;
-
-_bad_x_len_deref_c_x:
-    PyErr_SetString(PyExc_TypeError, "input value must be buffer of len 32.");
-    goto _deref_c_x;
-
-_bad_py_x:
-    PyErr_SetString(PyExc_TypeError, "input value must be buffer of len 32.");
-    goto _error;
-
-_deref_c_x:
-    PyBuffer_Release(& c_x);
-
-_error:
-    return NULL;
+    // Return the result
+    return result;
 }
 
+// Generate random preimages and check against target difficulty
+static PyObject* mint(PyObject * self, PyObject * args) {
+    Py_buffer prefix_buffer;
+    uint64_t limit;
+    uint8_t diff_x, diff_n;  // difficulty = x * 2 ** n
+    PyThreadState* _save;
 
-static PyObject * keccak_800(PyObject * self, PyObject * args) {
+    // Parse the inputs
+    if (!PyArg_ParseTuple(args, "y*BBK",
+        &prefix_buffer, &diff_x, &diff_n, &limit
+    )){
+        return NULL;
+    }
 
-    PyObject * py_x;
-    Py_buffer c_x;
-    uint8_t *x, y[32];
-    uint32_t outlen = 32;
+    // Check if preimage prefix is exactly 56 bytes
+    if (prefix_buffer.len != 56) {
+        PyErr_SetString(PyExc_ValueError, "Preimage prefix must be exactly 56 bytes");
+        PyBuffer_Release(&prefix_buffer);
+        return NULL;
+    }
 
-    if (!PyArg_ParseTuple(args, "O|i", & py_x, & outlen))
-        goto _error;
+    // Pointer to prefix buffer
+    uint8_t* prefix = (uint8_t*)prefix_buffer.buf;
+    // preimage = prefix + iteration
+    uint8_t preimage[64];
+    // digest = keccak800(preimage)
+    uint8_t digest[32];
 
-    if (outlen > 32)
-        goto _bad_outlen;
+    // Prepare preimage
+    memcpy(preimage, prefix, 56);
 
-    if (!PyObject_CheckBuffer(py_x))
-        goto _bad_py_x;
+    // Release the GIL before iterating through preimages
+    _save = PyEval_SaveThread();
 
-    if (PyObject_GetBuffer(py_x, & c_x, 0))
-        goto _bad_py_x;
+    // Try each preimage
+    for (uint64_t iteration=0; iteration < limit; iteration++) {
 
-    if (!(x = (uint8_t *) malloc(c_x.len)))
-        goto _oom_deref_c_x;
-
-    if (PyBuffer_ToContiguous(x, & c_x, c_x.len, 'C'))
-        goto _buffer_copy_fail;
-
-    PyBuffer_Release(& c_x);
-
-    keccak800(y, outlen, x, c_x.len);
-
-    free(x);
-
-    return PyBytes_FromStringAndSize((const char *)y, outlen);
-
-_buffer_copy_fail:
-    PyErr_SetString(PyExc_TypeError, "Unable to copy input buffer to C.");
-    goto _deref_x;
-
-_oom_deref_x:
-    PyErr_NoMemory();
-    goto _deref_x;
-
-_oom_deref_c_x:
-    PyErr_NoMemory();
-    goto _deref_c_x;
-
-_bad_py_x:
-    PyErr_SetString(PyExc_TypeError, "input value must be buffer.");
-    goto _error;
-
-_bad_outlen:
-    PyErr_SetString(PyExc_ValueError, "Output len must be >= 0 and <= 32.");
-    goto _error;
-
-_deref_x:
-    free(x);
-
-_deref_c_x:
-    PyBuffer_Release(& c_x);
-
-_error:
-    return NULL;
-}
-
-
-static PyObject * keccak_1600(PyObject * self, PyObject * args) {
-
-
-    PyObject * py_x;
-    Py_buffer c_x;
-    uint8_t *x, y[32];
-    uint64_t outlen = 32;
-
-    if (!PyArg_ParseTuple(args, "O|i", & py_x, & outlen))
-        goto _error;
-    
-    if (outlen > 32)
-        goto _bad_outlen;
-
-    if (!PyObject_CheckBuffer(py_x))
-        goto _bad_py_x;
-
-    if (PyObject_GetBuffer(py_x, & c_x, 0))
-        goto _bad_py_x;
-
-    if (!(x = (uint8_t *) malloc(c_x.len)))
-        goto _oom_deref_c_x;
-
-    if (PyBuffer_ToContiguous(x, & c_x, c_x.len, 'C'))
-        goto _buffer_copy_fail;
-
-    PyBuffer_Release(& c_x);
-
-    keccak1600(y, outlen, x, c_x.len);
-
-    free(x);
-
-    return PyBytes_FromStringAndSize((const char *)y, outlen);
-
-_buffer_copy_fail:
-    PyErr_SetString(PyExc_TypeError, "Unable to copy input buffer to C.");
-    goto _deref_x;
-
-_oom_deref_x:
-    PyErr_NoMemory();
-    goto _deref_x;
-
-_oom_deref_c_x:
-    PyErr_NoMemory();
-    goto _deref_c_x;
-
-_bad_py_x:
-    PyErr_SetString(PyExc_TypeError, "input value must be buffer.");
-    goto _error;
-
-_bad_outlen:
-    PyErr_SetString(PyExc_ValueError, "Output len must be >= 0 and <= 32.");
-    goto _error;
-
-_deref_x:
-    free(x);
-
-_deref_c_x:
-    PyBuffer_Release(& c_x);
-
-_error:
-    return NULL;
-}
-
-
-static PyObject * mint(PyObject * self, PyObject * args) {
-    PyObject *py_prehash, *py_diff, *py_nonce;
-    Py_buffer c_prehash, c_diff, c_nonce;
-    uint8_t prehash[32], diff[2], nonce[32], buffer[64], digest[32];
-    uint64_t limit, offset;
-    uint8_t j;
-    int success;
-
-    if (!PyArg_ParseTuple(args, "OOOK",
-        & py_prehash, & py_diff, & py_nonce, & limit
-    ))
-        goto _error;
-    if (!(PyObject_CheckBuffer(py_prehash)
-        && PyObject_CheckBuffer(py_diff)
-        && PyObject_CheckBuffer(py_nonce) 
-    ))
-        goto _bad_buffers;
-
-    if (PyObject_GetBuffer(py_prehash, & c_prehash, 0))
-        goto _bad_prehash;
-    if (PyObject_GetBuffer(py_diff, & c_diff, 0))
-        goto _bad_diff_deref_prehash;
-    if (PyObject_GetBuffer(py_nonce, & c_nonce, 0))
-        goto _bad_nonce_deref_diff;
-    if (c_prehash.len != 32 || c_diff.len != 2 || c_nonce.len != 32)
-        goto _bad_buffer_len_deref_buffers;
-
-    if (PyBuffer_ToContiguous(prehash, & c_prehash, 32, 'C'))
-        goto _buffer_copy_fail_deref_buffers;
-    if (PyBuffer_ToContiguous(diff, & c_diff, 2, 'C'))
-        goto _buffer_copy_fail_deref_buffers;
-    if (PyBuffer_ToContiguous(nonce, & c_nonce, 32, 'C'))
-        goto _buffer_copy_fail_deref_buffers;
-
-    PyBuffer_Release(& c_prehash);
-    PyBuffer_Release(& c_diff);
-    PyBuffer_Release(& c_nonce);
-
-    memcpy(buffer, prehash, 32);
-    memcpy(buffer+32, nonce, 32);
-
-    for (uint64_t offset=0; offset < limit; offset++) {
-
+        // Append 8-byte iteration to 56-byte preimage input
         for (int i=0; i<8; i++)
-            buffer[32+i] = (offset >> (i << 3)) & 0xff;
+            preimage[56+i] = (iteration >> (i << 3)) & 0xff;
 
-        keccak800(digest, 32, buffer, 64);
+        // Generate random number
+        keccak800(digest, 32, preimage, 64);
         
-        if (((digest[0] | (digest[1] << 8)) * diff[0]) >> 16)
+        // Check linear difficulty scaling
+        if (((digest[0] | (digest[1] << 8)) * diff_x) >> 16)
             continue;
 
-        success = 1;
-        for (j=2; j < 2 + (diff[1] >> 3); j++)
+        // Check exponential difficulty scaling
+        int j;
+        int success = 1;
+        // Check whole octets for zero
+        for (j=2; j < 2 + (diff_n >> 3); j++)
             if (digest[j]) {
                 success = 0;
                 break;
             }
-
         if (!success)
             continue;
-
-        if ((diff[1] & 7) && (digest[j] & ((1 << (diff[1] & 7)) - 1)))
+        // Check final bits for zero
+        if ((diff_n & 7) && (digest[j] & ((1 << (diff_n & 7)) - 1)))
             continue;
-        
-        return PyBytes_FromStringAndSize((const char *)nonce, 32);
+
+        // Reacquire the GIL
+        PyEval_RestoreThread(_save);
+
+        // Release the Python prefix buffer
+        PyBuffer_Release(&prefix_buffer);
+
+        // Preimage is valid, return iteration
+        return PyLong_FromUnsignedLongLong(iteration);
    }
 
+    // Reacquire the GIL
+    PyEval_RestoreThread(_save);
+
+    // Release the Python prefix buffer
+    PyBuffer_Release(&prefix_buffer);
+
+    // Return None
     Py_RETURN_NONE;    
+}
 
-_bad_buffers:
-    PyErr_SetString(PyExc_TypeError, "input prehash, diff, nonce must be buffers");
-    goto _error;
 
-_bad_prehash:
-    PyErr_SetString(PyExc_ValueError, "Bad prehash");
-    goto _error;
+// Check preimage against target difficulty
+static PyObject * check_mint(PyObject * self, PyObject * args) {
+    Py_buffer preimage_buffer;
+    uint8_t diff_x, diff_n;  // difficulty = x * 2 ** n
+    PyThreadState* _save;
 
-_bad_diff_deref_prehash:
-    PyErr_SetString(PyExc_ValueError, "Bad diff.");
-    goto _deref_prehash;
+    // Parse the inputs
+    if (!PyArg_ParseTuple(args, "y*BB",
+        &preimage_buffer, &diff_x, &diff_n
+    )){
+        return NULL;
+    }
 
-_bad_nonce_deref_diff:
-    PyErr_SetString(PyExc_ValueError, "Bad nonce.");
-    goto _deref_diff;
+    // Check if preimage prefix is exactly 56 bytes
+    if (preimage_buffer.len != 64) {
+        PyErr_SetString(PyExc_ValueError, "Preimage prefix must be exactly 64 bytes");
+        PyBuffer_Release(&preimage_buffer);
+        return NULL;
+    }
 
-_bad_buffer_len_deref_buffers:
-    PyErr_SetString(PyExc_ValueError, "input prehash, diff, nonce must be buffers of len 32, 2, 32.");
-    goto _deref_nonce;
+    // Pointer to preimage buffer
+    uint8_t* preimage = (uint8_t*)preimage_buffer.buf;
+    // digest = keccak800(preimage)
+    uint8_t digest[32];
 
-_buffer_copy_fail_deref_buffers:
-    PyErr_SetString(PyExc_ValueError, "Failed to copy Py_buffers to C.");
-    goto _deref_nonce;
+    // Release the GIL before hashing preimage
+    _save = PyEval_SaveThread();
 
-_deref_nonce:
-    PyBuffer_Release(& c_nonce);
-_deref_diff:
-    PyBuffer_Release(& c_diff);
-_deref_prehash:
-    PyBuffer_Release(& c_prehash);
-_error:
-    return NULL;
+    // Generate random number
+    keccak800(digest, 32, preimage, 64);
+        
+    int success = 1;
+
+    // Check linear difficulty scaling
+    if (((digest[0] | (digest[1] << 8)) * diff_x) >> 16)
+        success = 0;
+    else {
+        // Check exponential difficulty scaling
+        int j;
+        // Check whole octets for zero
+        for (j=2; j < 2 + (diff_n >> 3); j++)
+            if (digest[j]) {
+                success = 0;
+                break;
+            }
+        if (success) {
+            // Check final bits for zero
+            if ((diff_n & 7) && (digest[j] & ((1 << (diff_n & 7)) - 1)))
+                success = 0;
+        }
+    }
+
+    // Reacquire the GIL
+    PyEval_RestoreThread(_save);
+
+    // Release the Python preimage buffer
+    PyBuffer_Release(&preimage_buffer);
+
+    // Return preimage validity as bool
+    return PyBool_FromLong(success);
+}
+
+
+// Hash uint8_t[N] to uint64_t
+static PyObject * djb2(PyObject * self, PyObject * args) {
+
+    Py_buffer string_buffer;
+    uint64_t result = 5381;
+    PyThreadState* _save;
+
+    // Parse the inputs
+    if (!PyArg_ParseTuple(args, "y*|K",
+        &string_buffer, &result
+    )){
+        return NULL;
+    }
+
+    // Get buffer and length
+    uint8_t* string = (uint8_t*)string_buffer.buf;
+    uint64_t str_len = (uint64_t)string_buffer.len;
+
+    // Release the GIL before hashing string
+    _save = PyEval_SaveThread();
+
+    // Hash the string
+    for (uint64_t i=0; i < str_len; i++)
+        result = (result << 5) + result + string[i];
+
+    // Reacquire the GIL
+    PyEval_RestoreThread(_save);
+
+    // Release the Python string buffer
+    PyBuffer_Release(&string_buffer);
+
+    // Return result
+    return PyLong_FromUnsignedLongLong(result);
+
 }

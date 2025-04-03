@@ -1,5 +1,5 @@
 
-from . import messages
+import arka.messages as messages
 
 def test_auto():
     #

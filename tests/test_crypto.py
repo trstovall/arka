@@ -90,40 +90,40 @@ def test_keccak_1600_long_digest():
         assert keccak_1600(x, 256) == keccak.keccak_1600(x, 256)
 
 
-def test_t0():
+def test_t0_800_64():
     assert keccak_800(b'', 64) == keccak.keccak_800(b'', 64)
 
 
-def test_t1():
+def test_t1_1600_256():
     assert keccak_1600(b'', 256) == keccak.keccak_1600(b'', 256)
 
 
-def test_t2():
+def test_t2_1600_64():
     assert keccak_1600(b'', 64) == keccak.keccak_1600(b'', 64)
 
 
-def test_t3():
+def test_t3_1600_128():
     assert keccak_1600(b'', 128) == keccak.keccak_1600(b'', 128)
 
 
-def test_t4():
+def test_t4_1600_135():
     assert keccak_1600(b'', 135) == keccak.keccak_1600(b'', 135)
 
 
-def test_t5():
+def test_t5_1600_136():
     assert keccak_1600(b'', 136) == keccak.keccak_1600(b'', 136)
 
 
-def test_t6():
+def test_t6_1600_137():
     assert keccak_1600(b'', 137) == keccak.keccak_1600(b'', 137)
 
 
-def test_t7():
+def test_t7_1600_256():
     assert keccak_1600(b'', 256) == keccak.keccak_1600(b'', 256)
 
 
 def test_mint_happy_case():
-    diff_x, diff_n = 128, 8     # diff = 128 * 2 ** 8
+    diff_x, diff_n = 128, 8     # diff = 128 * 2 ** 8 = 32768
     limit = 2**30
     iteration = None
     while iteration is None:
@@ -131,3 +131,23 @@ def test_mint_happy_case():
         iteration: int = mint(prefix, diff_x, diff_n, limit)
     preimage = prefix + iteration.to_bytes(length=8, byteorder='little')
     assert check_mint(preimage, diff_x, diff_n)
+
+
+def test_check_mint():
+    diff_x, diff_n = 128, 8     # diff = 128 * 2 ** 8 = 32768
+    limit = 2**30
+    while iteration is None:
+        prefix = urandom(56)
+        iteration: int = mint(prefix, diff_x, diff_n, limit)
+    preimage = prefix + iteration.to_bytes(length=8, byteorder='little')
+    assert check_mint(preimage, diff_x, diff_n)
+    # Use Python keccak module
+    digest = keccak.keccak_800(preimage)
+    # Test linear difficulty
+    x = int.from_bytes(digest[:2], 'little')
+    err = (x * diff_x) >> 16
+    assert not err
+    # Test exponential difficulty
+    x = int.from_bytes(digest[2:32], 'little')
+    success = ((x >> diff_n) << diff_n) == x
+    assert success

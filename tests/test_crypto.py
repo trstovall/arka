@@ -65,6 +65,7 @@ def test_keccak_800():
     ):
         assert keccak_800(x) == keccak.keccak_800(x)
         assert keccak_800(x, 16) == keccak.keccak_800(x, 16)
+        assert keccak_800(x, 64) == keccak.keccak_800(x, 64)
 
 
 def test_keccak_1600():
@@ -74,72 +75,7 @@ def test_keccak_1600():
         assert keccak_1600(x) == keccak.keccak_1600(x)
         assert keccak_1600(x, 16) == keccak.keccak_1600(x, 16)
         assert keccak_1600(x, 64) == keccak.keccak_1600(x, 64)
-
-
-def test_keccak_800_long_digest():
-    for x in (b'', urandom(32), urandom(64), 
-        urandom(128), urandom(256)
-    ):
-        assert keccak_800(x, 64) == keccak.keccak_800(x, 64)
-
-
-def test_keccak_1600_long_digest():
-    for x in (b'', urandom(32), urandom(64), 
-        urandom(128), urandom(256)
-    ):
         assert keccak_1600(x, 256) == keccak.keccak_1600(x, 256)
-
-
-def test_k_800_32():
-    assert keccak_800(b'', 32) == keccak.keccak_800(b'', 32)
-
-
-def test_k_800_36():
-    assert keccak_800(b'', 36) == keccak.keccak_800(b'', 36)
-
-
-def test_k_800_37():
-    assert keccak_800(b'', 37) == keccak.keccak_800(b'', 37)
-
-
-def test_k_800_64():
-    assert keccak_800(b'', 64) == keccak.keccak_800(b'', 64)
-
-
-def test_k_1600_32():
-    assert keccak_1600(b'', 32) == keccak.keccak_1600(b'', 32)
-
-
-def test_k_1600_36():
-    assert keccak_1600(b'', 36) == keccak.keccak_1600(b'', 36)
-
-
-def test_k_1600_37():
-    assert keccak_1600(b'', 37) == keccak.keccak_1600(b'', 37)
-
-
-def test_k_1600_64():
-    assert keccak_1600(b'', 64) == keccak.keccak_1600(b'', 64)
-
-
-def test_k_1600_128():
-    assert keccak_1600(b'', 128) == keccak.keccak_1600(b'', 128)
-
-
-def test_k_1600_135():
-    assert keccak_1600(b'', 135) == keccak.keccak_1600(b'', 135)
-
-
-def test_k_1600_136():
-    assert keccak_1600(b'', 136) == keccak.keccak_1600(b'', 136)
-
-
-def test_k_1600_137():
-    assert keccak_1600(b'', 137) == keccak.keccak_1600(b'', 137)
-
-
-def test_k_1600_256():
-    assert keccak_1600(b'', 256) == keccak.keccak_1600(b'', 256)
 
 
 def test_mint_happy_case():

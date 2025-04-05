@@ -90,6 +90,14 @@ def test_keccak_1600_long_digest():
         assert keccak_1600(x, 256) == keccak.keccak_1600(x, 256)
 
 
+def test_keccak_800_t0():
+    assert keccak_800(b'', 64) == keccak.keccak_800(b'', 64)
+
+
+def test_keccak_800_t1():
+    assert keccak_1600(b'', 256) == keccak.keccak_1600(b'', 256)
+
+
 def test_mint_happy_case():
     diff_x, diff_n = 128, 8     # diff = 128 * 2 ** 8
     limit = 2**30

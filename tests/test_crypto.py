@@ -66,6 +66,7 @@ def test_keccak_800():
         assert keccak_800(x) == keccak.keccak_800(x)
         assert keccak_800(x, 16) == keccak.keccak_800(x, 16)
         assert keccak_800(x, 64) == keccak.keccak_800(x, 64)
+        assert keccak_1600(x, 256) == keccak.keccak_1600(x, 256)
 
 
 def test_keccak_1600():

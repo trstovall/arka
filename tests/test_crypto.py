@@ -106,31 +106,39 @@ def test_k_800_64():
     assert keccak_800(b'', 64) == keccak.keccak_800(b'', 64)
 
 
-def test_t1_1600_256():
-    assert keccak_1600(b'', 256) == keccak.keccak_1600(b'', 256)
+def test_k_1600_32():
+    assert keccak_1600(b'', 32) == keccak.keccak_1600(b'', 32)
 
 
-def test_t2_1600_64():
+def test_k_1600_36():
+    assert keccak_1600(b'', 36) == keccak.keccak_1600(b'', 36)
+
+
+def test_k_1600_37():
+    assert keccak_1600(b'', 37) == keccak.keccak_1600(b'', 37)
+
+
+def test_k_1600_64():
     assert keccak_1600(b'', 64) == keccak.keccak_1600(b'', 64)
 
 
-def test_t3_1600_128():
+def test_k_1600_128():
     assert keccak_1600(b'', 128) == keccak.keccak_1600(b'', 128)
 
 
-def test_t4_1600_135():
+def test_k_1600_135():
     assert keccak_1600(b'', 135) == keccak.keccak_1600(b'', 135)
 
 
-def test_t5_1600_136():
+def test_k_1600_136():
     assert keccak_1600(b'', 136) == keccak.keccak_1600(b'', 136)
 
 
-def test_t6_1600_137():
+def test_k_1600_137():
     assert keccak_1600(b'', 137) == keccak.keccak_1600(b'', 137)
 
 
-def test_t7_1600_256():
+def test_k_1600_256():
     assert keccak_1600(b'', 256) == keccak.keccak_1600(b'', 256)
 
 
@@ -161,6 +169,6 @@ def test_check_mint():
     err = (x * diff_x) >> 16
     assert not err
     # Test exponential difficulty
-    x = int.from_bytes(digest[2:32], 'little')
-    success = ((x >> diff_n) << diff_n) == x
+    n = int.from_bytes(digest[2:32], 'little')
+    success = ((n >> diff_n) << diff_n) == n
     assert success

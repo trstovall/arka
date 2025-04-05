@@ -136,6 +136,7 @@ def test_mint_happy_case():
 def test_check_mint():
     diff_x, diff_n = 128, 8     # diff = 128 * 2 ** 8 = 32768
     limit = 2**30
+    iteration = None
     while iteration is None:
         prefix = urandom(56)
         iteration: int = mint(prefix, diff_x, diff_n, limit)

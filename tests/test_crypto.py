@@ -63,7 +63,6 @@ def test_keccak_800():
     for x in (b'', urandom(32), urandom(64), urandom(128)):
         assert keccak_800(x) == keccak.keccak_800(x)
         assert keccak_800(x, 16) == keccak.keccak_800(x, 16)
-        assert keccak_800(x, 64) == keccak.keccak_800(x, 64)
 
 
 def test_keccak_1600():
@@ -71,6 +70,15 @@ def test_keccak_1600():
         assert keccak_1600(x) == keccak.keccak_1600(x)
         assert keccak_1600(x, 16) == keccak.keccak_1600(x, 16)
         assert keccak_1600(x, 64) == keccak.keccak_1600(x, 64)
+
+
+def test_keccak_800_long_digest():
+    for x in (b'', urandom(32), urandom(64), urandom(128)):
+        assert keccak_800(x, 64) == keccak.keccak_800(x, 64)
+
+
+def test_keccak_1600_long_digest():
+    for x in (b'', urandom(32), urandom(64), urandom(128)):
         assert keccak_1600(x, 256) == keccak.keccak_1600(x, 256)
 
 

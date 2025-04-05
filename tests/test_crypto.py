@@ -90,7 +90,19 @@ def test_keccak_1600_long_digest():
         assert keccak_1600(x, 256) == keccak.keccak_1600(x, 256)
 
 
-def test_t0_800_64():
+def test_k_800_32():
+    assert keccak_800(b'', 32) == keccak.keccak_800(b'', 32)
+
+
+def test_k_800_36():
+    assert keccak_800(b'', 36) == keccak.keccak_800(b'', 36)
+
+
+def test_k_800_37():
+    assert keccak_800(b'', 37) == keccak.keccak_800(b'', 37)
+
+
+def test_k_800_64():
     assert keccak_800(b'', 64) == keccak.keccak_800(b'', 64)
 
 

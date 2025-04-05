@@ -110,7 +110,7 @@ def keccak_800(msg, outlen=32):
         if len(output) < outlen:
             A = f_perm(A)
     # Return output
-    return output[:outlen] if outlen < len(output) else output
+    return output if len(output) == outlen else output[:outlen]
 
 
 def keccak_1600(msg, outlen=32):
@@ -172,4 +172,4 @@ def keccak_1600(msg, outlen=32):
                     output += store64(A[(x, y)])
         if len(output) < outlen:
             A = f_perm(A)
-    return output[:outlen] if outlen < len(output) else output
+    return output if len(output) == outlen else output[:outlen]

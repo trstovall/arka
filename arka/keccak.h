@@ -216,10 +216,10 @@ void keccak_f1600(uint64_t * A) {
 }
 
 
-void keccak800 (uint8_t * output, uint32_t outlen, const uint8_t * input, const uint32_t inlen) {
+void keccak800 (uint8_t * output, uint64_t outlen, const uint8_t * input, const uint64_t inlen) {
     uint32_t A[25] = {0};
     uint8_t buffer[36] = {0};
-    uint32_t pos = 0;
+    uint64_t pos = 0;
     while (pos <= inlen) {
         if (pos + 36 <= inlen) {
             #pragma unroll
@@ -245,10 +245,12 @@ void keccak800 (uint8_t * output, uint32_t outlen, const uint8_t * input, const 
             store32(output + pos + 4*i, A[i]);
         }
         pos += 36;
-        keccak_f800(A);
+        if (pos < outlen) {
+            keccak_f800(A);
+        }
     }
     if (pos < outlen) {
-        for (uint32_t i=0; i < ((outlen % 36) + 7) / 4; i++) {
+        for (int i=0; i < 9; i++) {
             store32(buffer + 4*i, A[i]);
         }
         memcpy((char *)output + pos, (char *)buffer, outlen % 36);
@@ -288,7 +290,7 @@ void keccak1600 (uint8_t * output, uint64_t outlen, const uint8_t * input, const
         keccak_f1600(A);
     }
     if (pos < outlen) {
-        for (uint64_t i=0; i < ((outlen % 136) + 7) / 8; i++) {
+        for (int i=0; i < ((outlen % 136) + 7) / 8; i++) {
             store64(buffer + 8*i, A[i]);
         }
         memcpy(output + pos, buffer, outlen % 136);

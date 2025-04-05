@@ -102,15 +102,22 @@ def keccak_800(msg, outlen=32):
         pos += 36
     # Squeeze output
     output = b''
-    while len(output) < outlen:
+    while len(output) + 36 <= outlen:
         for y in range(2):
             for x in range(5):
                 if x + 5*y <= 9:
                     output += store32(A[(x, y)])
         if len(output) < outlen:
             A = f_perm(A)
+    if len(output) < outlen:
+        buffer = b''
+        for y in range(2):
+            for x in range(5):
+                if x + 5*y <= 9:
+                    buffer += store32(A[(x, y)])
+        output += buffer[:outlen%36]
     # Return output
-    return output if len(output) == outlen else output[:outlen]
+    return output
 
 
 def keccak_1600(msg, outlen=32):

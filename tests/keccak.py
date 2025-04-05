@@ -105,7 +105,7 @@ def keccak_800(msg, outlen=32):
     while len(output) + 36 <= outlen:
         for y in range(2):
             for x in range(5):
-                if x + 5*y <= 9:
+                if x + 5*y < 9:
                     output += store32(A[(x, y)])
         if len(output) < outlen:
             A = f_perm(A)
@@ -113,7 +113,7 @@ def keccak_800(msg, outlen=32):
         buffer = b''
         for y in range(2):
             for x in range(5):
-                if x + 5*y <= 9:
+                if x + 5*y < 9:
                     buffer += store32(A[(x, y)])
         output += buffer[:outlen%36]
     # Return output
@@ -149,10 +149,7 @@ def keccak_1600(msg, outlen=32):
             A = round(A, iota[i])
         return A
 
-    A = {}
-    for y in range(5):
-        for x in range(5):
-            A[(x, y)] = 0
+    A = {(x,y): 0 for x in range(5) for y in range(5)}
     pos = 0
     while pos <= len(msg):
         if pos + 136 <= len(msg):
@@ -171,12 +168,21 @@ def keccak_1600(msg, outlen=32):
                         A[(x, y)] ^= load64(buffer[8*i:8*i + 8])
         A = f_perm(A)
         pos += 136
+    # Squeeze output
     output = b''
-    while len(output) < outlen:
+    while len(output) + 136 <= outlen:
         for y in range(4):
             for x in range(5):
-                if x + 5*y <= 17:
+                if x + 5*y < 17:
                     output += store64(A[(x, y)])
         if len(output) < outlen:
             A = f_perm(A)
-    return output if len(output) == outlen else output[:outlen]
+    if len(output) < outlen:
+        buffer = b''
+        for y in range(4):
+            for x in range(5):
+                if x + 5*y < 17:
+                    buffer += store64(A[(x, y)])
+        output += buffer[:outlen%136]
+    # Return output
+    return output

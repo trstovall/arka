@@ -43,11 +43,11 @@ iota = [
 ROTL32 = lambda x, n: ((x << n) ^ (x >> (32 - n))) % 2**32
 ROTL64 = lambda x, n: ((x << n) ^ (x >> (64 - n))) % 2**64
 
-load32 = lambda x: sum((c << (8*i)) for i, c in zip(range(4), x))
-store32 = lambda x: bytes((x >> (8*i)) & 0xff for i in range(4))
+load32 = lambda x: int.from_bytes(x if len(x) <= 4 else x[:4], 'little')
+store32 = lambda x: int(x).to_bytes(4, 'little')
 
-load64 = lambda x: sum((c << (8*i)) for i, c in zip(range(8), x))
-store64 = lambda x: bytes((x >> (8*i)) & 0xff for i in range(8))
+load64 = lambda x: int.from_bytes(x if len(x) <= 8 else x[:8], 'little')
+store64 = lambda x: int(x).to_bytes(8, 'little')
 
 
 def keccak_800(msg, outlen=32):
@@ -77,13 +77,11 @@ def keccak_800(msg, outlen=32):
     def f_perm(A):
         for i in range(22):
             A = round(A, iota[i] & 0xffffffff)
-
         return A
 
-    A = {}
-    for y in range(5):
-        for x in range(5):
-            A[(x, y)] = 0
+    # Initialize A
+    A = {(x, y): 0 for x in range(5) for y in range(5)}
+    # Ingest msg
     pos = 0
     while pos <= len(msg):
         if pos + 36 <= len(msg):
@@ -94,7 +92,7 @@ def keccak_800(msg, outlen=32):
                         A[(x, y)] ^= load32(msg[pos + 4*i:pos + 4*i + 4])
         else:
             buffer = msg[pos:]
-            buffer += b'\x81' if len(buffer) == 35 else (b'\x01' + ((34 - len(buffer)) * b'\x00') + b'\x80')
+            buffer += b'\x81' if len(buffer) == 35 else (b'\x01' + bytes(34 - len(buffer)) + b'\x80')
             for y in range(2):
                 for x in range(5):
                     i = x + 5*y
@@ -102,6 +100,7 @@ def keccak_800(msg, outlen=32):
                         A[(x, y)] ^= load32(buffer[4*i:4*i + 4])
         A = f_perm(A)
         pos += 36
+    # Squeeze output
     output = b''
     while len(output) < outlen:
         for y in range(2):
@@ -110,8 +109,8 @@ def keccak_800(msg, outlen=32):
                     output += store32(A[(x, y)])
         if len(output) < outlen:
             A = f_perm(A)
+    # Return output
     return output[:outlen] if outlen < len(output) else output
-
 
 
 def keccak_1600(msg, outlen=32):

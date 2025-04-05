@@ -71,6 +71,7 @@ def test_keccak_1600():
         assert keccak_1600(x) == keccak.keccak_1600(x)
         assert keccak_1600(x, 16) == keccak.keccak_1600(x, 16)
         assert keccak_1600(x, 64) == keccak.keccak_1600(x, 64)
+        assert keccak_1600(x, 256) == keccak.keccak_1600(x, 256)
 
 
 def test_mint_happy_case():

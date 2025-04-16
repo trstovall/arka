@@ -1,19 +1,27 @@
 
 from __future__ import annotations
+from typing import Callable, Generator, Coroutine, Any
 import asyncio
+import time
 import logging
 import struct
-import arka._crypto as crypto
-import time
 
 from os import urandom
 
+import arka._crypto as crypto
+
+
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+
 
 # Constants
-TIMEOUT = 10        # seconds
-ACK_TIMEOUT = 1     # seconds
-MAX_RETRIES = 3
-RETRY_DELAY = 2     # seconds
+TIMEOUT = 10            # seconds
+ACK_TIMEOUT = 1         # seconds
+RECV_TIMEOUT = 0.1    # seconds
+SEND_TIMEOUT = 0.1      # seconds
+KEEPALIVE_TIMEOUT = 15  # seconds
+MAX_RETRIES = 5
+RETRY_DELAY = 2         # seconds
 BACKOFF_MULTIPLIER = 1.5
 ARKA_BANNER = b'arka'
 MAX_FRAGMENTS = 2**13
@@ -45,7 +53,17 @@ Challenge = bytes
 ChallengeAnswer = bytes
 
 
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+
+
+def prefix_len_to_bytes(x: bytes) -> bytes:
+    n = len(x)
+    if n < 0x80:
+        n = bytes([n << 1])
+    elif n < 0x4000:
+        n = struct.pack('<H', (n << 2) | 1)
+    else:
+        n = struct.pack('<I', (n << 2) | 3)
+    return n + x
 
 
 def msg_init(peer_id: PublicKey, challenge: Challenge) -> bytes:
@@ -87,7 +105,7 @@ def msg_meet_request(neighbor: PublicKey) -> bytes:
 def msg_meet_intro(neighbor: PublicKey, addr: Address) -> bytes:
     host = addr[0].encode()
     addr = b''.join([host, struct.pack('<H', addr[1])])
-    return bytes([MSG_MEET_INTRO]) + neighbor + addr
+    return b''.join([bytes([MSG_MEET_INTRO]), neighbor, addr])
 
 
 class Message(object):
@@ -185,23 +203,143 @@ class MeetIntroMessage(Message):
         return host, port
 
 
-class PeerProtocol(asyncio.DatagramProtocol):
-    '''Protocol to handle UDP datagrams for the Peer class.'''
-    def __init__(self, peer: Peer):
-        self.peer = peer
+class MeshProtocol(asyncio.DatagramProtocol):
+    '''Protocol to handle UDP datagrams for the Mesh class.'''
+    def __init__(self, mesh: Mesh):
+        self.mesh = mesh
 
     def connection_made(self, transport: asyncio.DatagramTransport):
         self.transport = transport
     
     def datagram_received(self, data: Datagram, addr: Address):
-        loop = asyncio.get_running_loop()
-        loop.create_task(self.peer.handle_message(data, addr))
+        peer = self.mesh.peers.get(addr)
+        if peer is not None:
+            peer.frag_q.put_nowait(data)
 
-    def error_received(self, exc: Exception):
+    def error_received(self, exc: OSError):
         logging.err(f'Error receieved: {exc}')
 
 
-class Peer(object):
+RecvCoroutine = Callable[[Message, Socket], Coroutine[Any, Any, None]]
+
+
+class Socket(object):
+
+    def __init__(self,
+        id: int,
+        addr: Address,
+        loop: asyncio.AbstractEventLoop | None = None,
+        handle_recv_q: RecvCoroutine = None,
+        handle_close: Callable[[Socket], None] = None,
+
+        **kws
+    ):
+        self.addr = addr
+        self.id = id
+        self.loop = loop or asyncio.get_running_loop()
+        self.handle_recv_q = handle_recv_q
+        self.handle_close = handle_close
+        self.connected: bool = False
+
+    def __await__(self) -> Generator[Any, None, Socket]:
+        return self.connect().__await__()
+    
+    async def connect(self) -> Socket:
+        if not self.connected:
+            self.connected = True
+            self.seq_num: int = 0   # Strictly increasing number for next fragment
+            self.unacked: int = 0
+            self.last_seen: float = time.time()
+            self.sent: dict[int, tuple[float, int, Datagram]] = {}
+            self.frag_q: asyncio.Queue[Datagram] = asyncio.Queue()
+            self.recv_q: asyncio.Queue[Message] = asyncio.Queue()
+            self.send_q: asyncio.Queue[Message] = asyncio.Queue()
+            self.s_ack_q: asyncio.Queue[tuple[int, int]] = asyncio.Queue()
+            self.r_ack_q: asyncio.Queue[tuple[int, int]] = asyncio.Queue()
+            self.loop.create_task(self.handle_frag_q())
+            if self.handle_recv_q is not None:
+                self.loop.create_task(self.handle_recv_q())
+            self.loop.create_task(self.handle_send_q())
+            self.loop.create_task(self.handle_s_ack_q())
+            self.loop.create_task(self.handle_r_ack_q())
+        return self
+
+    async def close(self):
+        if self.connected:
+            self.connected = False
+            await self.frag_q.put(None)
+            await self.recv_q.put(None)
+            await self.send_q.put(None)
+            await self.s_ack_q.put(None)
+            await self.r_ack_q.put(None)
+            if self.handle_close is not None:
+                self.handle_close(self)
+
+    async def handle_frag_q(self):
+        '''Process async Datagrams received from frag_q
+            into stream of ordered Messages to recv_q
+        '''
+        recd: dict[int, tuple[int | None, Datagram]] = {}
+        acks: dict[int, int] = {}
+        min_recd: int = -1
+        max_recd: int = -1
+        while self.connected:
+            # Consume Datagrams from frag_q
+            timeout: float = time.time() + RECV_TIMEOUT
+            while time.time() < timeout and self.connected:
+                if not self.frag_q.empty:
+                    data: Datagram = self.frag_q.get_nowait()
+                else:
+                    try:
+                        data: Datagram = await asyncio.wait_for(
+                            fut=self.frag_q.get(), timeout=RECV_TIMEOUT
+                        )
+                    except asyncio.TimeoutError as e:
+                        if time.time() > self.last_seen + KEEPALIVE_TIMEOUT * MAX_RETRIES:
+                            # Terminate pipeline when peer does not send keepalive
+                            self.close()
+                            return
+                        break
+                if data is None:
+                    # Terminate task on EOF
+                    return
+                if len(data) < 8:
+                    # Terminate pipeline on malformed Datagram
+                    self.close()
+                    return
+                seq: int = struct.unpack_from('<Q', data, 0)[0]
+                if seq & 1:
+                    if len(data) < 12:
+                        # Terminate pipeline on malformed Datagram
+                        self.close()
+                        return
+                    n_frags = struct.unpack_from('<I', data, 4)[0]
+                    offset = 12
+                else:
+                    n_frags = None
+                    offset = 8
+                frag_id = seq >> 1
+                data = data[offset:]
+                if n_frags == 1:
+                    for msg in self.parse_msg_concat(data):
+                        await self.recv_q.put(msg)
+                else:
+                    self.recd[frag_id] = n_frags, data
+                self.last_seen = time.time()
+                if frag_id < min_acked:
+                    min_acked = frag_id
+                elif frag_id > max_acked:
+                    max_acked = frag_id
+                self.last_recd = max(self.last_recd, frag_id)
+                acks[frag_id] = frag_id
+
+            # Defragment acks
+            start = unacked
+            while start <= self.last_recd:
+                end = acks.pop(start, None)
+                
+
+class Mesh(object):
 
     def __init__(self,
             keypair: Keypair, bootstrap: list[Address] = [],
@@ -212,83 +350,109 @@ class Peer(object):
         self.loop = loop or asyncio.get_running_loop()
         self.peer_id: PublicKey = keypair[32:64]
         self.peers: dict[Address, Socket] = {}
-        self.blacklist: dict[Address | PublicKey, int] = {}
+        self.blacklist: dict[Address | PublicKey, float] = {}
         self.transport: asyncio.DatagramTransport = None
-        self.running = False
+        self.running: bool = False
 
-    async def handle_message(self, data: Datagram, addr: Address):
+    async def handle_datagram(self, data: Datagram, addr: Address):
         '''Map Datagram to self.peers[addr]['defrag'] queue.'''
-        peer = self.peers.get(addr) or self.connect(addr)
+        # 
+        peer = self.peers.get(addr)
         if peer is None:
-            return
-        await peer['defrag'].put(data)
+            peer = await self.connect(addr)
+        await peer.send(data)
 
-    def connect(self, addr: Address) -> Socket | None:
-        # Check blacklist
-        timeout = self.blacklist.get(addr, 0)
-        if timeout:
-            if time.time() < timeout:
-                # Drop Datagrams from blacklisted peers
-                return
-            del self.blacklist[addr]
-        # Create peer
-        defrag: asyncio.Queue[Datagram] = asyncio.Queue()
-        recv: asyncio.Queue[Message] = asyncio.Queue()
-        send: asyncio.Queue[Message] = asyncio.Queue()
-        ack: asyncio.Queue[tuple[int, int]] = asyncio.Queue()
-        keys = 'addr defrag recv send ack'.split()
-        peer: Socket = {k: locals()[k] for k in keys}
+    async def connect(self, addr: Address) -> Socket:
+        peer = await Socket(
+            addr=addr,
+            disconnect_cb=self.disconnect,
+            recv_cb=self.handle_recv
+        )
         # Add (addr) -> (peer) to self.peers
         self.peers[addr] = peer
-        # Add tasks to process pipeline
-        self.loop.create_task(self.handle_peer(peer))
-        self.loop.create_task(self.send(peer))
-        self.loop.create_task(self.recv(peer))
         return peer
 
     async def disconnect(self, peer: Socket):
-        del self.peers[peer['addr']]
-        await peer['defrag'].put(None)
-        await peer['recv'].put(None)
-        await peer['send'].put(None)
+        peer = self.peers.pop(peer.addr, None)
+        if peer is not None:
+            await peer.disconnect()
 
-    async def handle_peer(self, peer: Socket):
+    async def handle_recv(self, peer: Socket):
         '''Listen for Messages on peer['recv'] queue and
             respond with Messages on peer['send'] queue.
         '''
         # Send MSG_INIT
         local_challenge: Challenge = urandom(32)
         msg = msg_init(self.peer_id, local_challenge)
-        await peer['send'].put(msg)
+        await peer.send(msg)
         # Await MSG_INIT
         msg = await peer['recv'].get()
 
-
-    async def send(self, peer: Socket):
-        def prefix_len_to_bytes(x: bytes) -> bytes:
-            n = len(x)
-            if n < 0x80:
-                n = bytes([n << 1])
-            elif n < 0x4000:
-                n = struct.pack('<H', (n << 2) | 1)
-            else:
-                n = struct.pack('<I', (n << 2) | 3)
-            return n + x
+    async def handle_send(self, peer: Socket):
         addr: Address = peer['addr']
         send_q: asyncio.Queue[Message] = peer['send']
+        sent: dict[int, tuple[float, int, Datagram]] = peer['sent']
+        while self.running:
+            # Process peer['send'] continuously
+            send_batch: list[Message] = []
+            send_timeout = time.time() + SEND_TIMEOUT
+            # Consume send_q
+            try:
+                while time.time() < send_timeout:
+                    wait = max(0, send_timeout - time.time())
+                    msg: Message = await asyncio.wait_for(send_q.get(), wait)
+                    if msg is None:
+                        # Terminate pipeline on send_q EOF
+                        return
+                    send_batch.append(msg)
+            except asyncio.TimeoutError as e:
+                pass
+            # Concatenate Messages into single buffer
+            if not send_batch:
+                continue
+            if len(send_batch) == 1:
+                buffer = prefix_len_to_bytes(send_batch[0].msg)
+            else:
+                buffer = b''.join(
+                prefix_len_to_bytes(m.msg) for m in send_batch
+            )
+            # Fragment buffer into <= 1024 byte fragments,
+            # prefix with fragment metadata
+            # and send Datagram to peer
+            view = memoryview(buffer)
+            n_frags = len(buffer) >> 10 + (1 if len(buffer) & 1023 else 0)
+            for i in range(n_frags):
+                frag = bytes(view[i<<10:(i+1)<<10])
+                id = peer['seq_num']
+                peer['seq_num'] = id + 1
+                timeout = time.time() + ACK_TIMEOUT
+                retries = 0
+                if not i:
+                    data: Datagram = struct.pack('<QI', (id << 1) + 1, n_frags) + frag
+                else:
+                    data: Datagram = struct.pack('<Q', id << 1) + frag
+                self.transport.sendto(data, addr)
+                peer['keepalive'] = time.time() + KEEPALIVE_TIMEOUT
+                sent[id] = timeout, retries, data
+
+    async def handle_acks(self, peer: Socket):
+        addr: Address = peer['addr']
         ack_q: asyncio.Queue[tuple[int, int]] = peer['ack']
-        seq_num: int = 0
-        unacked: int = 0
+        sent: dict[int, tuple[float, int, Datagram]] = peer['sent']
         acks: dict[int, int] = {}
-        sent: dict[int, tuple[float, int, Datagram]] = {}
-        process_acks_schedule = time.time() + ACK_TIMEOUT
-        process_send_schedule = time.time() + ACK_TIMEOUT / 10
+        ack_timeout = time.time() + ACK_TIMEOUT
         while self.running:
             # Process ACKs periodically
-            if time.time() > process_acks_schedule:
+            if time.time() > ack_timeout:
+                seq_num = peer['seq_num']
+                unacked = peer['unacked']
                 # Add (ack_start) -> (ack_end) to acks dict
                 while not ack_q.empty():
-                    ack_start, ack_end = await ack_q.get()
+                    ack = await ack_q.get()
+                    if ack is None:
+                        # Terminate pipeline if ack_q EOF
+                        return
+                    ack_start, ack_end = ack
                     if unacked <= ack_start <= ack_end < seq_num:
                         acks[ack_start] = ack_end
                 # Iterate through acks dict consuming acks and sent
@@ -300,6 +464,7 @@ class Peer(object):
                     for i in range(unacked, acked + 1):
                         sent.pop(i, None)
                     unacked = acked + 1
+                peer['unacked'] = unacked
                 # Defragment acks
                 start = unacked
                 while start < seq_num:
@@ -318,54 +483,38 @@ class Peer(object):
                 frag_id = unacked
                 while frag_id < seq_num:
                     acked = acks.get(frag_id)
-                    if acked:
+                    if acked is not None:
                         frag_id = acked + 1
                         continue
-                    match sent[frag_id]:
-                        case timeout, retries, data:
-                            if time.time() < timeout:
-                                frag_id += 1
-                                continue
-                            if retries < MAX_RETRIES:
-                                self.transport.sendto(data, addr)
-                                retries += 1
-                                timeout += ACK_TIMEOUT
-                                sent[frag_id] = timeout, retries, data
-                                frag_id += 1
-                            else:
-                                return await self.disconnect(peer)
-                # reschedule ack processing
-                process_acks_schedule = time.time() + ACK_TIMEOUT
-            # Process peer['send'] continuously
-            send_batch: list[Message] = []
-            try:
-                while time.time() < process_send_schedule:
-                    wait = max(0, process_send_schedule - time.time())
-                    msg: Message = asyncio.wait_for(send_q.get(), wait)
-                    send_batch.append(msg)
-            except asyncio.TimeoutError as e:
-                pass
-            buffer = b''.join(
-                prefix_len_to_bytes(m.msg)
-                for m in send_batch
-            )
-            n_frags = len(buffer) >> 10 + (1 if len(buffer) & 1023 else 0)
-            for i in range(n_frags):
-                frag = buffer[i<<10:(i+1)<<10]
-                id = seq_num
-                seq_num += 1
-                timeout = time.time() + ACK_TIMEOUT
-                retries = 0
-                if not i:
-                    data = struct.pack('<QI', id, n_frags) + frag
-                else:
-                    data = struct.pack('<Q', id) + frag
-                self.transport.sendto(data, addr)
-                sent[id] = timeout, retries, data
+                    timeout, retries, data = sent[frag_id]
+                    if time.time() < timeout:
+                        frag_id += 1
+                        continue
+                    if retries < MAX_RETRIES:
+                        self.transport.sendto(data, addr)
+                        peer['keepalive'] = time.time() + KEEPALIVE_TIMEOUT
+                        retries += 1
+                        timeout = time.time() + ACK_TIMEOUT
+                        sent[frag_id] = timeout, retries, data
+                        frag_id += 1
+                    else:
+                        return await self.disconnect(peer)
+                # Reschedule ack processing
+                ack_timeout = time.time() + ACK_TIMEOUT
 
-            process_send_schedule = time.time() + ACK_TIMEOUT / 10
-
-    async def recv(self, peer: Socket):
+    async def keepalive(self, peer: Socket):
         addr: Address = peer['addr']
-        while self.peers.get(addr) is not None:
-            asyncio.sleep(1)
+        sent: dict[int, tuple[float, int, Datagram]] = peer['sent']
+        while peer['keepalive'] is not None:
+            await asyncio.sleep(max(0, peer['keepalive'] - time.time()))
+            if peer['keepalive'] is None:
+                break
+            if time.time() > peer['keepalive']:
+                # Send keepalive
+                id = peer['seq_num']
+                data: Datagram = struct.pack('<QI', (id << 1) + 1, 1)
+                retries = 0
+                timeout = time.time() + ACK_TIMEOUT
+                self.transport.sendto(data, addr)
+                peer['keepalive'] = time.time() + KEEPALIVE_TIMEOUT
+                sent[id] = timeout, retries, data

@@ -28,8 +28,9 @@ MAX_FRAGMENTS = 2**13
 FRAGMENT_SIZE = 1024
 
 # Message Types
-MSG_INIT = 1
-MSG_CHALLENGE_ANSWER = 2
+MSG_ACK = 1
+MSG_INIT = 2
+MSG_CHALLENGE_ANSWER = 3
 MSG_PUB_PEERS_UPDATE = 4
 MSG_MEET_REQUEST = 5
 MSG_MEET_INTRO = 6
@@ -55,15 +56,35 @@ ChallengeAnswer = bytes
 
 
 
-def prefix_len_to_bytes(x: bytes) -> bytes:
-    n = len(x)
+def len_to_bytes(n: int) -> bytes:
     if n < 0x80:
         n = bytes([n << 1])
     elif n < 0x4000:
         n = struct.pack('<H', (n << 2) | 1)
     else:
         n = struct.pack('<I', (n << 2) | 3)
-    return n + x
+    return n
+
+
+def parse_len(x: bytes | bytearray) -> int:
+    n = x[0]
+    if n & 1:
+        if n & 2:
+            return struct.unpack('<I', x)[0] >> 2
+        return struct.unpack('<H', x)[0] >> 2
+    return n >> 1
+
+
+def msg_ack(acks: list[tuple[int, int]]) -> bytes:
+    buffer = [bytes([MSG_ACK]), len_to_bytes(len(acks))]
+    if not acks:
+        return b''.join(buffer)
+    offset = acks[0][0]
+    buffer.append(struct.pack('<Q', offset))
+    for s, e in acks:
+        buffer.append(len_to_bytes(s))
+        buffer.append(len_to_bytes(e))
+    return b''.join(buffer)
 
 
 def msg_init(peer_id: PublicKey, challenge: Challenge) -> bytes:

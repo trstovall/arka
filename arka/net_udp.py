@@ -224,16 +224,50 @@ class MeetIntroMessage(Message):
         return host, port
 
 
+
 class MeshProtocol(asyncio.DatagramProtocol):
     '''Protocol to handle UDP datagrams for the Mesh class.'''
-    def __init__(self, mesh: Mesh):
+    def __init__(self, mesh: Mesh, blacklist: dict[Address, float] = {}):
         self.mesh = mesh
+        self.blacklist = blacklist
 
     def connection_made(self, transport: asyncio.DatagramTransport):
         self.transport = transport
     
     def datagram_received(self, data: Datagram, addr: Address):
-        peer = self.mesh.peers.get(addr)
+        # Check blacklist
+        timeout = self.blacklist.get(addr, 0)
+        if timeout:
+            if time.time() < timeout:
+                # Drop Datagrams from blacklisted peers
+                return
+            del self.blacklist[addr]
+        loop = asyncio.get_running_loop()
+        # Spawn background task to process Datagram
+        loop.create_task(self.mesh.handle_datagram(data, addr))
+
+    def error_received(self, exc: OSError):
+        logging.err(f'Error receieved: {exc}')
+
+
+class MeshProtocol(asyncio.DatagramProtocol):
+    '''Protocol to handle UDP datagrams for the Mesh class.'''
+    def __init__(self, mesh: Mesh, blacklist: dict[Address, float] = {}):
+        self.mesh = mesh
+        self.blacklist = blacklist
+
+    def connection_made(self, transport: asyncio.DatagramTransport):
+        self.transport = transport
+    
+    def datagram_received(self, data: Datagram, addr: Address):
+        # Check blacklist
+        timeout = self.blacklist.get(addr, 0)
+        if timeout:
+            if time.time() < timeout:
+                # Drop Datagrams from blacklisted peers
+                return
+            del self.blacklist[addr]
+        peer = self.mesh.peers.get(addr) or self.mesh.connect(addr)
         if peer is not None:
             peer.frag_q.put_nowait(data)
 
@@ -262,10 +296,7 @@ class Socket(object):
         self.handle_close = handle_close
         self.connected: bool = False
 
-    def __await__(self) -> Generator[Any, None, Socket]:
-        return self.connect().__await__()
-    
-    async def connect(self) -> Socket:
+    def connect(self) -> Socket:
         if not self.connected:
             self.connected = True
             self.seq_num: int = 0   # Strictly increasing number for next fragment
@@ -285,14 +316,14 @@ class Socket(object):
             self.loop.create_task(self.handle_r_ack_q())
         return self
 
-    async def close(self):
+    def close(self):
         if self.connected:
             self.connected = False
-            await self.frag_q.put(None)
-            await self.recv_q.put(None)
-            await self.send_q.put(None)
-            await self.s_ack_q.put(None)
-            await self.r_ack_q.put(None)
+            self.frag_q.put_nowait(None)
+            self.recv_q.put_nowait(None)
+            self.send_q.put_nowait(None)
+            self.s_ack_q.put_nowait(None)
+            self.r_ack_q.put_nowait(None)
             if self.handle_close is not None:
                 self.handle_close(self)
 

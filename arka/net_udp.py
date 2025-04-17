@@ -224,32 +224,6 @@ class MeetIntroMessage(Message):
         return host, port
 
 
-
-class MeshProtocol(asyncio.DatagramProtocol):
-    '''Protocol to handle UDP datagrams for the Mesh class.'''
-    def __init__(self, mesh: Mesh, blacklist: dict[Address, float] = {}):
-        self.mesh = mesh
-        self.blacklist = blacklist
-
-    def connection_made(self, transport: asyncio.DatagramTransport):
-        self.transport = transport
-    
-    def datagram_received(self, data: Datagram, addr: Address):
-        # Check blacklist
-        timeout = self.blacklist.get(addr, 0)
-        if timeout:
-            if time.time() < timeout:
-                # Drop Datagrams from blacklisted peers
-                return
-            del self.blacklist[addr]
-        loop = asyncio.get_running_loop()
-        # Spawn background task to process Datagram
-        loop.create_task(self.mesh.handle_datagram(data, addr))
-
-    def error_received(self, exc: OSError):
-        logging.err(f'Error receieved: {exc}')
-
-
 class MeshProtocol(asyncio.DatagramProtocol):
     '''Protocol to handle UDP datagrams for the Mesh class.'''
     def __init__(self, mesh: Mesh, blacklist: dict[Address, float] = {}):
@@ -268,14 +242,13 @@ class MeshProtocol(asyncio.DatagramProtocol):
                 return
             del self.blacklist[addr]
         peer = self.mesh.peers.get(addr) or self.mesh.connect(addr)
-        if peer is not None:
-            peer.frag_q.put_nowait(data)
+        peer.frag_q.put_nowait(data)
 
     def error_received(self, exc: OSError):
         logging.err(f'Error receieved: {exc}')
 
 
-RecvCoroutine = Callable[[Message, Socket], Coroutine[Any, Any, None]]
+RecvCoroutine = Callable[[Socket], Coroutine[Any, Any, None]]
 
 
 class Socket(object):
@@ -284,8 +257,8 @@ class Socket(object):
         id: int,
         addr: Address,
         loop: asyncio.AbstractEventLoop | None = None,
-        handle_recv_q: RecvCoroutine = None,
-        handle_close: Callable[[Socket], None] = None,
+        handle_recv_q: RecvCoroutine | None = None,
+        handle_close: Callable[[Socket], None] | None = None,
 
         **kws
     ):
@@ -406,16 +379,8 @@ class Mesh(object):
         self.transport: asyncio.DatagramTransport = None
         self.running: bool = False
 
-    async def handle_datagram(self, data: Datagram, addr: Address):
-        '''Map Datagram to self.peers[addr]['defrag'] queue.'''
-        # 
-        peer = self.peers.get(addr)
-        if peer is None:
-            peer = await self.connect(addr)
-        await peer.send(data)
-
-    async def connect(self, addr: Address) -> Socket:
-        peer = await Socket(
+    def connect(self, addr: Address) -> Socket:
+        peer = Socket(
             addr=addr,
             disconnect_cb=self.disconnect,
             recv_cb=self.handle_recv
@@ -424,10 +389,10 @@ class Mesh(object):
         self.peers[addr] = peer
         return peer
 
-    async def disconnect(self, peer: Socket):
+    def disconnect(self, peer: Socket):
         peer = self.peers.pop(peer.addr, None)
         if peer is not None:
-            await peer.disconnect()
+            peer.disconnect()
 
     async def handle_recv(self, peer: Socket):
         '''Listen for Messages on peer['recv'] queue and

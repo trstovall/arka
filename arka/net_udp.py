@@ -5,19 +5,18 @@ import asyncio
 import time
 import logging
 import struct
+import socket
 
 from os import urandom
-
-import arka._crypto as crypto
 
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
 
 # Constants
-TIMEOUT = 10            # seconds
+BLACKLIST_TIMEOUT = 600 # seconds
 ACK_TIMEOUT = 1         # seconds
-RECV_TIMEOUT = 0.1    # seconds
+RECV_TIMEOUT = 0.1      # seconds
 SEND_TIMEOUT = 0.1      # seconds
 KEEPALIVE_TIMEOUT = 15  # seconds
 MAX_RETRIES = 5
@@ -29,9 +28,7 @@ FRAGMENT_SIZE = 1024
 
 # Message Types
 MSG_ACK = 1
-MSG_INIT = 2
-MSG_CHALLENGE_ANSWER = 3
-MSG_PUB_PEERS_UPDATE = 4
+MSG_PEERS_UPDATE = 4
 MSG_MEET_REQUEST = 5
 MSG_MEET_INTRO = 6
 MSG_SUB_TX_HASH = 7
@@ -45,18 +42,16 @@ MSG_BLOCK_RESPONSE = 14
 MSG_ERROR = 255
 
 
+# Type aliases
 Address = tuple[str, int]
-Socket = dict[str, asyncio.Queue]
 Datagram = bytes
-Keypair = bytes
-PublicKey = bytes
-Challenge = bytes
-ChallengeAnswer = bytes
+MessageList = bytes
+Message = bytes | bytearray
 
 
+### Helpers
 
-
-def len_to_bytes(n: int) -> bytes:
+def varint_to_bytes(n: int) -> bytes:
     if n < 0x80:
         n = bytes([n << 1])
     elif n < 0x4000:
@@ -65,8 +60,7 @@ def len_to_bytes(n: int) -> bytes:
         n = struct.pack('<I', (n << 2) | 3)
     return n
 
-
-def parse_len(x: bytes | bytearray) -> int:
+def parse_message_list(x: MessageList) -> list[Message]:
     n = x[0]
     if n & 1:
         if n & 2:
@@ -74,31 +68,58 @@ def parse_len(x: bytes | bytearray) -> int:
         return struct.unpack('<H', x)[0] >> 2
     return n >> 1
 
+def ipv6_to_bytes(ipv6_str: str) -> bytes:
+    try:
+        # Convert IPv6 address to binary form
+        binary = socket.inet_pton(socket.AF_INET6, ipv6_str)
+        return binary
+    except socket.error as e:
+        raise ValueError(f"Invalid IPv6 address: {e}")
 
-def msg_ack(acks: list[tuple[int, int]]) -> bytes:
-    buffer = [bytes([MSG_ACK]), len_to_bytes(len(acks))]
+def bytes_to_ipv6(binary: bytes) -> str:
+    try:
+        # Ensure input is 16 bytes
+        if len(binary) != 16:
+            raise ValueError("Binary input must be 16 bytes")
+        # Convert binary back to IPv6 string
+        ipv6_str = socket.inet_ntop(socket.AF_INET6, binary)
+        return ipv6_str
+    except socket.error as e:
+        raise ValueError(f"Invalid binary data: {e}")
+
+def addr_to_bytes(addr: Address) -> bytes:
+    host, port = addr
+    return ipv6_to_bytes(host) + struct.pack('<H', port)
+
+def bytes_to_addr(binary: bytes) -> Address:
+    return bytes_to_ipv6(binary[:16]), struct.unpack('<H', binary[16:])[0]
+
+
+### Message serializers
+
+def msg_ack(acks: list[tuple[int, int]]) -> Message:
+    buffer = [bytes([MSG_ACK]), varint_to_bytes(len(acks))]
     if not acks:
         return b''.join(buffer)
-    offset = acks[0][0]
-    buffer.append(struct.pack('<Q', offset))
+    min_ack = acks[0][0]
+    max_ack = acks[-1][1]
+    diff = max_ack - min_ack
+    if diff < 0x100:
+        format = '<BB'
+        ack_len = 1
+    elif diff < 0x10000:
+        format = '<HH'
+        ack_len = 2
+    else:
+        raise ValueError('Too many acks to serialize.')
+    buffer.append(struct.pack('<QB', min_ack, ack_len))
     for s, e in acks:
-        buffer.append(len_to_bytes(s))
-        buffer.append(len_to_bytes(e))
+        buffer.append(struct.pack(format, s, e))
     return b''.join(buffer)
 
 
-def msg_init(peer_id: PublicKey, challenge: Challenge) -> bytes:
-        return b''.join([
-            bytes([MSG_INIT]), ARKA_BANNER, peer_id, challenge
-        ])
-
-
-def msg_challenge_answer(answer: ChallengeAnswer) -> bytes:
-        return bytes([MSG_CHALLENGE_ANSWER]) + answer
-
-
-def msg_pub_peers_update(added: set[PublicKey], removed: set[PublicKey]) -> bytes:
-    msg_type = bytes([MSG_PUB_PEERS_UPDATE])
+def msg_peers_update(added: set[Address], removed: set[Address]) -> Message:
+    msg_type = bytes([MSG_PEERS_UPDATE])
     num_added = len(added)
     if num_added < 0x80:
         num_added = bytes([num_added << 1])
@@ -115,114 +136,62 @@ def msg_pub_peers_update(added: set[PublicKey], removed: set[PublicKey]) -> byte
         raise ValueError('Too many peers removed.')
     return b''.join(
         [msg_type, num_added, num_removed]
-        + list(added) + list(removed)
+        + [addr_to_bytes(x) for x in added]
+        + [addr_to_bytes(x) for x in removed]
     )
 
 
-def msg_meet_request(neighbor: PublicKey) -> bytes:
-    return bytes([MSG_MEET_REQUEST]) + neighbor
+def msg_meet_request(neighbor: Address) -> Message:
+    return bytes([MSG_MEET_REQUEST]) + addr_to_bytes(neighbor)
 
 
-def msg_meet_intro(neighbor: PublicKey, addr: Address) -> bytes:
-    host = addr[0].encode()
-    addr = b''.join([host, struct.pack('<H', addr[1])])
-    return b''.join([bytes([MSG_MEET_INTRO]), neighbor, addr])
+def msg_meet_intro(neighbor: Address) -> Message:
+    return bytes([MSG_MEET_INTRO]) + addr_to_bytes(neighbor)
 
 
-class Message(object):
+### Message deserializers
 
-    def __init__(self, msg: bytes | bytearray):
-        self.msg = msg
-        self.view = memoryview(self.msg)
+class PeersUpdateMessage(object):
 
-
-class InitMessage(Message):
-
-    def __init__(self, msg: bytes | bytearray):
-        if len(msg) != 69:
-            raise ValueError("msg argument for InitMessage must be 69 bytes long.")
-        if msg[1:5] != b'arka':
-            raise ValueError("arka banner not set for msg argument to InitMessage.")
-        super().__init__(self, msg)
-    
-    @property
-    def peer_id(self) -> PublicKey:
-        return bytes(self.view[5:37])
-    
-    @property
-    def challenge(self) -> Challenge:
-        return bytes(self.view[37:69])
-
-
-class ChallengeAnswerMessage(Message):
-
-    def __init__(self, msg: bytes | bytearray):
-        if len(msg) != 65:
-            raise ValueError("msg argument for ChallengeAnswerMessage must be 65 bytes long.")
-        super().__init__(self, msg)
-
-    @property
-    def answer(self) -> ChallengeAnswer:
-        return bytes(self.view[1:])
-
-
-class PubPeersUpdateMessage(Message):
-
-    def __init__(self, msg: bytes | bytearray):
-        super().__init__(self, msg)
-        offset = 1
-        if self.view[offset] & 1:
-            self.num_added = struct.unpack_from('<H', self.view, offset)[0] >> 1
-            offset += 2
+    def __init__(self, msg: Message):
+        if msg[1] & 1:
+            num_added = struct.unpack_from('<H', msg, 1)[0] >> 1
+            offset = 3
         else:
-            self.num_added = self.view[offset] >> 1
-            offset += 1
-        if self.view[offset] & 1:
-            self.num_removed = struct.unpack_from('<H', self.view, offset)[0] >> 1
+            num_added = msg[1] >> 1
+            offset = 2
+        if msg[offset] & 1:
+            num_removed = struct.unpack_from('<H', msg, offset)[0] >> 1
             offset += 2
-        if len(msg) != offset + 32 * (self.num_added + self.num_removed):
-            raise ValueError('Invalid msg passed to `PubPeersUpdateMessage`.')
-        self.offset = offset
-
-    @property
-    def added(self) -> set[PublicKey]:
-        start, end = self.offset, self.offset + 32 * self.num_added
-        return {bytes(self.view[i:i+32]) for i in range(start, end, 32)}
-
-    @property
-    def removed(self) -> set[PublicKey]:
-        start = self.offset + 32 * self.num_added
-        end = start + 32 * self.num_removed
-        return {bytes(self.view[i:i+32]) for i in range(start, end, 32)}
+        if len(msg) != offset + 32 * (num_added + num_removed):
+            raise ValueError('Invalid msg passed to `PeersUpdateMessage`.')
+        start, end = offset, offset + 18 * num_added
+        self.added: set[Address] = {
+            bytes_to_addr(msg[i:i+18]) for i in range(start, end, 18)
+        }
+        start, end = end, end + 18 * num_removed
+        self.removed: set[Address] = {
+            bytes_to_addr(msg[i:i+18]) for i in range(start, end, 18)
+        }
 
 
-class MeetRequestMessage(Message):
+class MeetRequestMessage(object):
 
-    def __init__(self, msg: bytes | bytearray):
-        if len(msg) != 33:
+    def __init__(self, msg: Message):
+        if len(msg) != 19:
             raise ValueError('Invalid message size for `MeetRequestMessage`.')
-        super().__init__(self, msg)
-    
-    @property
-    def neighbor(self) -> PublicKey:
-        return bytes(self.view[1:33])
+        self.neighbor: Address = bytes_to_addr(msg[1:])
 
 
 class MeetIntroMessage(Message):
 
-    @property
-    def neighbor(self) -> PublicKey:
-        n = bytes(self.view[2:34])
-        if len(n) != 32:
+    def __init__(self, msg: Message):
+        if len(msg) != 19:
             raise ValueError('Invalid message size for `MeetIntroMessage`.')
-        return n
+        self.neighbor: Address = bytes_to_addr(msg[1:])
 
-    @property
-    def addr(self) -> Address:
-        host = bytes(self.view[34:-2]).decode()
-        port = struct.unpack('<H', self.msg[-2:])[0]
-        return host, port
 
+### MeshProtocol
 
 class MeshProtocol(asyncio.DatagramProtocol):
     '''Protocol to handle UDP datagrams for the Mesh class.'''
@@ -242,14 +211,14 @@ class MeshProtocol(asyncio.DatagramProtocol):
                 return
             del self.blacklist[addr]
         peer = self.mesh.peers.get(addr) or self.mesh.connect(addr)
+        # Push Datagram into Socket pipeline
         peer.frag_q.put_nowait(data)
 
     def error_received(self, exc: OSError):
         logging.err(f'Error receieved: {exc}')
 
 
-RecvCoroutine = Callable[[Socket], Coroutine[Any, Any, None]]
-
+### Socket
 
 class Socket(object):
 
@@ -257,10 +226,8 @@ class Socket(object):
         id: int,
         addr: Address,
         loop: asyncio.AbstractEventLoop | None = None,
-        handle_recv_q: RecvCoroutine | None = None,
-        handle_close: Callable[[Socket], None] | None = None,
-
-        **kws
+        handle_recv_q: Callable[[Socket], Coroutine[Any, Any, None]] | None = None,
+        handle_close: Callable[[Socket, bool], None] | None = None
     ):
         self.addr = addr
         self.id = id
@@ -274,7 +241,6 @@ class Socket(object):
             self.connected = True
             self.seq_num: int = 0   # Strictly increasing number for next fragment
             self.unacked: int = 0
-            self.last_seen: float = time.time()
             self.sent: dict[int, tuple[float, int, Datagram]] = {}
             self.frag_q: asyncio.Queue[Datagram] = asyncio.Queue()
             self.recv_q: asyncio.Queue[Message] = asyncio.Queue()
@@ -289,7 +255,7 @@ class Socket(object):
             self.loop.create_task(self.handle_r_ack_q())
         return self
 
-    def close(self):
+    def close(self, blacklist: bool = True):
         if self.connected:
             self.connected = False
             self.frag_q.put_nowait(None)
@@ -298,7 +264,7 @@ class Socket(object):
             self.s_ack_q.put_nowait(None)
             self.r_ack_q.put_nowait(None)
             if self.handle_close is not None:
-                self.handle_close(self)
+                self.handle_close(self, blacklist)
 
     async def handle_frag_q(self):
         '''Process async Datagrams received from frag_q
@@ -364,35 +330,47 @@ class Socket(object):
                 end = acks.pop(start, None)
                 
 
+### Mesh
+
 class Mesh(object):
 
     def __init__(self,
-            keypair: Keypair, bootstrap: list[Address] = [],
+            bootstrap: list[Address] = [],
             loop: asyncio.AbstractEventLoop | None = None
     ):
-        self.keypair = keypair
         self.bootstrap = bootstrap
         self.loop = loop or asyncio.get_running_loop()
-        self.peer_id: PublicKey = keypair[32:64]
-        self.peers: dict[Address, Socket] = {}
-        self.blacklist: dict[Address | PublicKey, float] = {}
+        self.peer_counter: int = 0
+        self.peers: dict[Address | int, Socket] = {}
+        self.blacklist: dict[Address, float] = {}
         self.transport: asyncio.DatagramTransport = None
         self.running: bool = False
 
     def connect(self, addr: Address) -> Socket:
+        # Create connection
         peer = Socket(
+            id=self.peer_counter,
             addr=addr,
-            disconnect_cb=self.disconnect,
-            recv_cb=self.handle_recv
-        )
-        # Add (addr) -> (peer) to self.peers
+            handle_recv_q=self.handle_recv,
+            handle_close=self.handle_close
+        ).connect()
+        self.peer_counter += 1
+        # Add peer to self.peers
+        self.peers[peer.id] = peer
         self.peers[addr] = peer
         return peer
 
-    def disconnect(self, peer: Socket):
-        peer = self.peers.pop(peer.addr, None)
+    def disconnect(self, peer: Socket, blacklist: bool = True):
+        peer = self.peers.pop(peer.id, None)
         if peer is not None:
-            peer.disconnect()
+            self.peers.pop(peer.addr, None)
+            peer.close(blacklist=blacklist)
+
+    def handle_close(self, peer: Socket, blacklist: bool = True):
+        if blacklist:
+            self.blacklist[peer.addr] = time.time() + BLACKLIST_TIMEOUT
+        self.peers.pop(peer.id, None)
+        self.peers.pop(peer.addr, None)
 
     async def handle_recv(self, peer: Socket):
         '''Listen for Messages on peer['recv'] queue and
@@ -518,20 +496,3 @@ class Mesh(object):
                         return await self.disconnect(peer)
                 # Reschedule ack processing
                 ack_timeout = time.time() + ACK_TIMEOUT
-
-    async def keepalive(self, peer: Socket):
-        addr: Address = peer['addr']
-        sent: dict[int, tuple[float, int, Datagram]] = peer['sent']
-        while peer['keepalive'] is not None:
-            await asyncio.sleep(max(0, peer['keepalive'] - time.time()))
-            if peer['keepalive'] is None:
-                break
-            if time.time() > peer['keepalive']:
-                # Send keepalive
-                id = peer['seq_num']
-                data: Datagram = struct.pack('<QI', (id << 1) + 1, 1)
-                retries = 0
-                timeout = time.time() + ACK_TIMEOUT
-                self.transport.sendto(data, addr)
-                peer['keepalive'] = time.time() + KEEPALIVE_TIMEOUT
-                sent[id] = timeout, retries, data

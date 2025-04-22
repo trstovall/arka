@@ -108,12 +108,82 @@ jobs:
       - name: Install tox and wheel
         run: |
           python -m pip install tox
+
+          PY_TAG=cp${{ matrix.python-version//./ }}
+
+          case "${{ matrix.os }}" in
+            ubuntu-latest)
+              PLATFORM_TAG="manylinux_x86_64"
+              ;;
+            ubuntu-24.04-arm)
+              PLATFORM_TAG="manylinux_aarch64"
+              ;;
+            windows-latest)
+              PLATFORM_TAG="win_amd64"
+              ;;
+            macos-13)
+              PLATFORM_TAG="macosx_10_9_x86_64"
+              ;;
+            macos-14)
+              PLATFORM_TAG="macosx_11_0_arm64"
+              ;;
+            *)
+              echo "Unsupported OS: ${{ matrix.os }}"
+              exit 1
+              ;;
+          esac
+
+          WHEEL=$(ls wheelhouse/*${PY_TAG}*${PLATFORM_TAG}*.whl | head -n 1)
+
+          echo "$WHEEL"
+
+          if [ -z "$WHEEL" ]; then
+            echo "No matching wheel found for $PY_TAG + $PLATFORM_TAG"
+            ls wheelhouse/
+            exit 1
+          fi
+
+          python -m pip install "$WHEEL"
+    
+      - name: Install tox and wheel
+        run: |
+          python -m pip install tox
           WHEEL_FILE=$(ls wheelhouse/*.whl | head -n 1)
           python -m pip install "$WHEEL_FILE"
 
       - name: Run tox
         run: tox
 
+  test-emulated:
+    name: Test emulated architectures
+    needs: build
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        arch: [ppc64le, s390x, armv7l]
+        python-version: ["3.10", "3.11", "3.12", "3.13"]
+    container:
+      image: quay.io/pypa/manylinux2014_${{ matrix.arch }}
+
+    steps:
+      - name: Install Python and deps
+        run: |
+          PY_TAG=cp${{ matrix.python-version//./ }}
+          /opt/python/${PY_TAG}-${PY_TAG}*/bin/pip install tox
+
+      - name: Download wheels
+        uses: actions/download-artifact@v4
+        with:
+          name: cibw-wheels-ubuntu-latest
+          path: wheelhouse/
+
+      - name: Install and test wheel
+        run: |
+          PY_TAG=cp${{ matrix.python-version//./ }}
+          WHEEL=$(ls wheelhouse/*${PY_TAG}*${{ matrix.arch }}*.whl | head -n 1)
+          /opt/python/${PY_TAG}-${PY_TAG}*/bin/pip install "$WHEEL"
+          /opt/python/${PY_TAG}-${PY_TAG}*/bin/tox
+      
   test-sdist:
     name: Test sdist on ${{ matrix.os }} / Python ${{ matrix.python-version }}
     needs: build-sdist
@@ -151,44 +221,74 @@ jobs:
 
   test-alpine:
     name: Test on Alpine (musllinux) for wheels and sdist
-    needs: build
+    needs: [build, build-sdist]
     runs-on: ubuntu-latest
     container:
       image: quay.io/pypa/musllinux_1_1_x86_64
 
+    strategy:
+      matrix:
+        python-version: ["3.10", "3.11", "3.12", "3.13"]
+
     steps:
       - name: Install Alpine dependencies
         run: |
-          apk add --no-cache python3 py3-pip py3-wheel py3-setuptools py3-tox
+          apk add --no-cache python3 py3-pip py3-wheel py3-setuptools py3-tox bash
 
-      - name: Download built packages
+      - name: Download sdist
         uses: actions/download-artifact@v4
         with:
           name: built-packages
           path: /work
 
-      - name: Test wheel installation with tox
+      - name: Download built wheels
+        uses: actions/download-artifact@v4
+        with:
+          pattern: cibw-wheels-*
+          path: /wheels
+
+      - name: Test wheel for musllinux on Python ${{ matrix.python-version }}
+        env:
+          TOXENV: py${{ matrix.python-version }}
         run: |
-          pip install /work/*.whl
+          set -e
+          PY_TAG=cp${{ matrix.python-version//./ }}
+          wheel=$(find /wheels -name "*${PY_TAG}*musllinux_1_1_x86_64.whl" | head -n 1)
+
+          echo "Found wheel: $wheel"
           pip install tox
+          pip install "$wheel"
           tox
+          pip uninstall -y $(basename "$wheel" | cut -d- -f1) || true
 
-      - name: Clean wheel install and test sdist
+      - name: Test sdist on Python ${{ matrix.python-version }}
+        env:
+          TOXENV: py${{ matrix.python-version }}
         run: |
-          pip uninstall -y your-package-name || true
-          pip install /work/*.tar.gz
+          SDIST=$(ls /work/*.tar.gz | head -n 1)
+          pip install "$SDIST"
           tox
-
+      
   publish:
     name: Publish to PyPI
     runs-on: ubuntu-latest
-    needs: [test-wheels, test-sdist, test-alpine]
+    needs: [test-wheels, test-sdist, test-alpine, test-emulated]
 
     steps:
-      - uses: actions/download-artifact@v4
+      - name: Download built sdist
+        uses: actions/download-artifact@v4
         with:
           name: built-packages
           path: dist/
+
+      - name: Download built wheels
+        uses: actions/download-artifact@v4
+        with:
+          pattern: cibw-wheels-*
+          path: dist/
+
+      - name: List contents to verify
+        run: ls -R dist/
 
       - name: Publish to PyPI
         uses: pypa/gh-action-pypi-publish@v1.8.8

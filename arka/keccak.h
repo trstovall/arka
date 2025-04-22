@@ -3,8 +3,8 @@
 #include "stdint.h"
 #include "string.h"
 
-#define ROTL64(a, offset) ((a << offset) ^ (a >> (64-offset)))
-#define ROTL32(a, offset) ((a << offset) ^ (a >> (32-offset)))
+#define ROTL64(X, N) ((X << N) | (X >> ((64-N) & 63)))
+#define ROTL32(X, N) ((X << N) | (X >> ((32-N) & 31)))
 #define MIN(A, B) (((A) < (B)) ? (A) : (B))
 
 uint64_t load64(const unsigned char *x)

@@ -6,9 +6,14 @@ on:
       - 'v*.*.*'
 
 jobs:
+
   build:
-    name: Build wheels and sdist
-    runs-on: ubuntu-latest
+    name: Build wheels on ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        # macos-13 is an intel runner, macos-14 is apple silicon
+        os: [ubuntu-latest, ubuntu-24.04-arm, windows-latest, macos-13, macos-14]
 
     steps:
       - uses: actions/checkout@v4
@@ -18,19 +23,32 @@ jobs:
         with:
           python-version: "3.11"
 
+      - name: Set up QEMU
+        if: runner.os == 'Linux' && runner.arch == 'X64'
+        uses: docker/setup-qemu-action@v3
+        with:
+          platforms: all
+  
       - name: Install build tools
         run: |
           python -m pip install --upgrade pip
           pip install build cibuildwheel
 
-      - name: Build wheels (Linux host, no Docker)
-        run: python -m cibuildwheel --output-dir wheelhouse
+      - name: Build wheels
+        uses: pypa/cibuildwheel@v2.23.2
         env:
-          CIBW_BUILD: "cp310-* cp311-* cp312-* cp313-*"
-          CIBW_SKIP: "*-manylinux*"
-          CIBW_BUILD_FRONTEND: "build"
-          CIBW_ARCHS_MACOS: "x86_64 arm64"
-          CIBW_ARCHS_WINDOWS: "AMD64"
+          # configure cibuildwheel on Linux to build native archs ('auto'),
+          # and to split the remaining architectures between the x86_64 and
+          # ARM runners
+          # armv7l can be built without QEMU on GitHub Actions ARM runners but that's
+          # not the case on all ARM64 hardware hence 'auto armv7l' for native archs
+          # on the GHA ARM64 runner
+          CIBW_ARCHS_LINUX: ${{ runner.arch == 'X64' && 'auto ppc64le s390x' || 'auto armv7l' }}
+  
+      - uses: actions/upload-artifact@v4
+        with:
+          name: cibw-wheels-${{ matrix.os }}-${{ strategy.job-index }}
+          path: ./wheelhouse/*.whl
 
       - name: Build sdist
         run: python -m build --sdist --outdir dist
@@ -40,7 +58,6 @@ jobs:
         with:
           name: built-packages
           path: |
-            wheelhouse/
             dist/*.tar.gz
 
   test-wheels:

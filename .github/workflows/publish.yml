@@ -49,6 +49,9 @@ jobs:
       matrix:
         os: [ubuntu-latest, windows-latest, macos-latest]
         python-version: ["3.10", "3.11", "3.12", "3.13"]
+    
+    env:
+      TOXENV: py${{ matrix.python-version }}
 
     steps:
       - uses: actions/checkout@v4
@@ -69,7 +72,7 @@ jobs:
           python -m pip install wheelhouse/*.whl
 
       - name: Run tox
-        run: tox -e py${{ matrix.python-version | replace('.', '') }}
+        run: tox
 
   test-sdist:
     name: Test sdist on ${{ matrix.os }} / Python ${{ matrix.python-version }}
@@ -79,7 +82,10 @@ jobs:
       matrix:
         os: [ubuntu-latest, windows-latest, macos-latest]
         python-version: ["3.10", "3.11", "3.12", "3.13"]
-
+    
+    env:
+      TOXENV: py${{ matrix.python-version }}
+    
     steps:
       - uses: actions/checkout@v4
 
@@ -99,7 +105,7 @@ jobs:
           python -m pip install dist/*.tar.gz
 
       - name: Run tox
-        run: tox -e py${{ matrix.python-version | replace('.', '') }}
+        run: tox
 
   test-alpine:
     name: Test on Alpine (musllinux)

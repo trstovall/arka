@@ -19,16 +19,18 @@ jobs:
           python-version: "3.11"
 
       - name: Install build tools
-        run: python -m pip install build cibuildwheel
+        run: |
+          python -m pip install --upgrade pip
+          pip install build cibuildwheel
 
-      - name: Build wheels
+      - name: Build wheels (Linux host, no Docker)
         run: python -m cibuildwheel --output-dir wheelhouse
         env:
           CIBW_BUILD: "cp310-* cp311-* cp312-* cp313-*"
-          CIBW_ARCHS_LINUX: "x86_64 aarch64"
+          CIBW_SKIP: "*-manylinux*"
+          CIBW_BUILD_FRONTEND: "build"
           CIBW_ARCHS_MACOS: "x86_64 arm64"
           CIBW_ARCHS_WINDOWS: "AMD64"
-          CIBW_ARCHS: "auto"
 
       - name: Build sdist
         run: python -m build --sdist --outdir dist
@@ -49,7 +51,7 @@ jobs:
       matrix:
         os: [ubuntu-latest, windows-latest, macos-latest]
         python-version: ["3.10", "3.11", "3.12", "3.13"]
-    
+
     env:
       TOXENV: py${{ matrix.python-version }}
 
@@ -82,10 +84,10 @@ jobs:
       matrix:
         os: [ubuntu-latest, windows-latest, macos-latest]
         python-version: ["3.10", "3.11", "3.12", "3.13"]
-    
+
     env:
       TOXENV: py${{ matrix.python-version }}
-    
+
     steps:
       - uses: actions/checkout@v4
 
@@ -108,7 +110,7 @@ jobs:
         run: tox
 
   test-alpine:
-    name: Test on Alpine (musllinux)
+    name: Test on Alpine (musllinux) for wheels and sdist
     needs: build
     runs-on: ubuntu-latest
     container:
@@ -119,19 +121,23 @@ jobs:
         run: |
           apk add --no-cache python3 py3-pip py3-wheel py3-setuptools py3-tox
 
-      - name: Download built wheels
+      - name: Download built packages
         uses: actions/download-artifact@v4
         with:
           name: built-packages
-          path: wheelhouse/
+          path: /work
 
-      - name: Install wheel + tox
+      - name: Test wheel installation with tox
         run: |
-          pip install wheelhouse/*.whl
+          pip install /work/*.whl
           pip install tox
+          tox
 
-      - name: Run tox
-        run: tox
+      - name: Clean wheel install and test sdist
+        run: |
+          pip uninstall -y your-package-name || true
+          pip install /work/*.tar.gz
+          tox
 
   publish:
     name: Publish to PyPI

@@ -236,7 +236,7 @@ jobs:
   publish:
     name: Publish to PyPI
     runs-on: ubuntu-latest
-    needs: [test-wheels, test-sdist, test-alpine, test-emulated]
+    needs: [test-wheels, test-sdist, test-alpine]
 
     steps:
       - name: Download built sdist

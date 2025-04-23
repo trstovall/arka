@@ -224,6 +224,7 @@ jobs:
           echo "Found wheel: $wheel"
           python -m venv /tmp/venv
           source /tmp/venv/bin/activate
+          pip install --upgrade pip
           pip install tox
           pip install "$wheel"
           tox

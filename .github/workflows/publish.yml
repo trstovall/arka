@@ -218,6 +218,7 @@ jobs:
           PYTHON_VERSION: ${{ matrix.python-version }}
         run: |
           set -e
+          export VIRTUALENV_PIP=21.1.1
           PY_TAG="cp$(echo $PYTHON_VERSION | tr -d .)"
           wheel=$(find /wheels -name "*${PY_TAG}*musllinux*_x86_64.whl" | head -n 1)
 
@@ -234,6 +235,7 @@ jobs:
         env:
           TOXENV: py${{ matrix.python-version }}
         run: |
+          export VIRTUALENV_PIP=21.1.1
           SDIST=$(ls /work/*.tar.gz | head -n 1)
           source /tmp/venv/bin/activate
           pip install "$SDIST"

@@ -198,7 +198,7 @@ jobs:
     steps:
       - name: Install Alpine dependencies
         run: |
-          apk add --no-cache python3 py3-pip py3-wheel py3-setuptools py3-tox py3-venv bash
+          apk add --no-cache python3 py3-pip py3-wheel py3-setuptools py3-tox py3-virtualenv bash
 
       - name: Download sdist
         uses: actions/download-artifact@v4

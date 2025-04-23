@@ -106,10 +106,12 @@ jobs:
           path: wheelhouse/
 
       - name: Install tox and wheel
+        env:
+          PYTHON_VERSION: ${{ matrix.python-version }}
         run: |
           python -m pip install tox
 
-          PY_TAG=cp${{ matrix.python-version//./ }}
+          PY_TAG="cp$(echo \"$PYTHON_VERSION\" | tr -d .)"
 
           case "${{ matrix.os }}" in
             ubuntu-latest)
@@ -167,8 +169,10 @@ jobs:
 
     steps:
       - name: Install Python and deps
+        env:
+          PYTHON_VERSION: ${{ matrix.python-version }}
         run: |
-          PY_TAG=cp${{ matrix.python-version//./ }}
+          PY_TAG="cp$(echo \"$PYTHON_VERSION\" | tr -d .)"
           /opt/python/${PY_TAG}-${PY_TAG}*/bin/pip install tox
 
       - name: Download wheels
@@ -178,8 +182,10 @@ jobs:
           path: wheelhouse/
 
       - name: Install and test wheel
+        env:
+          PYTHON_VERSION: ${{ matrix.python-version }}
         run: |
-          PY_TAG=cp${{ matrix.python-version//./ }}
+          PY_TAG="cp$(echo \"$PYTHON_VERSION\" | tr -d .)"
           WHEEL=$(ls wheelhouse/*${PY_TAG}*${{ matrix.arch }}*.whl | head -n 1)
           /opt/python/${PY_TAG}-${PY_TAG}*/bin/pip install "$WHEEL"
           /opt/python/${PY_TAG}-${PY_TAG}*/bin/tox
@@ -250,9 +256,10 @@ jobs:
       - name: Test wheel for musllinux on Python ${{ matrix.python-version }}
         env:
           TOXENV: py${{ matrix.python-version }}
+          PYTHON_VERSION: ${{ matrix.python-version }}
         run: |
           set -e
-          PY_TAG=cp${{ matrix.python-version//./ }}
+          PY_TAG="cp$(echo \"$PYTHON_VERSION\" | tr -d .)"
           wheel=$(find /wheels -name "*${PY_TAG}*musllinux_1_1_x86_64.whl" | head -n 1)
 
           echo "Found wheel: $wheel"

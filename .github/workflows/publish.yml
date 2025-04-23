@@ -189,7 +189,7 @@ jobs:
     needs: [build, build-sdist]
     runs-on: ubuntu-latest
     container:
-      image: quay.io/pypa/musllinux_1_1_x86_64
+      image: quay.io/pypa/musllinux_1_2_x86_64
 
     strategy:
       matrix:

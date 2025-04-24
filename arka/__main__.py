@@ -2,5 +2,5 @@
 import sys
 
 print(''''
-arka [coin | miner | chain | cli] [...]
+arka [start | stop | status | wallet | miner | chain | cli] [...]
 ''')

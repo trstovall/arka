@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "arka"
-version = "0.0.1"
+version = "0.0.2"
 requires-python = ">=3.10"
 authors = [
   {name = "T. R. Stovall", email = "arkacoin.io@gmail.com"}
@@ -27,3 +27,4 @@ Repository = "https://github.com/trstovall/arka.git"
 
 [tool.cibuildwheel]
 before-build = "pip install --upgrade pkginfo"
+

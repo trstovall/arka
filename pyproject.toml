@@ -3,28 +3,6 @@
 requires = ["setuptools"]
 build-backend = "setuptools.build_meta"
 
-[project]
-name = "arka"
-version = "0.0.2"
-requires-python = ">=3.10"
-authors = [
-  {name = "T. R. Stovall", email = "arkacoin.io@gmail.com"}
-]
-maintainers = [
-  {name = "T. R. Stovall", email = "arkacoin.io@gmail.com"}
-]
-description = "A community managed digital money supply"
-readme = "README.md"
-license = "MIT"
-license-files = ["LICENSE"]
-keywords = ["arka", "block", "chain", "blockchain", "ledger", "crypto", "currency", "money", "fintech"]
-classifiers = [
-  "Programming Language :: Python"
-]
-
-[project.urls]
-Repository = "https://github.com/trstovall/arka.git"
-
 [tool.cibuildwheel]
 before-build = "pip install --upgrade pkginfo"
 

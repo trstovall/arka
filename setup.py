@@ -28,7 +28,7 @@ setup(
         'Programming Language :: Python :: 3.11',
         'Programming Language :: Python :: 3.12',
         'Programming Language :: Python :: 3.13',
-    ]
+    ],
     packages=find_packages(where="."),
     python_requires=">=3.10, <4",
     ext_modules=[_crypto]

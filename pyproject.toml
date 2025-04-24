@@ -25,3 +25,6 @@ classifiers = [
 [project.urls]
 Repository = "https://github.com/trstovall/arka.git"
 
+[tool.cibuildwheel]
+before-build = "pip install --upgrade pkginfo"
+

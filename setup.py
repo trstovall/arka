@@ -11,7 +11,7 @@ _crypto = Extension(
 
 setup(
     name="arka",
-    version="0.0.1",
+    version="0.0.2",
     packages=find_packages(where="."),
     python_requires=">=3.10, <4",
     ext_modules=[_crypto]

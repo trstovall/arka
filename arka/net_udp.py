@@ -1,6 +1,8 @@
 
 from __future__ import annotations
-from typing import Callable, Generator, Coroutine, Any
+from typing import Generator, Callable, Coroutine, Any
+from collections.abc import Buffer
+import types
 import asyncio
 import time
 import logging
@@ -13,60 +15,109 @@ from os import urandom
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
 
-# Constants
-BLACKLIST_TIMEOUT = 600 # seconds
-ACK_TIMEOUT = 1         # seconds
-RECV_TIMEOUT = 0.1      # seconds
-SEND_TIMEOUT = 0.1      # seconds
-KEEPALIVE_TIMEOUT = 15  # seconds
-MAX_RETRIES = 5
-RETRY_DELAY = 2         # seconds
-BACKOFF_MULTIPLIER = 1.5
-ARKA_BANNER = b'arka'
-MAX_FRAGMENTS = 2**13
-FRAGMENT_SIZE = 1024
-
 # Message Types
-MSG_ACK = 1
-MSG_PEERS_UPDATE = 4
-MSG_MEET_REQUEST = 5
-MSG_MEET_INTRO = 6
-MSG_SUB_TX_HASH = 7
-MSG_PUB_TX_HASH = 8
-MSG_TX_REQUEST = 9
-MSG_TX_RESPONSE = 10
-MSG_SUB_BLOCK_HASH = 11
-MSG_PUB_BLOCK_HASH = 12
-MSG_BLOCK_REQUEST = 13
-MSG_BLOCK_RESPONSE = 14
-MSG_ERROR = 255
+class MSG:
+    
+    # Peer discovery
+    PEERS_SUB = b'\x00'
+    PEERS_PUB = b'\x01'
+    PEERS_REQ = b'\x02'
+    PEERS_RES = b'\x03'
+
+    # Transaction gossip
+    TX_SUB = b'\x10'
+    TX_PUB = b'\x11'
+    TX_REQ = b'\x12'
+    TX_RES = b'\x13'
+
+    # Block gossip
+    BLOCK_SUB = b'\x20'
+    BLOCK_PUB = b'\x21'
+    BLOCK_REQ = b'\x22'
+    BLOCK_RES = b'\x23'
+
+    # Request to send/recv tips for good peer behavior
+    TIP_SUB = b'\x30'
+    TIP_PUB = b'\x31'
+    TIP_REQ = b'\x32'
+    TIP_RES = b'\x33'
+
+    # Manage Proof-of-Work subnet
+    WORK_SUB = b'\x40'
+    WORK_PUB = b'\x41'
+    WORK_REQ = b'\x42'
+    WORK_RES = b'\x43'
+
+    # EOF, gracefully close connection after peers exchange NONE
+    NONE = b'\xfd'
+
+    # Ignored, but planned conditional responses
+    EXT = b'\xfe'
+
+    # Ignored, but planned conditional responses
+    ERROR = b'\xff'
 
 
 # Type aliases
 Address = tuple[str, int]
-Datagram = bytes
-MessageList = bytes
-Message = bytes | bytearray
+Datagram = Buffer
+MessageList = Buffer
+Message = Buffer
 
 
 ### Helpers
 
-def varint_to_bytes(n: int) -> bytes:
+def mlen_to_bytes(n: int) -> bytes:
     if n < 0x80:
-        n = bytes([n << 1])
+        return (n << 1).to_bytes(1, 'little')
     elif n < 0x4000:
-        n = struct.pack('<H', (n << 2) | 1)
+        return ((n << 2) | 1).to_bytes(2, 'little')
+    elif n < 0x2000_0000:
+        return ((n << 3) | 0b11).to_bytes(4, 'little')
+    elif n < 0x1000_0000_0000_0000:
+        return ((n << 4) | 0b111).to_bytes(8, 'little')
     else:
-        n = struct.pack('<I', (n << 2) | 3)
-    return n
+        return b'\x0f' + n.to_bytes(8, 'little')
 
-def parse_message_list(x: MessageList) -> list[Message]:
-    n = x[0]
+def parse_mlen(x: Buffer, pos: int = 0) -> tuple[int, int] | None:
+    if pos >= len(x):
+        return
+    n = x[pos]
     if n & 1:
-        if n & 2:
-            return struct.unpack('<I', x)[0] >> 2
-        return struct.unpack('<H', x)[0] >> 2
-    return n >> 1
+        try:
+            if n & 0b10:
+                if n & 0b100:
+                    if n & 0b1000:
+                        return struct.unpack_from('<Q', x, pos + 1), 9
+                    return struct.unpack_from('<Q', x, pos) >> 4, 8
+                return struct.unpack_from('<I', x, pos) >> 3, 4
+            return struct.unpack_from('<H', x, pos) >> 2, 2
+        except struct.error as e:
+            return
+    return n >> 1, 1
+
+def parse_message_list(x: MessageList) -> list[Message] | None:
+    msgs: list[Message] = []
+    pos = 0
+    while pos < len(x):
+        match parse_mlen(x, pos):
+            case mlen, nread:
+                pos += nread
+                if pos + mlen > len(x):
+                    return
+                msgs.append(bytes(x[pos:pos+mlen]))
+                pos += mlen
+            case _:
+                return
+    return msgs
+
+def interleave_msg_size(x: list[Message]) -> Generator[bytes, None, None]:
+    for msg in x:
+        yield mlen_to_bytes(len(msg))
+        yield msg
+
+def pack_message_list(x: list[Message]) -> MessageList:
+    return b''.join(interleave_msg_size(x))
 
 def ipv6_to_bytes(ipv6_str: str) -> bytes:
     try:
@@ -97,29 +148,8 @@ def bytes_to_addr(binary: bytes) -> Address:
 
 ### Message serializers
 
-def msg_ack(acks: list[tuple[int, int]]) -> Message:
-    buffer = [bytes([MSG_ACK]), varint_to_bytes(len(acks))]
-    if not acks:
-        return b''.join(buffer)
-    min_ack = acks[0][0]
-    max_ack = acks[-1][1]
-    diff = max_ack - min_ack
-    if diff < 0x100:
-        format = '<BB'
-        ack_len = 1
-    elif diff < 0x10000:
-        format = '<HH'
-        ack_len = 2
-    else:
-        raise ValueError('Too many acks to serialize.')
-    buffer.append(struct.pack('<QB', min_ack, ack_len))
-    for s, e in acks:
-        buffer.append(struct.pack(format, s, e))
-    return b''.join(buffer)
-
-
 def msg_peers_update(added: set[Address], removed: set[Address]) -> Message:
-    msg_type = bytes([MSG_PEERS_UPDATE])
+    msg_type = MSG.PEERS_UPDATE
     num_added = len(added)
     if num_added < 0x80:
         num_added = bytes([num_added << 1])
@@ -140,13 +170,11 @@ def msg_peers_update(added: set[Address], removed: set[Address]) -> Message:
         + [addr_to_bytes(x) for x in removed]
     )
 
-
 def msg_meet_request(neighbor: Address) -> Message:
-    return bytes([MSG_MEET_REQUEST]) + addr_to_bytes(neighbor)
-
+    return MSG.MEET_REQUEST + addr_to_bytes(neighbor)
 
 def msg_meet_intro(neighbor: Address) -> Message:
-    return bytes([MSG_MEET_INTRO]) + addr_to_bytes(neighbor)
+    return MSG.MEET_INTRO + addr_to_bytes(neighbor)
 
 
 ### Message deserializers
@@ -210,15 +238,153 @@ class MeshProtocol(asyncio.DatagramProtocol):
                 # Drop Datagrams from blacklisted peers
                 return
             del self.blacklist[addr]
-        peer = self.mesh.peers.get(addr) or self.mesh.connect(addr)
-        # Push Datagram into Socket pipeline
-        peer.frag_q.put_nowait(data)
+        # Route Datagram to mesh.peers[addr]
+        peer = self.mesh.peers.get(addr)
+        if peer is None:
+            peer = self.mesh.accept(addr, data)
+            if peer is None:
+                return
+        peer.datagram_received(data)
 
     def error_received(self, exc: OSError):
         logging.err(f'Error receieved: {exc}')
 
 
 ### Socket
+
+class Socket(object):
+    _HDR = struct.Struct('<IIB')    # seq, ack, flags
+    FLAG_SYN = 0x1
+    FLAG_ACK = 0x2
+    FLAG_SACK = 0x4
+    FLAG_FIN = 0x8
+
+    # Congestion control defaults
+    INITIAL_CWND = 16.0
+    INITIAL_SSTHRESH = 1000.0
+    MAX_RETRIES = 5
+
+    # Timers
+    RESEND_TIMEOUT = 0.2
+    BACKOFF_MULTIPLIER = 1.5
+    DELAYED_ACK_MS = 0.04
+    KEEPALIVE_SECS = 15.0
+    TIMEOUT_SECS = 60.0
+
+    MAX_PAYLOAD = 1024
+    MAX_MSG_SIZE = 2**23
+
+    def __init__(self,
+        addr: Address,
+        transport: asyncio.DatagramTransport,
+        on_close: Callable[[Address, bool], None] | None = None
+    ):
+        self.addr = addr
+        self.transport = transport
+        self.on_close = on_close
+
+        # sequence numbers
+        self.seq = int.from_bytes(urandom(4))
+        self.ack = 0
+        self.sack: int | None = None
+        self.peer_seq: int | None = None
+        self.peer_ack: int | None = None
+
+        # send/recv buffers
+        self._sent: dict[int, tuple[float, bytes]] = {}
+        self._recd: dict[int, bytes] = {}
+        self._reader = asyncio.StreamReader()
+
+        # congestion control
+        self.cwnd = self.INITIAL_CWND
+        self.ssthresh = self.INITIAL_SSTHRESH
+        self._dup_ack_count = 0
+        self._in_fast_recovery = False
+        self._wait_ack: asyncio.Future[None] | None = None
+
+        # retry counts
+        self._retries: dict[int, int] = {}
+
+        # state
+        self.closed: asyncio.Future[None] = asyncio.Future()
+        self.last_send_time = time.monotonic()
+        self.last_recv_time = time.monotonic()
+
+        # background tasks
+        self._resend_task: asyncio.Task | None = None
+        self.delayed_ack_task: asyncio.Task | None = None
+    
+    async def send(self, data: bytes):
+        if len(data) > self.MAX_MSG_SIZE:
+            raise ValueError('Message is too large to send.')
+        mlen = mlen_to_bytes(len(data))
+        if len(mlen) + len(data) <= self.MAX_PAYLOAD:
+            await self._send_datagram(mlen + data)
+            return
+        async with self._send_lock:
+            offset = self.MAX_PAYLOAD - len(mlen)
+            await self._send_datagram(mlen + data[:offset])
+            for i in range(offset, len(data), self.MAX_PAYLOAD):
+                await self._send_datagram(data[i:i+self.MAX_PAYLOAD])
+
+    async def _send_datagram(self, data: bytes):
+        while len(self._sent) > self.cwnd:
+            self._wait_ack = asyncio.Future()
+            await self._wait_ack
+        self._wait_ack = None
+        flags = self.FLAG_ACK
+        if self.sack is None:
+            sack = b''
+        else:
+            sack = struct.pack('<I', self.sack)
+            flags |= self.FLAG_SACK
+        hdr = self._HDR.pack(self.seq, self.ack, flags)
+        pkt = b''.join([hdr, sack, data])
+        self.transport.sendto(pkt, self.addr)
+        now = time.monotonic()
+        self.last_send_time = now
+        self._sent[self.seq] = now, pkt, 0
+        self.seq = (self.seq + 1) & 0xffffffff
+
+    async def recv(self) -> bytes | None:
+        if self.closed:
+            return
+        mlen = await self._reader.readexactly(1)
+        if mlen[0] & 1:
+            if mlen[0] & 2:
+                if mlen[0] & 4:
+                    await self.close()
+                    return
+                mlen += await self._reader.readexactly(3)
+                mlen = int.from_bytes(mlen, 'little') >> 3
+            else:
+                mlen += await self._reader.readexactly(1)
+                mlen = int.from_bytes(mlen, 'little') >> 2
+        else:
+            mlen = mlen[0] >> 1
+        if mlen <= self.MAX_MSG_SIZE:
+            return await self._reader.readexactly(mlen)
+
+    def datagram_received(self, data: bytes):
+        if len(data) < self._HDR.size:
+            return
+        now = time.monotonic()
+        self.last_recv_time = now
+        seq, ack, flags = self._HDR.unpack_from(data)
+        offset = self._HDR.size
+        if flags & self.FLAG_SACK:
+            sack = struct.unpack_from('<I', data, offset)[0]
+        self._process_ack(ack)
+
+    async def accept(self, addr: Address, data: Datagram) -> Socket:
+        pass
+
+    async def connect(self, addr: Address) -> Socket:
+        pass
+
+    async def close(self):
+        pass
+
 
 class Socket(object):
 
@@ -239,20 +405,23 @@ class Socket(object):
     def connect(self) -> Socket:
         if not self.connected:
             self.connected = True
-            self.seq_num: int = 0   # Strictly increasing number for next fragment
-            self.unacked: int = 0
             self.sent: dict[int, tuple[float, int, Datagram]] = {}
+            self.window: int = WINDOW
+            self.seq: int = int.from_bytes(urandom(4), 'little')
+            self.ack: int | None = None
+            self.sack: int | None = None
+            self.peer_window: int | None = None
+            self.peer_seq: int | None = None
+            self.peer_ack: int | None = None
+            self.peer_sack: int | None = None
             self.frag_q: asyncio.Queue[Datagram] = asyncio.Queue()
             self.recv_q: asyncio.Queue[Message] = asyncio.Queue()
             self.send_q: asyncio.Queue[Message] = asyncio.Queue()
-            self.s_ack_q: asyncio.Queue[tuple[int, int]] = asyncio.Queue()
-            self.r_ack_q: asyncio.Queue[tuple[int, int]] = asyncio.Queue()
+            self.ack_q: asyncio.Queue[tuple[int, int | None]] = asyncio.Queue()
             self.loop.create_task(self.handle_frag_q())
             if self.handle_recv_q is not None:
-                self.loop.create_task(self.handle_recv_q())
+                self.loop.create_task(self.handle_recv_q(self))
             self.loop.create_task(self.handle_send_q())
-            self.loop.create_task(self.handle_s_ack_q())
-            self.loop.create_task(self.handle_r_ack_q())
         return self
 
     def close(self, blacklist: bool = True):
@@ -261,8 +430,6 @@ class Socket(object):
             self.frag_q.put_nowait(None)
             self.recv_q.put_nowait(None)
             self.send_q.put_nowait(None)
-            self.s_ack_q.put_nowait(None)
-            self.r_ack_q.put_nowait(None)
             if self.handle_close is not None:
                 self.handle_close(self, blacklist)
 
@@ -274,6 +441,7 @@ class Socket(object):
         acks: dict[int, int] = {}
         min_recd: int = -1
         max_recd: int = -1
+        last_seen: float = time.time()
         while self.connected:
             # Consume Datagrams from frag_q
             timeout: float = time.time() + RECV_TIMEOUT
@@ -282,11 +450,12 @@ class Socket(object):
                     data: Datagram = self.frag_q.get_nowait()
                 else:
                     try:
+                        wait = max(0, timeout - time.time())
                         data: Datagram = await asyncio.wait_for(
-                            fut=self.frag_q.get(), timeout=RECV_TIMEOUT
+                            fut=self.frag_q.get(), timeout=wait
                         )
                     except asyncio.TimeoutError as e:
-                        if time.time() > self.last_seen + KEEPALIVE_TIMEOUT * MAX_RETRIES:
+                        if time.time() > last_seen + KEEPALIVE_TIMEOUT * MAX_RETRIES:
                             # Terminate pipeline when peer does not send keepalive
                             self.close()
                             return

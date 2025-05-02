@@ -289,9 +289,10 @@ class Socket(object):
         self.sack: int | None = None
         self.peer_seq: int | None = None
         self.peer_ack: int | None = None
+        self.peer_sack: int | None = None
 
         # send/recv buffers
-        self._sent: dict[int, tuple[float, bytes]] = {}
+        self._sent: dict[int, tuple[int, float, bytes]] = {}
         self._recd: dict[int, bytes] = {}
         self._reader = asyncio.StreamReader()
 
@@ -302,17 +303,19 @@ class Socket(object):
         self._in_fast_recovery = False
         self._wait_ack: asyncio.Future[None] | None = None
 
-        # retry counts
-        self._retries: dict[int, int] = {}
-
         # state
-        self.closed: asyncio.Future[None] = asyncio.Future()
+        self.closed: bool = False
         self.last_send_time = time.monotonic()
         self.last_recv_time = time.monotonic()
 
+        # RTT + RTO
+        self._srtt: float | None = None
+        self._rttvar: float | None = None
+        self._rto: float = 0.5
+
         # background tasks
         self._resend_task: asyncio.Task | None = None
-        self.delayed_ack_task: asyncio.Task | None = None
+        self._ack_task: asyncio.Task | None = None
     
     async def send(self, data: bytes):
         if len(data) > self.MAX_MSG_SIZE:
@@ -349,21 +352,24 @@ class Socket(object):
     async def recv(self) -> bytes | None:
         if self.closed:
             return
-        mlen = await self._reader.readexactly(1)
-        if mlen[0] & 1:
-            if mlen[0] & 2:
-                if mlen[0] & 4:
-                    await self.close()
-                    return
-                mlen += await self._reader.readexactly(3)
-                mlen = int.from_bytes(mlen, 'little') >> 3
+        try:
+            mlen = await self._reader.readexactly(1)
+            if mlen[0] & 1:
+                if mlen[0] & 2:
+                    if mlen[0] & 4:
+                        await self.close()
+                        return
+                    mlen += await self._reader.readexactly(3)
+                    mlen = int.from_bytes(mlen, 'little') >> 3
+                else:
+                    mlen += await self._reader.readexactly(1)
+                    mlen = int.from_bytes(mlen, 'little') >> 2
             else:
-                mlen += await self._reader.readexactly(1)
-                mlen = int.from_bytes(mlen, 'little') >> 2
-        else:
-            mlen = mlen[0] >> 1
-        if mlen <= self.MAX_MSG_SIZE:
-            return await self._reader.readexactly(mlen)
+                mlen = mlen[0] >> 1
+            if mlen <= self.MAX_MSG_SIZE:
+                return await self._reader.readexactly(mlen)
+        except asyncio.IncompleteReadError as e:
+            return
 
     def datagram_received(self, data: bytes):
         if len(data) < self._HDR.size:
@@ -379,7 +385,7 @@ class Socket(object):
     async def accept(self, addr: Address, data: Datagram) -> Socket:
         pass
 
-    async def connect(self, addr: Address) -> Socket:
+    async def connect(self) -> Socket:
         pass
 
     async def close(self):

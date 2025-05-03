@@ -67,6 +67,9 @@ Message = Buffer
 
 ### Helpers
 
+def seq_lt(a: int, b: int) -> bool:
+    return (a - b) & 0xffffffff > 0x8fffffff
+
 def mlen_to_bytes(n: int) -> bytes:
     if n < 0x80:
         return (n << 1).to_bytes(1, 'little')
@@ -371,21 +374,72 @@ class Socket(object):
         except asyncio.IncompleteReadError as e:
             return
 
-    def datagram_received(self, data: bytes):
+    def datagram_received(self, data: Datagram):
         if len(data) < self._HDR.size:
-            return
+            # Close Socket on malformed packet
+            return self.close()
         now = time.monotonic()
         self.last_recv_time = now
+        # Unpack header
         seq, ack, flags = self._HDR.unpack_from(data)
         offset = self._HDR.size
+        # Unpack SACK
         if flags & self.FLAG_SACK:
-            sack = struct.unpack_from('<I', data, offset)[0]
-        self._process_ack(ack)
+            if len(data) < offset + 4:
+                # Close Socket on malformed packet
+                return self.close()
+            self.peer_sack = struct.unpack_from('<I', data, offset)[0]
+            offset += 4
+        else:
+            self.peer_sack = None
+        # Process payload
+        if (
+            offset < len(data)
+            and len(self._reader._buffer) <= self.MAX_READER_SIZE
+            and seq_lt(self.ack, seq)
+            and (seq - self.ack) & 0xffffffff <= self.MAX_RECV_WINDOW
+        ):
+            self._recd[seq] = data[offset:]
+            # Buffer self._recd into self._reader
+            while True:
+                expected = (self.ack + 1) & 0xffffffff
+                data = self._recd.pop(expected, None)
+                if data is None:
+                    break
+                self._reader.feed_data(data)
+                self.ack = expected
+            # Ensure ACK is sent
+            if self._ack_task is None:
+                self._ack_task = asyncio.create_task(self._ensure_ack())
+        # Process ACK
+        if seq_lt(ack, self.seq):
+            acked = False
+            while not seq_lt(ack, self.peer_ack):
+                match self._sent.pop(self.peer_ack, None):
+                    case attempts, ts, data:
+                        acked = True
+                        # Update smoothed round trip time and resend timeout
+                        rtt = now - ts
+                        if self._rtt is None:
+                            self._srtt = rtt
+                            self._rttvar = rtt / 2
+                        else:
+                            delta = rtt - self._srtt
+                            self._srtt += 0.125 * delta
+                            self._rttvar += 0.25 * (abs(delta) - self._rttvar)
+                            self._rto = self._srtt + max(0.01, 4 * self._rttvar)
+                self.peer_ack = (self.peer_ack + 1) & 0xffffffff
+            if acked and self._wait_ack is not None:
+                # Notify _send_datagram that _sent has been reduced
+                self._wait_ack.set_result(None)
+        if not self._sent and self._resend_task is not None:
+            # Cancel resend if sent is empty
+            self._resend_task.cancel()
 
-    async def accept(self, addr: Address, data: Datagram) -> Socket:
+    async def accept(self, data: Datagram) -> Socket | None:
         pass
 
-    async def connect(self) -> Socket:
+    async def connect(self) -> Socket | None:
         pass
 
     async def close(self):

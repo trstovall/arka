@@ -289,10 +289,7 @@ class Socket(object):
         # sequence numbers
         self.seq = int.from_bytes(urandom(4))
         self.ack = 0
-        self.sack: int | None = None
-        self.peer_seq: int | None = None
         self.peer_ack: int | None = None
-        self.peer_sack: int | None = None
 
         # send/recv buffers
         self._sent: dict[int, tuple[int, float, bytes]] = {}
@@ -339,13 +336,8 @@ class Socket(object):
             await self._wait_ack
         self._wait_ack = None
         flags = self.FLAG_ACK
-        if self.sack is None:
-            sack = b''
-        else:
-            sack = struct.pack('<I', self.sack)
-            flags |= self.FLAG_SACK
         hdr = self._HDR.pack(self.seq, self.ack, flags)
-        pkt = b''.join([hdr, sack, data])
+        pkt = b''.join([hdr, data])
         self.transport.sendto(pkt, self.addr)
         now = time.monotonic()
         self.last_send_time = now
@@ -383,55 +375,65 @@ class Socket(object):
         # Unpack header
         seq, ack, flags = self._HDR.unpack_from(data)
         offset = self._HDR.size
-        # Unpack SACK
-        if flags & self.FLAG_SACK:
-            if len(data) < offset + 4:
-                # Close Socket on malformed packet
-                return self.close()
-            self.peer_sack = struct.unpack_from('<I', data, offset)[0]
-            offset += 4
-        else:
-            self.peer_sack = None
         # Process payload
         if (
             offset < len(data)
             and len(self._reader._buffer) <= self.MAX_READER_SIZE
-            and seq_lt(self.ack, seq)
             and (seq - self.ack) & 0xffffffff <= self.MAX_RECV_WINDOW
         ):
             self._recd[seq] = data[offset:]
-            # Buffer self._recd into self._reader
+            # Move data in self._recd into self._reader
             while True:
-                expected = (self.ack + 1) & 0xffffffff
-                data = self._recd.pop(expected, None)
+                data = self._recd.pop(self.ack, None)
                 if data is None:
                     break
                 self._reader.feed_data(data)
-                self.ack = expected
+                self.ack = (self.ack + 1) & 0xffffffff
             # Ensure ACK is sent
             if self._ack_task is None:
                 self._ack_task = asyncio.create_task(self._ensure_ack())
         # Process ACK
         if seq_lt(ack, self.seq):
-            acked = False
-            while not seq_lt(ack, self.peer_ack):
-                match self._sent.pop(self.peer_ack, None):
-                    case attempts, ts, data:
-                        acked = True
-                        # Update smoothed round trip time and resend timeout
-                        rtt = now - ts
-                        if self._rtt is None:
-                            self._srtt = rtt
-                            self._rttvar = rtt / 2
-                        else:
-                            delta = rtt - self._srtt
-                            self._srtt += 0.125 * delta
-                            self._rttvar += 0.25 * (abs(delta) - self._rttvar)
-                            self._rto = self._srtt + max(0.01, 4 * self._rttvar)
-                self.peer_ack = (self.peer_ack + 1) & 0xffffffff
-            if acked and self._wait_ack is not None:
-                # Notify _send_datagram that _sent has been reduced
-                self._wait_ack.set_result(None)
+            if ack == self._last_ack_recd:
+                self._dup_ack_count += 1
+                if self._dup_ack_count == 3:
+                    # Fast retransmit
+                    match self._sent.get(ack):
+                        case retries, ts, data:
+                            self.transport.sendto(data, self.addr)
+                            # Enter fast recovery
+                            self.ssthresh = max(self.cwnd // 2, 1)
+                            self.cwnd = self.ssthresh + 3
+            else:
+                self._last_ack_recd = ack
+                self._dup_ack_count = 0
+                acked = False
+                while seq_lt(self.peer_ack, ack):
+                    # Clear delivered packets sent
+                    match self._sent.pop(self.peer_ack, None):
+                        case attempts, ts, data:
+                            acked = True
+                            # Update smoothed round trip time and resend timeout
+                            rtt = now - ts
+                            if self._rtt is None:
+                                self._srtt = rtt
+                                self._rttvar = rtt / 2
+                            else:
+                                delta = rtt - self._srtt
+                                self._srtt += 0.125 * delta
+                                self._rttvar += 0.25 * (abs(delta) - self._rttvar)
+                                self._rto = self._srtt + max(0.01, 4 * self._rttvar)
+                            # Congestion control
+                            if self.cwnd < self.ssthresh:
+                                # Slow start
+                                self.cwnd += 1
+                            else:
+                                # Congestion avoidance
+                                self.cwnd += 1 / self.cwnd
+                    self.peer_ack = (self.peer_ack + 1) & 0xffffffff
+                if acked and self._wait_ack is not None:
+                    # Notify _send_datagram that _sent has been reduced
+                    self._wait_ack.set_result(None)
         if not self._sent and self._resend_task is not None:
             # Cancel resend if sent is empty
             self._resend_task.cancel()

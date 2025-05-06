@@ -2,6 +2,7 @@
 from arka import net_udp as net
 
 import asyncio
+import pytest_asyncio
 import pytest
 
 class MockTransport:
@@ -23,12 +24,12 @@ class MockTransport:
         self._socks.clear()
 
 
-@pytest.fixture
+@pytest_asyncio.fixture
 def transport(event_loop):
     return MockTransport(event_loop)
 
 
-@pytest.fixture
+@pytest_asyncio.fixture
 def socket_pair(transport):
     A = net.Socket(('::1', 1), transport)
     B = net.Socket(('::1', 0), transport)

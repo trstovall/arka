@@ -2,14 +2,15 @@
 from __future__ import annotations
 from typing import Generator, Callable, Coroutine, Any
 from collections.abc import Buffer
+from os import urandom
+
 import types
 import asyncio
 import time
 import logging
 import struct
 import socket
-
-from os import urandom
+import heapq
 
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -270,6 +271,7 @@ class Socket(object):
 
         # send/recv buffers
         self._sent: dict[int, tuple[int, float, bytes]] = {}
+        self._sent_heap: list[float, int] = []
         self._recd: dict[int, bytes] = {}
         self._reader: asyncio.StreamReader = asyncio.StreamReader()
 
@@ -418,8 +420,7 @@ class Socket(object):
         mlen = mlen_to_bytes(len(data))
         if len(mlen) + len(data) <= self.MAX_PAYLOAD:
             await self._send_datagram(mlen + data)
-            return
-        async with self._send_lock:
+        else:
             offset = self.MAX_PAYLOAD - len(mlen)
             await self._send_datagram(mlen + data[:offset])
             for i in range(offset, len(data), self.MAX_PAYLOAD):
@@ -436,6 +437,7 @@ class Socket(object):
         now = time.monotonic()
         self._last_sent = now
         self._sent[self._seq] = 1, now, pkt
+        heapq.heappush(self._sent_heap, (now + self._rto, self._seq))
         self._seq = (self._seq + 1) & 0xffffffff
         if self._ensure_seq_task is None:
             self._ensure_seq_task = asyncio.create_task(self._ensure_seq())
@@ -458,7 +460,18 @@ class Socket(object):
             return self.close()
 
     async def _ensure_seq(self):
-        pass
+        while self._sent_heap:
+            now = time.monotonic()
+            while self._sent_heap and self._sent_heap[0][0] <= now:
+                seq = heapq.heappop(self._sent_heap)[1]
+                match self._sent.pop(seq, None):
+                    case attempts, ts, pkt:
+                        self.transport.sendto(pkt, self.addr)
+                        self._sent[seq] = attempts + 1, now, pkt
+                        heapq.heappush(self._sent_heap, (now + self._rto, seq))
+            if self._sent_heap:
+                wait = max(0.01, self._sent_heap[0][0] - time.monotonic())
+                await asyncio.sleep(wait)
 
     async def _ensure_ack(self):
         pass

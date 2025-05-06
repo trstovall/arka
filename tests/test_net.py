@@ -59,7 +59,7 @@ async def test_send_and_recv(socket_pair):
     await A.send(msg)
     got = await B.recv()
     assert got == msg
-    B.send(got)
+    await B.send(got)
     echo = await A.recv()
     assert echo == msg
 
@@ -74,7 +74,7 @@ async def test_send_and_recv_large(socket_pair):
     await A.send(msg)
     got = await B.recv()
     assert got == msg
-    B.send(got)
+    await B.send(got)
     echo = await A.recv()
     assert echo == msg
 
@@ -89,7 +89,7 @@ async def test_send_and_recv_max(socket_pair):
     await A.send(msg)
     got = await B.recv()
     assert got == msg
-    B.send(got)
+    await B.send(got)
     echo = await A.recv()
     assert echo == msg
 

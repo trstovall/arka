@@ -31,12 +31,12 @@ def event_loop():
 
 
 @pytest.fixture
-def transport(loop):
-    return MockTransport(loop)
+def transport(event_loop):
+    return MockTransport(event_loop)
 
 
 @pytest.fixture
-def socket_pair(loop, transport):
+def socket_pair(transport):
     A = net.Socket(('::1', 1), transport)
     B = net.Socket(('::1', 0), transport)
     transport.register(('::1', 0), A)

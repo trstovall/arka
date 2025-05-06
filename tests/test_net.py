@@ -6,7 +6,8 @@ import pytest
 
 class MockTransport:
 
-    def __init__(self):
+    def __init__(self, loop: asyncio.AbstractEventLoop):
+        self._loop = loop
         self._socks: dict[net.Address, net.Socket] = {}
     
     def register(self, addr: net.Address, sock: net.Socket):
@@ -14,7 +15,7 @@ class MockTransport:
     
     def sendto(self, data: bytes, addr: net.Address):
         if addr in self._socks:
-            asyncio.get_running_loop().call_soon(
+            self._loop.call_soon(
                 self._socks[addr].datagram_received, data, addr
             )
 
@@ -24,12 +25,14 @@ class MockTransport:
 
 @pytest.fixture
 def loop():
-    return asyncio.get_running_loop()
+    loop = asyncio.new_event_loop()
+    yield loop
+    loop.close()
 
 
 @pytest.fixture
-def transport():
-    return MockTransport()
+def transport(loop):
+    return MockTransport(loop)
 
 
 @pytest.fixture

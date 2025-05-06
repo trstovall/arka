@@ -443,44 +443,66 @@ class Socket(object):
             self._ensure_seq_task = asyncio.create_task(self._ensure_seq())
 
     async def _ensure_syn(self):
-        for attempt in range(self.MAX_ATTEMPTS):
-            if self._peer_ack is not None:
-                break
-            # Send SYN
-            seq, ack, flags = self._seq, self._ack, self.FLAG_SYN
-            if ack is None:
-                ack = 0
-            else:
-                # Send SYN + ACK
-                flags |= self.FLAG_ACK
-            hdr = self.HEADER.pack(seq, ack, flags)
-            self.transport.sendto(hdr, self.addr)
-            await asyncio.sleep(self._rto)
-        if self._peer_ack is None:
-            return self.close()
+        try:
+            for attempt in range(self.MAX_ATTEMPTS):
+                if self._peer_ack is not None:
+                    break
+                # Send SYN
+                seq, ack, flags = self._seq, self._ack, self.FLAG_SYN
+                if ack is None:
+                    ack = 0
+                else:
+                    # Send SYN + ACK
+                    flags |= self.FLAG_ACK
+                hdr = self.HEADER.pack(seq, ack, flags)
+                self.transport.sendto(hdr, self.addr)
+                await asyncio.sleep(self._rto)
+            if self._peer_ack is None:
+                self.close()
+        except asyncio.CancelledError as e:
+            pass
+        self._ensure_syn_task = None
 
     async def _ensure_seq(self):
-        while self._sent_heap:
-            now = time.monotonic()
-            while self._sent_heap and self._sent_heap[0][0] <= now:
-                seq = heapq.heappop(self._sent_heap)[1]
-                match self._sent.pop(seq, None):
-                    case attempts, ts, pkt:
-                        self.transport.sendto(pkt, self.addr)
-                        self._sent[seq] = attempts + 1, now, pkt
-                        heapq.heappush(self._sent_heap, (now + self._rto, seq))
-            if self._sent_heap:
-                wait = max(0.01, self._sent_heap[0][0] - time.monotonic())
-                await asyncio.sleep(wait)
+        try:
+            while self._sent_heap:
+                now = time.monotonic()
+                while self._sent_heap and self._sent_heap[0][0] <= now:
+                    seq = heapq.heappop(self._sent_heap)[1]
+                    match self._sent.pop(seq, None):
+                        case attempts, ts, pkt:
+                            self.transport.sendto(pkt, self.addr)
+                            self._sent[seq] = attempts + 1, now, pkt
+                            heapq.heappush(self._sent_heap, (now + self._rto, seq))
+                if self._sent_heap:
+                    wait = max(0.01, self._sent_heap[0][0] - time.monotonic())
+                    await asyncio.sleep(wait)
+        except asyncio.CancelledError as e:
+            pass
+        self._ensure_seq_task = None
 
     async def _ensure_ack(self):
-        pass
+        try:
+            ts = self._last_sent
+            while True:
+                await asyncio.sleep(self.DELAYED_ACK_TO)
+                if self._last_sent == ts:
+                    hdr = self.HEADER.pack(self._seq, self._ack, self.FLAG_ACK)
+                    self.transport.sendto(hdr, self.addr)
+                    break
+                else:
+                    ts = self._last_sent
+        except asyncio.CancelledError as e:
+            pass
+        self._ensure_ack_task = None
 
     def connect(self):
-        pass
+        if not self.closed and self._ensure_syn_task is None:
+            self._ensure_syn_task = asyncio.create_task(self._ensure_syn())
 
     def close(self):
-        pass
+        if not self.closed:
+            pass
 
 
 ### MeshProtocol

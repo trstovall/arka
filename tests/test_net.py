@@ -17,7 +17,7 @@ class MockTransport:
     def sendto(self, data: bytes, addr: net.Address):
         if addr in self._socks:
             self._loop.call_soon(
-                self._socks[addr].datagram_received, data, addr
+                self._socks[addr].datagram_received, data
             )
 
     def close(self):

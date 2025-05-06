@@ -14,7 +14,7 @@ class MockTransport:
     
     def sendto(self, data: bytes, addr: net.Address):
         if addr in self._socks:
-            asyncio.get_event_loop().call_soon(
+            asyncio.get_running_loop().call_soon(
                 self._socks[addr].datagram_received, data, addr
             )
 
@@ -24,7 +24,7 @@ class MockTransport:
 
 @pytest.fixture
 def loop():
-    return asyncio.get_event_loop()
+    return asyncio.get_running_loop()
 
 
 @pytest.fixture

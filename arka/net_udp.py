@@ -304,9 +304,9 @@ class Socket(object):
             if self.on_close is not None:
                 self.on_close(self.peer)
             if self._wait_connect is not None:
-                self._wait_connect.set_result(None)
+                self._wait_connect.cancel()
             if self._wait_ack is not None:
-                self._wait_ack.set_result(None)
+                self._wait_ack.cancel()
             self._sent = {}
             self._sent_heap = []
             self._recd = {}

@@ -24,13 +24,6 @@ class MockTransport:
 
 
 @pytest.fixture
-def event_loop():
-    loop = asyncio.new_event_loop()
-    yield loop
-    loop.close()
-
-
-@pytest.fixture
 def transport(event_loop):
     return MockTransport(event_loop)
 

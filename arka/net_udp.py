@@ -249,12 +249,12 @@ class Socket(object):
     TIMEOUT = 60.0
 
     def __init__(self,
-        addr: Address,
+        peer: Address,
         transport: asyncio.DatagramTransport,
         on_connect: Callable[[Address], None] | None = None,
         on_close: Callable[[Address], None] | None = None
     ):
-        self.addr = addr
+        self.peer = peer
         self.transport = transport
         self.on_connect = on_connect
         self.on_close = on_close
@@ -272,7 +272,7 @@ class Socket(object):
 
         # send/recv buffers
         self._sent: dict[int, tuple[int, float, bytes]] = {}
-        self._sent_heap: list[float, int] = []
+        self._sent_heap: list[tuple[float, int]] = []
         self._recd: dict[int, bytes] = {}
         self._reader: asyncio.StreamReader = asyncio.StreamReader()
 
@@ -302,7 +302,7 @@ class Socket(object):
         if not self.closed:
             self.closed = True
             if self.on_close is not None:
-                self.on_close(self.addr)
+                self.on_close(self.peer)
             if self._wait_connect is not None:
                 self._wait_connect.set_result(None)
             if self._wait_ack is not None:
@@ -320,7 +320,7 @@ class Socket(object):
             if self._keepalive_task is not None:
                 self._keepalive_task.cancel()
             hdr = self.HEADER.pack(self._seq, 0, self.FLAG_FIN)
-            self.transport.sendto(hdr, self.addr)
+            self.transport.sendto(hdr, self.peer)
 
     def datagram_received(self, data: Datagram):
         if self.closed:
@@ -329,7 +329,7 @@ class Socket(object):
             # Close Socket on malformed packet
             return self.close()
         now = time.monotonic()
-        self.last_recd = now
+        self._last_recd = now
         # Unpack header
         seq, ack, flags = self.HEADER.unpack_from(data)
         offset = self.HEADER.size
@@ -368,7 +368,7 @@ class Socket(object):
                     # Fast retransmit
                     match self._sent.get(ack):
                         case retries, ts, data:
-                            self.transport.sendto(data, self.addr)
+                            self.transport.sendto(data, self.peer)
                             self._last_sent = now
                             # Enter fast recovery
                             self._ssthresh = max(self._cwnd // 2, 1)
@@ -384,14 +384,14 @@ class Socket(object):
                             acked = True
                             # Update smoothed round trip time and resend timeout
                             rtt = now - ts
-                            if self._rtt is None:
+                            if self._srtt is None:
                                 self._srtt = rtt
                                 self._rttvar = rtt / 2
                             else:
                                 delta = rtt - self._srtt
                                 self._srtt += 0.125 * delta
                                 self._rttvar += 0.25 * (abs(delta) - self._rttvar)
-                                self._rto = self._srtt + max(0.01, 4 * self._rttvar)
+                            self._rto = self._srtt + max(0.01, 4 * self._rttvar)
                             # Congestion control
                             if self._cwnd < self._ssthresh:
                                 # Slow start
@@ -475,7 +475,7 @@ class Socket(object):
         self._wait_ack = None
         hdr = self.HEADER.pack(self._seq, self._ack, flags)
         pkt = b''.join([hdr, data])
-        self.transport.sendto(pkt, self.addr)
+        self.transport.sendto(pkt, self.peer)
         now = time.monotonic()
         self._last_sent = now
         self._sent[self._seq] = 1, now, pkt
@@ -497,7 +497,7 @@ class Socket(object):
                     # Send SYN + ACK
                     flags |= self.FLAG_ACK
                 hdr = self.HEADER.pack(seq, ack, flags)
-                self.transport.sendto(hdr, self.addr)
+                self.transport.sendto(hdr, self.peer)
                 self._last_sent = time.monotonic()
                 await asyncio.sleep(self._rto)
             if self._peer_ack is None:
@@ -514,7 +514,10 @@ class Socket(object):
                     seq = heapq.heappop(self._sent_heap)[1]
                     match self._sent.pop(seq, None):
                         case attempts, ts, pkt:
-                            self.transport.sendto(pkt, self.addr)
+                            if attempts > self.MAX_ATTEMPTS:
+                                self._ensure_seq_task = None
+                                return self.close()
+                            self.transport.sendto(pkt, self.peer)
                             self._last_sent = now
                             self._sent[seq] = attempts + 1, now, pkt
                             heapq.heappush(self._sent_heap, (now + self._rto, seq))
@@ -532,7 +535,7 @@ class Socket(object):
                 await asyncio.sleep(self.DELAYED_ACK_TO)
                 if self._last_sent == ts:
                     hdr = self.HEADER.pack(self._seq, self._ack, self.FLAG_ACK)
-                    self.transport.sendto(hdr, self.addr)
+                    self.transport.sendto(hdr, self.peer)
                     self._last_sent = time.monotonic()
                     break
                 else:
@@ -552,7 +555,7 @@ class Socket(object):
                 ping_wait = self._last_sent + self.KEEPALIVE_TO - now
                 if ping_wait < 0:
                     hdr = self.HEADER.pack(self._seq, self._ack, self.FLAG_ACK)
-                    self.transport.sendto(hdr, self.addr)
+                    self.transport.sendto(hdr, self.peer)
                     self._last_sent = now
                 else:
                     wait = min(recv_wait, ping_wait)
@@ -562,8 +565,12 @@ class Socket(object):
         self._keepalive_task = None
 
     async def _call_on_connect(self):
-        if self.on_connect is not None:
-            self.on_connect(self.addr)
+        try:
+            if self.on_connect is not None:
+                self.on_connect(self.peer)
+        except Exception as e:
+            pass
+
 
 ### MeshProtocol
 

@@ -252,7 +252,7 @@ class Socket(object):
         addr: Address,
         transport: asyncio.DatagramTransport,
         on_connect: Callable[[Address], None] | None = None,
-        on_close: Callable[[Address, bool], None] | None = None
+        on_close: Callable[[Address], None] | None = None
     ):
         self.addr = addr
         self.transport = transport
@@ -261,6 +261,7 @@ class Socket(object):
 
         # state
         self.closed: bool = False
+        self._wait_connect: asyncio.Future[None] | None = asyncio.Future()
         self._last_sent: float = time.monotonic()
         self._last_recd: float = time.monotonic()
 
@@ -291,7 +292,35 @@ class Socket(object):
         self._ensure_syn_task: asyncio.Task | None = None
         self._ensure_seq_task: asyncio.Task | None = None
         self._ensure_ack_task: asyncio.Task | None = None
-        self._keepalive_task: asyncio.Task = asyncio.create_task(self._keepalive())
+        self._keepalive_task: asyncio.Task | None = None
+
+    def connect(self):
+        if not self.closed and self._ensure_syn_task is None:
+            self._ensure_syn_task = asyncio.create_task(self._ensure_syn())
+
+    def close(self):
+        if not self.closed:
+            self.closed = True
+            if self.on_close is not None:
+                self.on_close(self.addr)
+            if self._wait_connect is not None:
+                self._wait_connect.set_result(None)
+            if self._wait_ack is not None:
+                self._wait_ack.set_result(None)
+            self._sent = {}
+            self._sent_heap = []
+            self._recd = {}
+            self._reader.feed_eof()
+            if self._ensure_syn_task is not None:
+                self._ensure_syn_task.cancel()
+            if self._ensure_seq_task is not None:
+                self._ensure_seq_task.cancel()
+            if self._ensure_ack_task is not None:
+                self._ensure_ack_task.cancel()
+            if self._keepalive_task is not None:
+                self._keepalive_task.cancel()
+            hdr = self.HEADER.pack(self._seq, 0, self.FLAG_FIN)
+            self.transport.sendto(hdr, self.addr)
 
     def datagram_received(self, data: Datagram):
         if self.closed:
@@ -300,7 +329,7 @@ class Socket(object):
             # Close Socket on malformed packet
             return self.close()
         now = time.monotonic()
-        self.last_recv_time = now
+        self.last_recd = now
         # Unpack header
         seq, ack, flags = self.HEADER.unpack_from(data)
         offset = self.HEADER.size
@@ -323,6 +352,11 @@ class Socket(object):
         ):
             # ACK received for SYN
             self._peer_ack = ack
+            self._wait_connect.set_result(None)
+            if self.on_connect is not None:
+                asyncio.create_task(self._call_on_connect())
+            if self._keepalive_task is None:
+                self._keepalive_task = asyncio.create_task(self._keepalive())
         if self._ack is None or self._peer_ack is None:
             # Handshake is incomplete
             return
@@ -335,6 +369,7 @@ class Socket(object):
                     match self._sent.get(ack):
                         case retries, ts, data:
                             self.transport.sendto(data, self.addr)
+                            self._last_sent = now
                             # Enter fast recovery
                             self._ssthresh = max(self._cwnd // 2, 1)
                             self._cwnd = self._ssthresh + 3
@@ -394,6 +429,8 @@ class Socket(object):
 
     async def recv(self) -> bytes | None:
         try:
+            if self._reader is None:
+                return
             mlen = await self._reader.readexactly(1)
             if mlen[0] & 1:
                 if mlen[0] & 2:
@@ -412,9 +449,14 @@ class Socket(object):
             else:
                 return self.close()
         except asyncio.IncompleteReadError as e:
-            return
+            self._reader = None
 
     async def send(self, data: bytes):
+        if self._wait_connect is not None:
+            await self._wait_connect
+            self._wait_connect = None
+        if self.closed:
+            raise Exception('Cannot send.  Socket is closed.')
         if len(data) > self.MAX_MSG_SIZE:
             raise ValueError('Message is too large to send.')
         mlen = mlen_to_bytes(len(data))
@@ -456,6 +498,7 @@ class Socket(object):
                     flags |= self.FLAG_ACK
                 hdr = self.HEADER.pack(seq, ack, flags)
                 self.transport.sendto(hdr, self.addr)
+                self._last_sent = time.monotonic()
                 await asyncio.sleep(self._rto)
             if self._peer_ack is None:
                 self.close()
@@ -472,6 +515,7 @@ class Socket(object):
                     match self._sent.pop(seq, None):
                         case attempts, ts, pkt:
                             self.transport.sendto(pkt, self.addr)
+                            self._last_sent = now
                             self._sent[seq] = attempts + 1, now, pkt
                             heapq.heappush(self._sent_heap, (now + self._rto, seq))
                 if self._sent_heap:
@@ -489,6 +533,7 @@ class Socket(object):
                 if self._last_sent == ts:
                     hdr = self.HEADER.pack(self._seq, self._ack, self.FLAG_ACK)
                     self.transport.sendto(hdr, self.addr)
+                    self._last_sent = time.monotonic()
                     break
                 else:
                     ts = self._last_sent
@@ -496,14 +541,29 @@ class Socket(object):
             pass
         self._ensure_ack_task = None
 
-    def connect(self):
-        if not self.closed and self._ensure_syn_task is None:
-            self._ensure_syn_task = asyncio.create_task(self._ensure_syn())
-
-    def close(self):
-        if not self.closed:
+    async def _keepalive(self):
+        try:
+            while True:
+                now = time.monotonic()
+                recv_wait = self._last_recd + self.TIMEOUT - now
+                if recv_wait < 0:
+                    # Close Socket when peer doesn't send
+                    return self.close()
+                ping_wait = self._last_sent + self.KEEPALIVE_TO - now
+                if ping_wait < 0:
+                    hdr = self.HEADER.pack(self._seq, self._ack, self.FLAG_ACK)
+                    self.transport.sendto(hdr, self.addr)
+                    self._last_sent = now
+                else:
+                    wait = min(recv_wait, ping_wait)
+                    await asyncio.sleep(wait)
+        except asyncio.CancelledError as e:
             pass
+        self._keepalive_task = None
 
+    async def _call_on_connect(self):
+        if self.on_connect is not None:
+            self.on_connect(self.addr)
 
 ### MeshProtocol
 

@@ -221,6 +221,15 @@ class MeetIntroMessage(object):
 
 class Socket(object):
 
+    # State
+    STATE_NEW = 0
+    STATE_SYN = 1
+    STATE_SYN_ACK = 2
+    STATE_ESTABLISHED = 3
+    STATE_FIN = 4
+    STATE_FIN_ACK = 5
+    STATE_CLOSED = 6
+
     # Header
     HEADER = struct.Struct('<IIB')    # seq, ack, flags
     FLAG_SYN = 0x1
@@ -254,7 +263,7 @@ class Socket(object):
         self.on_close = on_close
 
         # state
-        self.closed: bool = False
+        self._state: int = self.STATE_NEW
         self._wait_connect: asyncio.Future[None] | None = asyncio.Future()
         self._last_sent: float = time.monotonic()
         self._last_recd: float = time.monotonic()
@@ -286,38 +295,33 @@ class Socket(object):
         self._ensure_syn_task: asyncio.Task | None = None
         self._ensure_seq_task: asyncio.Task | None = None
         self._ensure_ack_task: asyncio.Task | None = None
+        self._ensure_fin_task: asyncio.Task | None = None
         self._keepalive_task: asyncio.Task | None = None
 
     def connect(self):
-        if not self.closed and self._ensure_syn_task is None:
-            self._ensure_syn_task = asyncio.create_task(self._ensure_syn())
+        match self._state:
+            case self.STATE_NEW:
+                self._state = self.STATE_SYN
+                self._ensure_syn_task = asyncio.create_task(self._ensure_syn())
 
     def close(self):
-        if not self.closed:
-            self.closed = True
-            if self.on_close is not None:
-                self.on_close(self.peer)
-            if self._wait_connect is not None:
-                self._wait_connect.cancel()
-            if self._wait_ack is not None:
-                self._wait_ack.cancel()
-            self._sent = {}
-            self._sent_heap = []
-            self._recd = {}
-            self._reader.feed_eof()
-            if self._ensure_syn_task is not None:
-                self._ensure_syn_task.cancel()
-            if self._ensure_seq_task is not None:
-                self._ensure_seq_task.cancel()
-            if self._ensure_ack_task is not None:
-                self._ensure_ack_task.cancel()
-            if self._keepalive_task is not None:
-                self._keepalive_task.cancel()
-            hdr = self.HEADER.pack(self._seq, 0, self.FLAG_FIN)
-            self.transport.sendto(hdr, self.peer)
+        match self._state:
+            case self.STATE_NEW:
+                self._state = self.STATE_CLOSED
+            case self.STATE_SYN:
+                self._state = self.STATE_CLOSED
+                if self._ensure_syn_task is not None:
+                    self._ensure_syn_task.cancel()
+            case state if state in (
+                self.STATE_SYN_ACK,
+                self.STATE_ESTABLISHED
+            ):
+                self._state = self.STATE_FIN
+                self._seq = (self._seq + 1) & 0xffffffff
+                self._ensure_fin_task = asyncio.create_task(self._ensure_fin())
 
     def datagram_received(self, data: Datagram):
-        if self.closed:
+        if self._state == self.STATE_CLOSED:
             return
         if len(data) < self.HEADER.size:
             # Close Socket on malformed packet
@@ -329,35 +333,62 @@ class Socket(object):
         seq, ack, flags = self.HEADER.unpack_from(data)
         payload = data[self.HEADER.size:]
         # Ensure 3-way handshake
-        if self._ack is None and flags & self.FLAG_SYN:
-            # SYN received
-            self._ack = seq
-            if self._ensure_ack_task is None:
-                # Ensure received SYN is ACKed
-                self._ensure_ack_task = asyncio.create_task(self._ensure_ack())
-            if self._peer_ack is None and self._ensure_syn_task is None:
-                # Ensure sent SYN is delivered
-                self._ensure_syn_task = asyncio.create_task(self._ensure_syn())
-            if not flags & self.FLAG_ACK:
+        match self._state:
+            case self.STATE_ESTABLISHED:
+                pass
+            case self.STATE_NEW:
+                if flags & self.FLAG_SYN:
+                    self._state = self.STATE_SYN_ACK
+                    self._ack = seq
+                    self._ensure_syn_task = asyncio.create_task(self._ensure_syn())
                 return
-        if (
-            self._peer_ack is None
-            and flags & self.FLAG_ACK
-            and ack == self._seq
-        ):
-            # ACK received for SYN
-            self._peer_ack = ack
-            self._wait_connect.set_result(None)
-            if self.on_connect is not None:
-                asyncio.create_task(self._call_on_connect())
-            if self._keepalive_task is None:
-                self._keepalive_task = asyncio.create_task(self._keepalive())
-        if self._ack is None or self._peer_ack is None:
-            # Handshake is incomplete
-            return
+            case self.STATE_SYN:
+                if flags & self.FLAG_SYN:
+                    self._ack = seq
+                    if flags & self.FLAG_ACK and ack == self._seq:
+                        self._state = self.STATE_ESTABLISHED
+                        self._peer_ack = ack
+                        self._ensure_syn_task.cancel()
+                        hdr = self.HEADER.pack(self._seq, self._ack, self.FLAG_ACK)
+                        self.transport.sendto(hdr, self.peer)
+                        self._last_sent = now
+                        self._wait_connect.set_result(None)
+                        self._keepalive_task = asyncio.create_task(self._keepalive())
+                        if self.on_connect is not None:
+                            asyncio.create_task(self._call_on_connect())
+                    else:
+                        self._state = self.STATE_SYN_ACK
+                        hdr = self.HEADER.pack(self._seq, self._ack, self.FLAG_SYN | self.FLAG_ACK)
+                        self.transport.sendto(hdr, self.peer)
+                        self._last_sent = now
+                return
+            case self.STATE_SYN_ACK:
+                if flags & self.FLAG_ACK and ack == self._seq:
+                    self._state = self.STATE_ESTABLISHED
+                    self._peer_ack = ack
+                    self._ensure_syn_task.cancel()
+                    self._wait_connect.set_result(None)
+                    self._keepalive_task = asyncio.create_task(self._keepalive())
+                    if self.on_connect is not None:
+                        asyncio.create_task(self._call_on_connect())
+                return
+            case self.STATE_FIN:
+                if flags & self.FLAG_FIN:
+                    self._ack = seq
+                    if flags & self.FLAG_ACK and ack == self._seq:
+                        self._state = self.STATE_CLOSED            
+                        hdr = self.HEADER.pack(self._seq, self._ack, self.FLAG_ACK)
+                        self.transport.sendto(hdr, self.peer)
+                    else:
+                        self._state = self.STATE_FIN_ACK
+                        hdr = self.HEADER.pack(self._seq, self._ack, self.FLAG_FIN | self.FLAG_ACK)
+                        self.transport.sendto(hdr, self.peer)
+            case self.STATE_FIN_ACK:
+                if flags & self.FLAG_ACK and ack == self._seq:
+                    self._state = self.STATE_CLOSED
         # Process ACK
         if flags & self.FLAG_ACK and not seq_lt(self._seq, ack):
-            if ack == self._peer_ack:
+            if ack == self._peer_ack and self._state == self.STATE_ESTABLISHED:
                 self._dup_ack_count += 1
                 if self._dup_ack_count == 3:
                     # Fast retransmit
@@ -403,8 +434,8 @@ class Socket(object):
         # Process payload
         if (
             payload
-            and len(self._reader._buffer) <= self.MAX_READER_SIZE
-            and (seq - self._ack) & 0xffffffff <= self.MAX_RECV_WINDOW
+            and len(self._reader._buffer) + len(payload) <= self.MAX_READER_SIZE
+            and (seq - self._ack) & 0xffffffff < self.MAX_RECV_WINDOW
         ):
             self._recd[seq] = payload
             # print(f'r {self.peer} seq: {seq & 0xf}, data: {len(self._recd[seq])}')
@@ -418,9 +449,8 @@ class Socket(object):
             # Ensure ACK is sent
             if self._ensure_ack_task is None:
                 self._ensure_ack_task = asyncio.create_task(self._ensure_ack())
-        # Process FIN
-        if flags & self.FLAG_FIN:
-            return self.close()
+        if self._ensure_fin_task is not None and self._state == self.STATE_CLOSED:
+            self._ensure_fin_task.cancel()
 
     async def recv(self) -> bytes | None:
         try:
@@ -484,25 +514,30 @@ class Socket(object):
 
     async def _ensure_syn(self):
         try:
-            for attempt in range(self.MAX_ATTEMPTS):
-                if self._peer_ack is not None:
-                    break
-                # Send SYN
-                seq, ack, flags = self._seq, self._ack, self.FLAG_SYN
-                if ack is None:
-                    ack = 0
-                else:
-                    # Send SYN + ACK
-                    flags |= self.FLAG_ACK
-                hdr = self.HEADER.pack(seq, ack, flags)
+            now = time.monotonic()
+            timeout = now + self.TIMEOUT
+            while now < timeout:
+                match self._state:
+                    case int(self.STATE_SYN):
+                        hdr = self.HEADER.pack(
+                            self._seq, 0, self.FLAG_SYN
+                        )
+                    case int(self.STATE_SYN_ACK):
+                        hdr = self.HEADER.pack(
+                            self._seq, self._ack, self.FLAG_SYN | self.FLAG_ACK
+                        )
+                    case _:
+                        return
                 self.transport.sendto(hdr, self.peer)
                 self._last_sent = time.monotonic()
-                await asyncio.sleep(self._rto)
-            if self._peer_ack is None:
-                self.close()
+                await time.sleep(1)
+                now = time.monotonic()
+
         except asyncio.CancelledError as e:
             pass
         self._ensure_syn_task = None
+        if self._state in (self.STATE_SYN, self.STATE_SYN_ACK):
+            self.close()
 
     async def _ensure_seq(self):
         try:
@@ -541,6 +576,42 @@ class Socket(object):
         except asyncio.CancelledError as e:
             pass
         self._ensure_ack_task = None
+
+    async def _ensure_fin(self):
+        try:
+            now = time.monotonic()
+            timeout = now + self.TIMEOUT
+            while now < timeout:
+                if self._state in (self.STATE_FIN, self.STATE_FIN_ACK):
+                    hdr = self.HEADER.pack(
+                        self._seq, self._ack, self.FLAG_ACK | self.FLAG_FIN
+                    )
+                    self.transport.sendto(hdr, self.peer)
+                    await time.sleep(1)
+                    now = time.monotonic()
+                else:
+                    break
+        except asyncio.CancelledError as e:
+            pass
+        self._state = self.STATE_CLOSED
+        if self._wait_connect is not None:
+            self._wait_connect.cancel()
+        if self._wait_ack is not None:
+            self._wait_ack.cancel()
+        self._sent = {}
+        self._sent_heap = []
+        self._recd = {}
+        self._reader.feed_eof()
+        if self._ensure_syn_task is not None:
+            self._ensure_syn_task.cancel()
+        if self._ensure_seq_task is not None:
+            self._ensure_seq_task.cancel()
+        if self._ensure_ack_task is not None:
+            self._ensure_ack_task.cancel()
+        if self._keepalive_task is not None:
+            self._keepalive_task.cancel()
+        if self.on_close is not None:
+            self.on_close(self.peer)
 
     async def _keepalive(self):
         try:

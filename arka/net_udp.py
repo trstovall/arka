@@ -1,7 +1,6 @@
 
 from __future__ import annotations
-from typing import Generator, Callable, Coroutine, Any
-from collections.abc import Buffer
+from typing import Generator, Callable
 from os import urandom
 
 import types
@@ -61,6 +60,7 @@ class MSG:
 
 # Type aliases
 Address = tuple[str, int]
+Buffer = bytes | bytearray | memoryview[int]
 Datagram = Buffer
 MessageList = Buffer
 Message = Buffer
@@ -591,7 +591,7 @@ class MeshProtocol(asyncio.DatagramProtocol):
         # Check blacklist
         timeout = self.blacklist.get(addr, 0)
         if timeout:
-            if time.time() < timeout:
+            if time.monotonic() < timeout:
                 # Drop Datagrams from blacklisted peers
                 return
             del self.blacklist[addr]
@@ -610,6 +610,8 @@ class MeshProtocol(asyncio.DatagramProtocol):
 ### Mesh
 
 class Mesh(object):
+
+    BLACKLIST_TIMEOUT = 600.0
 
     def __init__(self,
             bootstrap: list[Address] = [],
@@ -651,6 +653,6 @@ class Mesh(object):
 
     def handle_close(self, peer: Socket, blacklist: bool = True):
         if blacklist:
-            self.blacklist[peer.addr] = time.time() + BLACKLIST_TIMEOUT
+            self.blacklist[peer.addr] = time.monotonic() + self.BLACKLIST_TIMEOUT
         self.peers.pop(peer.id, None)
         self.peers.pop(peer.addr, None)

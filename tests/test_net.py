@@ -75,8 +75,8 @@ async def test_handshake(socket_pair: tuple[net.Socket, net.Socket]):
     A.connect()
     # Let SYN/SYN-ACK/ACK exchange
     await asyncio.sleep(0.05)
-    assert None not in (A._peer_ack, A._ack)
-    assert None not in (B._peer_ack, B._ack)
+    assert A._state == A.STATE_ESTABLISHED
+    assert B._state == B.STATE_ESTABLISHED
 
 
 @pytest.mark.asyncio
@@ -135,7 +135,7 @@ async def test_malformed_packet_closes(socket_pair: tuple[net.Socket, net.Socket
     A.transport.sendto(b'\x00\x01', A.peer)
     # B should detect malformed and close
     await asyncio.sleep(0.01)
-    assert B.closed is True
+    assert B._state == B.STATE_CLOSED
 
 
 @pytest.mark.asyncio

@@ -478,11 +478,8 @@ class Socket(object):
             self._reader = None
 
     async def send(self, data: bytes):
-        if self._wait_connect is not None:
-            await self._wait_connect
-            self._wait_connect = None
-        if self.closed:
-            raise Exception('Cannot send.  Socket is closed.')
+        if self._state != self.STATE_ESTABLISHED:
+            raise Exception('Cannot send.  Socket connection is not established.')
         if len(data) > self.MAX_MSG_SIZE:
             raise ValueError('Message is too large to send.')
         mlen = mlen_to_bytes(len(data))

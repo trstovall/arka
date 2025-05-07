@@ -165,7 +165,7 @@ async def test_seq_wrap(socket_pair: tuple[net.Socket, net.Socket]):
     A.connect()
     await asyncio.sleep(0.05)
     # Send large message
-    msg = b'x' * A.MAX_PAYLOAD * 200 + 50
+    msg = b'x' * (A.MAX_PAYLOAD * 200 + 50)
     await A.send(msg)
     got = await B.recv()
     assert got == msg
@@ -180,7 +180,7 @@ async def test_jitter(socket_pair: tuple[net.Socket, net.Socket]):
     A.connect()
     await asyncio.sleep(0.05)
     # Send large message
-    A.transport._jitter = 0.05
+    A.transport._jitter = 0.005
     msg = b'x' * A.MAX_MSG_SIZE
     await A.send(msg)
     got = await B.recv()

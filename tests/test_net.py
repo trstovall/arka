@@ -4,6 +4,7 @@ from arka import net_udp as net
 import asyncio
 import pytest_asyncio
 import pytest
+import random
 
 
 def inspect(data):
@@ -22,18 +23,26 @@ class MockTransport:
     def __init__(self, loop: asyncio.AbstractEventLoop):
         self._loop = loop
         self._socks: dict[net.Address, net.Socket] = {}
-        self._debug = False
+        self._debug: bool = False
+        self._jitter: float | None = None
 
     def register(self, addr: net.Address, sock: net.Socket):
         self._socks[addr] = sock
-    
+
     def sendto(self, data: bytes, addr: net.Address):
         if addr in self._socks:
             if self._debug:
                 print(f'to: {addr}, {inspect(data)}')
-            self._loop.call_soon(
-                self._socks[addr].datagram_received, data
-            )
+            if self._jitter is None:
+                self._loop.call_soon(
+                    self._socks[addr].datagram_received, data
+                )
+            else:
+                self._loop.call_later(
+                    self._jitter * random.random(),
+                    self._socks[addr].datagram_received,
+                    data
+                )
 
     def close(self):
         self._socks.clear()
@@ -55,8 +64,12 @@ def socket_pair(transport):
     B.close()
 
 
+def socket_pair_t(pair) -> tuple[net.Socket, net.Socket]:
+    return pair
+
+
 @pytest.mark.asyncio
-async def test_handshake(socket_pair):
+async def test_handshake(socket_pair: tuple[net.Socket, net.Socket]):
     A, B = socket_pair
     # Initiate from A
     A.connect()
@@ -67,7 +80,7 @@ async def test_handshake(socket_pair):
 
 
 @pytest.mark.asyncio
-async def test_send_and_recv(socket_pair):
+async def test_send_and_recv(socket_pair: tuple[net.Socket, net.Socket]):
     A, B = socket_pair
     A.connect()
     await asyncio.sleep(0.05)
@@ -82,7 +95,7 @@ async def test_send_and_recv(socket_pair):
 
 
 @pytest.mark.asyncio
-async def test_send_and_recv_large(socket_pair):
+async def test_send_and_recv_large(socket_pair: tuple[net.Socket, net.Socket]):
     A, B = socket_pair
     A.connect()
     await asyncio.sleep(0.05)
@@ -94,13 +107,12 @@ async def test_send_and_recv_large(socket_pair):
     await B.send(got)
     echo = await A.recv()
     await asyncio.sleep(.1)
-    # print(f'buff: {len(A._reader._buffer)}')
-    assert len(echo) == len(msg)
+    assert echo == msg
 
 
 # @pytest.mark.skip
 @pytest.mark.asyncio
-async def test_send_and_recv_max(socket_pair):
+async def test_send_and_recv_max(socket_pair: tuple[net.Socket, net.Socket]):
     A, B = socket_pair
     A.connect()
     await asyncio.sleep(0.05)
@@ -111,11 +123,11 @@ async def test_send_and_recv_max(socket_pair):
     assert got == msg
     await B.send(got)
     echo = await A.recv()
-    assert len(echo) == len(msg)
+    assert echo == msg
 
 
 @pytest.mark.asyncio
-async def test_malformed_packet_closes(socket_pair):
+async def test_malformed_packet_closes(socket_pair: tuple[net.Socket, net.Socket]):
     A, B = socket_pair
     A.connect()
     await asyncio.sleep(0.05)
@@ -127,7 +139,7 @@ async def test_malformed_packet_closes(socket_pair):
 
 
 @pytest.mark.asyncio
-async def test_window_enforcement(socket_pair):
+async def test_window_enforcement(socket_pair: tuple[net.Socket, net.Socket]):
     A, B = socket_pair
     A.connect()
     await asyncio.sleep(0.05)
@@ -138,10 +150,41 @@ async def test_window_enforcement(socket_pair):
     assert bad_seq not in B._recd
 
 
-def test_seq_wrap():
+def test_seq_lt():
     # seq_lt should handle wraparound
     a = 2 ** 32 - 2
     b = 1
     assert net.seq_lt(a, b) is True
     assert net.seq_lt(b, a) is False
 
+
+@pytest.mark.asyncio
+async def test_seq_wrap(socket_pair: tuple[net.Socket, net.Socket]):
+    A, B = socket_pair
+    A._seq = 2 ** 32 - 100
+    A.connect()
+    await asyncio.sleep(0.05)
+    # Send large message
+    msg = b'x' * A.MAX_PAYLOAD * 200 + 50
+    await A.send(msg)
+    got = await B.recv()
+    assert got == msg
+    await B.send(got)
+    echo = await A.recv()
+    assert echo == msg
+
+
+@pytest.mark.asyncio
+async def test_jitter(socket_pair: tuple[net.Socket, net.Socket]):
+    A, B = socket_pair
+    A.connect()
+    await asyncio.sleep(0.05)
+    # Send large message
+    A.transport._jitter = 0.05
+    msg = b'x' * A.MAX_MSG_SIZE
+    await A.send(msg)
+    got = await B.recv()
+    assert got == msg
+    await B.send(got)
+    echo = await A.recv()
+    assert echo == msg

@@ -60,7 +60,7 @@ class MSG:
 
 # Type aliases
 Address = tuple[str, int]
-Buffer = bytes | bytearray | memoryview
+Buffer = bytes | bytearray | 'memoryview[int]'
 Datagram = Buffer
 MessageList = Buffer
 Message = Buffer

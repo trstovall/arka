@@ -6,13 +6,9 @@ from os import urandom
 import types
 import asyncio
 import time
-import logging
 import struct
 import socket
 import heapq
-
-
-logging.basicConfig(level=logging.ERROR, format='%(asctime)s - %(levelname)s - %(message)s')
 
 
 # Message Types
@@ -60,11 +56,9 @@ class MSG:
 
 # Type aliases
 Address = tuple[str, int]
-Buffer = bytes | bytearray
-Datagram = Buffer
-MessageList = Buffer
-Message = Buffer
-
+Message = bytes
+Datagram = bytes
+MessageList = bytes
 
 ### Helpers
 
@@ -83,7 +77,7 @@ def mlen_to_bytes(n: int) -> bytes:
     else:
         return b'\x0f' + n.to_bytes(8, 'little')
 
-def parse_mlen(x: Buffer, pos: int = 0) -> tuple[int, int] | None:
+def parse_mlen(x: bytes, pos: int = 0) -> tuple[int, int] | None:
     if pos >= len(x):
         return
     n = x[pos]
@@ -215,7 +209,7 @@ class MeetRequestMessage(object):
         self.neighbor: Address = bytes_to_addr(msg[1:])
 
 
-class MeetIntroMessage(Message):
+class MeetIntroMessage(object):
 
     def __init__(self, msg: Message):
         if len(msg) != 19:
@@ -604,7 +598,7 @@ class MeshProtocol(asyncio.DatagramProtocol):
         peer.datagram_received(data)
 
     def error_received(self, exc: OSError):
-        logging.err(f'Error receieved: {exc}')
+       print(f'Error receieved: {exc}')
 
 
 ### Mesh

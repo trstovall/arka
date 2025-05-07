@@ -60,8 +60,8 @@ def socket_pair(transport):
     transport.register(('::1', 0), A)
     transport.register(('::1', 1), B)
     yield A, B
-    A.close()
-    B.close()
+    # A.close()
+    # B.close()
 
 
 def socket_pair_t(pair) -> tuple[net.Socket, net.Socket]:

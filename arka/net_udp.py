@@ -260,7 +260,7 @@ class Socket(object):
         self._last_recd: float = time.monotonic()
 
         # sequence numbers
-        self._seq: int = int.from_bytes(urandom(4))
+        self._seq: int = int.from_bytes(urandom(4), 'little')
         self._ack: int | None = None
         self._peer_ack: int | None = None
 

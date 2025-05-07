@@ -5,17 +5,32 @@ import asyncio
 import pytest_asyncio
 import pytest
 
+
+def inspect(data):
+    if len(data) < 9:
+        return f'{len(data)}'
+    return 'seq: {seq}, ack: {ack}, flags: {flags}, data: {data}'.format(
+        seq=int.from_bytes(data[:4], 'little') & 0xff,
+        ack=int.from_bytes(data[4:8], 'little') & 0xff,
+        flags=int.from_bytes(data[8:9], 'little') & 0xff,
+        data=len(data) - 9
+    )
+
+
 class MockTransport:
 
     def __init__(self, loop: asyncio.AbstractEventLoop):
         self._loop = loop
         self._socks: dict[net.Address, net.Socket] = {}
-    
+        self._debug = False
+
     def register(self, addr: net.Address, sock: net.Socket):
         self._socks[addr] = sock
     
     def sendto(self, data: bytes, addr: net.Address):
         if addr in self._socks:
+            if self._debug:
+                print(f'to: {addr}, {inspect(data)}')
             self._loop.call_soon(
                 self._socks[addr].datagram_received, data
             )
@@ -78,10 +93,12 @@ async def test_send_and_recv_large(socket_pair):
     assert got == msg
     await B.send(got)
     echo = await A.recv()
+    await asyncio.sleep(.1)
+    # print(f'buff: {len(A._reader._buffer)}')
     assert len(echo) == len(msg)
 
 
-@pytest.mark.skip
+# @pytest.mark.skip
 @pytest.mark.asyncio
 async def test_send_and_recv_max(socket_pair):
     A, B = socket_pair

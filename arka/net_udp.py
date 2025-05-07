@@ -13,7 +13,7 @@ import socket
 import heapq
 
 
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+logging.basicConfig(level=logging.ERROR, format='%(asctime)s - %(levelname)s - %(message)s')
 
 
 # Message Types
@@ -237,14 +237,14 @@ class Socket(object):
     INITIAL_CWND = 16.0
     INITIAL_SSTHRESH = 1000.0
     MAX_ATTEMPTS = 5
-    MAX_PAYLOAD = 1024
-    MAX_MSG_SIZE = 2**23        # 8 MB
-    MAX_READER_SIZE = 2**24     # 16 MB
-    MAX_RECV_WINDOW = 1024
+    MAX_PAYLOAD = 2**10             # 1 KB
+    MAX_MSG_SIZE = 2**23 + 1        # 8 MB
+    MAX_READER_SIZE = 2**24 + 2     # 16 MB
+    MAX_RECV_WINDOW = 2**13 + 1
 
     # Timers
     BACKOFF_MULTIPLIER = 1.5
-    DELAYED_ACK_TO = 0.04
+    DELAYED_ACK_TO = 0.002
     KEEPALIVE_TO = 15.0
     TIMEOUT = 60.0
 
@@ -329,10 +329,11 @@ class Socket(object):
             # Close Socket on malformed packet
             return self.close()
         now = time.monotonic()
+        # print(f'e: {(now - self._last_recd) * 1_000_000}')
         self._last_recd = now
         # Unpack header
         seq, ack, flags = self.HEADER.unpack_from(data)
-        offset = self.HEADER.size
+        payload = data[self.HEADER.size:]
         # Ensure 3-way handshake
         if self._ack is None and flags & self.FLAG_SYN:
             # SYN received
@@ -362,25 +363,24 @@ class Socket(object):
             return
         # Process ACK
         if flags & self.FLAG_ACK and not seq_lt(self._seq, ack):
-            if ack == self._last_ack_recd:
+            if ack == self._peer_ack:
                 self._dup_ack_count += 1
                 if self._dup_ack_count == 3:
                     # Fast retransmit
                     match self._sent.get(ack):
-                        case retries, ts, data:
-                            self.transport.sendto(data, self.peer)
+                        case retries, ts, pkt:
+                            self.transport.sendto(pkt, self.peer)
                             self._last_sent = now
                             # Enter fast recovery
                             self._ssthresh = max(self._cwnd // 2, 1)
                             self._cwnd = self._ssthresh + 3
             else:
-                self._last_ack_recd = ack
                 self._dup_ack_count = 0
                 acked = False
                 while seq_lt(self._peer_ack, ack):
                     # Clear delivered packets sent
                     match self._sent.pop(self._peer_ack, None):
-                        case attempts, ts, data:
+                        case attempts, ts, pkt:
                             acked = True
                             # Update smoothed round trip time and resend timeout
                             rtt = now - ts
@@ -408,17 +408,18 @@ class Socket(object):
             self._ensure_seq_task.cancel()
         # Process payload
         if (
-            offset < len(data)
+            payload
             and len(self._reader._buffer) <= self.MAX_READER_SIZE
             and (seq - self._ack) & 0xffffffff <= self.MAX_RECV_WINDOW
         ):
-            self._recd[seq] = data[offset:]
+            self._recd[seq] = payload
+            # print(f'r {self.peer} seq: {seq & 0xf}, data: {len(self._recd[seq])}')
             # Move data in self._recd into self._reader
             while True:
-                data = self._recd.pop(self._ack, None)
-                if data is None:
+                recd = self._recd.pop(self._ack, None)
+                if recd is None:
                     break
-                self._reader.feed_data(data)
+                self._reader.feed_data(recd)
                 self._ack = (self._ack + 1) & 0xffffffff
             # Ensure ACK is sent
             if self._ensure_ack_task is None:
@@ -444,6 +445,7 @@ class Socket(object):
                     mlen = int.from_bytes(mlen, 'little') >> 2
             else:
                 mlen = mlen[0] >> 1
+            # print(f'recv mlen: {mlen}')
             if mlen <= self.MAX_MSG_SIZE:
                 return await self._reader.readexactly(mlen)
             else:
@@ -460,6 +462,7 @@ class Socket(object):
         if len(data) > self.MAX_MSG_SIZE:
             raise ValueError('Message is too large to send.')
         mlen = mlen_to_bytes(len(data))
+        # print(f'send mlen: {mlen.hex()}')
         if len(mlen) + len(data) <= self.MAX_PAYLOAD:
             await self._send_datagram(mlen + data)
         else:
@@ -475,6 +478,7 @@ class Socket(object):
         self._wait_ack = None
         hdr = self.HEADER.pack(self._seq, self._ack, flags)
         pkt = b''.join([hdr, data])
+        # print(f's {self.peer} seq: {self._seq & 0xf}, data: {len(data)}')
         self.transport.sendto(pkt, self.peer)
         now = time.monotonic()
         self._last_sent = now

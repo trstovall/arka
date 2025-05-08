@@ -278,6 +278,7 @@ class Socket(object):
         self._sent_heap: list[tuple[float, int]] = []
         self._recd: dict[int, bytes] = {}
         self._reader: asyncio.StreamReader = asyncio.StreamReader()
+        self._reader_len: int = 0
 
         # congestion control
         self._cwnd: float = self.INITIAL_CWND
@@ -332,10 +333,20 @@ class Socket(object):
         # Unpack header
         seq, ack, flags = self.HEADER.unpack_from(data)
         payload = data[self.HEADER.size:]
-        # Ensure 3-way handshake
+        # State transition
         match self._state:
             case self.STATE_ESTABLISHED:
+                if (
+                    payload
+                    and self._reader_len + len(payload) <= self.MAX_READER_SIZE
+                    and (seq - self._ack) & 0xffffffff <= self.MAX_RECV_WINDOW
+                ):
+                    self._process_seq(seq, payload)
+                if flags & self.FLAG_ACK and not seq_lt(self._seq, ack):
+                    self._process_ack(ack, now)
                 if flags & self.FLAG_FIN:
+                    # Accept close request
+                    print(f'{self.peer}: EST -> FIN/FIN_ACK -> FIN_ACK')
                     self._state = self.STATE_FIN_ACK
                     self._seq = (self._seq + 1) & 0xffffffff
                     self._ack = seq
@@ -344,17 +355,22 @@ class Socket(object):
                     self.transport.sendto(hdr, self.peer)
             case self.STATE_NEW:
                 if flags & self.FLAG_SYN:
+                    # Accept connection request
+                    print(f'{self.peer}: NEW -> SYN/SYN_ACK -> SYN_ACK')
                     self._state = self.STATE_SYN_ACK
                     self._ack = seq
                     self._ensure_syn_task = asyncio.create_task(self._ensure_syn())
-                return
             case self.STATE_SYN:
                 if flags & self.FLAG_SYN:
                     self._ack = seq
                     if flags & self.FLAG_ACK and ack == self._seq:
+                        # Connection accepted by peer
+                        print(f'{self.peer}: SYN -> SYN_ACK/ACK -> EST')
                         self._state = self.STATE_ESTABLISHED
+                        self._ack = seq
                         self._peer_ack = ack
                         self._ensure_syn_task.cancel()
+                        self._update_srtt_rto(now - self._last_sent)
                         hdr = self.HEADER.pack(self._seq, self._ack, self.FLAG_ACK)
                         self.transport.sendto(hdr, self.peer)
                         self._last_sent = now
@@ -363,13 +379,17 @@ class Socket(object):
                         if self.on_connect is not None:
                             asyncio.create_task(self._call_on_connect())
                     else:
+                        # Simultaneous connect
+                        print(f'{self.peer}: SYN -> SYN/SYN_ACK -> SYN_ACK')
                         self._state = self.STATE_SYN_ACK
+                        self._ack = seq
                         hdr = self.HEADER.pack(self._seq, self._ack, self.FLAG_SYN | self.FLAG_ACK)
                         self.transport.sendto(hdr, self.peer)
                         self._last_sent = now
-                return
             case self.STATE_SYN_ACK:
                 if flags & self.FLAG_ACK and ack == self._seq:
+                    # Connection accepted by peer
+                    print(f'{self.peer}: SYN_ACK -> ACK/- -> EST')
                     self._state = self.STATE_ESTABLISHED
                     self._peer_ack = ack
                     self._ensure_syn_task.cancel()
@@ -377,108 +397,121 @@ class Socket(object):
                     self._keepalive_task = asyncio.create_task(self._keepalive())
                     if self.on_connect is not None:
                         asyncio.create_task(self._call_on_connect())
-                return
             case self.STATE_FIN:
                 if flags & self.FLAG_FIN:
                     self._ack = seq
                     if flags & self.FLAG_ACK and ack == self._seq:
-                        self._state = self.STATE_CLOSED            
+                        # Close request accepted by peer
+                        print(f'{self.peer}: FIN -> FIN_ACK/ACK -> CLS')
+                        self._state = self.STATE_CLOSED
+                        self._ack = seq
+                        self._peer_ack = ack
                         hdr = self.HEADER.pack(self._seq, self._ack, self.FLAG_ACK)
                         self.transport.sendto(hdr, self.peer)
+                        self._ensure_fin_task.cancel()
                     else:
+                        # Simultaneous close
+                        print(f'{self.peer}: FIN -> FIN/FIN_ACK -> FIN_ACK')
                         self._state = self.STATE_FIN_ACK
+                        self._ack = seq
                         hdr = self.HEADER.pack(self._seq, self._ack, self.FLAG_FIN | self.FLAG_ACK)
                         self.transport.sendto(hdr, self.peer)
             case self.STATE_FIN_ACK:
                 if flags & self.FLAG_ACK and ack == self._seq:
+                    # Close request accepted by peer
+                    print(f'{self.peer}: FIN_ACK -> ACK/- -> CLS')
                     self._state = self.STATE_CLOSED
-        # Process ACK
-        if flags & self.FLAG_ACK and not seq_lt(self._seq, ack):
-            if ack == self._peer_ack and self._state == self.STATE_ESTABLISHED:
-                self._dup_ack_count += 1
-                if self._dup_ack_count == 3:
-                    # Fast retransmit
-                    match self._sent.get(ack):
-                        case retries, ts, pkt:
-                            self.transport.sendto(pkt, self.peer)
-                            self._last_sent = now
-                            # Enter fast recovery
-                            self._ssthresh = max(self._cwnd // 2, 1)
-                            self._cwnd = self._ssthresh + 3
-            else:
-                self._dup_ack_count = 0
-                acked = False
-                while seq_lt(self._peer_ack, ack):
-                    # Clear delivered packets sent
-                    match self._sent.pop(self._peer_ack, None):
-                        case attempts, ts, pkt:
-                            acked = True
-                            # Update smoothed round trip time and resend timeout
-                            rtt = now - ts
-                            if self._srtt is None:
-                                self._srtt = rtt
-                                self._rttvar = rtt / 2
-                            else:
-                                delta = rtt - self._srtt
-                                self._srtt += 0.125 * delta
-                                self._rttvar += 0.25 * (abs(delta) - self._rttvar)
-                            self._rto = self._srtt + max(0.01, 4 * self._rttvar)
-                            # Congestion control
-                            if self._cwnd < self._ssthresh:
-                                # Slow start
-                                self._cwnd += 1
-                            else:
-                                # Congestion avoidance
-                                self._cwnd += 1 / self._cwnd
-                    self._peer_ack = (self._peer_ack + 1) & 0xffffffff
-                if acked and self._wait_ack is not None:
-                    # Notify _send_datagram that _sent has been reduced
-                    self._wait_ack.set_result(None)
-        if not self._sent and self._ensure_seq_task is not None:
-            # Cancel resend if sent is empty
-            self._ensure_seq_task.cancel()
-        # Process payload
-        if (
-            payload
-            and self._state == self.STATE_ESTABLISHED
-            and len(self._reader._buffer) + len(payload) <= self.MAX_READER_SIZE
-            and (seq - self._ack) & 0xffffffff < self.MAX_RECV_WINDOW
-        ):
-            self._recd[seq] = payload
-            # print(f'r {self.peer} seq: {seq & 0xf}, data: {len(self._recd[seq])}')
-            # Move data in self._recd into self._reader
-            while True:
-                recd = self._recd.pop(self._ack, None)
-                if recd is None:
-                    break
-                self._reader.feed_data(recd)
-                self._ack = (self._ack + 1) & 0xffffffff
-            # Ensure ACK is sent
-            if self._ensure_ack_task is None:
-                self._ensure_ack_task = asyncio.create_task(self._ensure_ack())
-        if self._ensure_fin_task is not None and self._state == self.STATE_CLOSED:
-            self._ensure_fin_task.cancel()
+                    self._peer_ack = ack
+                    self._ensure_fin_task.cancel()
+
+    def _update_srtt_rto(self, rtt: float):
+        # Update smoothed round trip time and resend timeout
+        if self._srtt is None:
+            self._srtt = rtt
+            self._rttvar = rtt / 2
+        else:
+            delta = rtt - self._srtt
+            self._srtt += 0.125 * delta
+            self._rttvar += 0.25 * (abs(delta) - self._rttvar)
+        self._rto = self._srtt + max(0.01, 4 * self._rttvar)
+
+    def _process_seq(self, seq: int, payload: bytes):
+        self._recd[seq] = payload
+        # print(f'r {self.peer} seq: {seq & 0xf}, data: {len(self._recd[seq])}')
+        # Move data in self._recd into self._reader
+        while True:
+            recd = self._recd.pop(self._ack, None)
+            if recd is None:
+                break
+            self._reader.feed_data(recd)
+            self._reader_len += len(recd)
+            self._ack = (self._ack + 1) & 0xffffffff
+        # Ensure ACK is sent
+        if self._ensure_ack_task is None:
+            self._ensure_ack_task = asyncio.create_task(self._ensure_ack())
+
+    def _process_ack(self, ack: int, now: float):
+        if ack == self._peer_ack:
+            self._dup_ack_count += 1
+            if self._dup_ack_count == 3:
+                # Fast retransmit
+                match self._sent.get(ack):
+                    case retries, ts, pkt:
+                        self.transport.sendto(pkt, self.peer)
+                        self._last_sent = now
+                        # Enter fast recovery
+                        self._ssthresh = max(self._cwnd // 2, 1)
+                        self._cwnd = self._ssthresh + 3
+        else:
+            self._dup_ack_count = 0
+            acked = False
+            while seq_lt(self._peer_ack, ack):
+                # Clear delivered packets sent
+                match self._sent.pop(self._peer_ack, None):
+                    case attempts, ts, pkt:
+                        acked = True
+                        self._update_srtt_rto(now - ts)
+                        # Congestion control
+                        if self._cwnd < self._ssthresh:
+                            # Slow start
+                            self._cwnd += 1
+                        else:
+                            # Congestion avoidance
+                            self._cwnd += 1 / self._cwnd
+                self._peer_ack = (self._peer_ack + 1) & 0xffffffff
+            if acked and self._wait_ack is not None:
+                # Notify _send_datagram that _sent has been reduced
+                self._wait_ack.set_result(None)
+            if not self._sent and self._ensure_seq_task is not None:
+                # Cancel resend if sent is empty
+                self._sent_heap: list[tuple[float, int]] = []
+                self._ensure_seq_task.cancel()
 
     async def recv(self) -> bytes | None:
         try:
             if self._reader is None:
                 return
             mlen = await self._reader.readexactly(1)
+            self._reader_len -= 1
             if mlen[0] & 1:
                 if mlen[0] & 2:
                     if mlen[0] & 4:
                         await self.close()
                         return
                     mlen += await self._reader.readexactly(3)
+                    self._reader_len -= 3
                     mlen = int.from_bytes(mlen, 'little') >> 3
                 else:
                     mlen += await self._reader.readexactly(1)
+                    self._reader_len -= 1
                     mlen = int.from_bytes(mlen, 'little') >> 2
             else:
                 mlen = mlen[0] >> 1
             # print(f'recv mlen: {mlen}')
             if mlen <= self.MAX_MSG_SIZE:
-                return await self._reader.readexactly(mlen)
+                msg = await self._reader.readexactly(mlen)
+                self._reader_len -= mlen
+                return msg
             else:
                 return self.close()
         except asyncio.IncompleteReadError as e:

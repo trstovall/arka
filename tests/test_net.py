@@ -59,31 +59,50 @@ def socket_pair(transport):
     B = net.Socket(('::1', 0), transport)
     transport.register(('::1', 0), A)
     transport.register(('::1', 1), B)
-    yield A, B
-    # A.close()
-    # B.close()
+    return A, B
 
 
-def socket_pair_t(pair) -> tuple[net.Socket, net.Socket]:
-    return pair
+def build_futures(pair: tuple[net.Socket, net.Socket]) -> tuple[
+    asyncio.Future, asyncio.Future, asyncio.Future, asyncio.Future
+]:
+    A, B = pair
+    A_connected, B_connected = asyncio.Future(), asyncio.Future()
+    A_closed, B_closed = asyncio.Future(), asyncio.Future()
+    A.on_connect = lambda x: A_connected.set_result(None)
+    B.on_connect = lambda x: B_connected.set_result(None)
+    A.on_close = lambda x: A_closed.set_result(None)
+    B.on_close = lambda x: B_closed.set_result(None)
+    return A_connected, B_connected, A_closed, B_closed
 
 
 @pytest.mark.asyncio
 async def test_handshake(socket_pair: tuple[net.Socket, net.Socket]):
     A, B = socket_pair
+    A_connected, B_connected, A_closed, B_closed = build_futures(socket_pair)
     # Initiate from A
     A.connect()
     # Let SYN/SYN-ACK/ACK exchange
-    await asyncio.sleep(0.05)
-    assert A._state == A.STATE_ESTABLISHED
+    await asyncio.gather(A_connected, B_connected)
+    assert A._state == Ay.STATE_ESTABLISHED
     assert B._state == B.STATE_ESTABLISHED
+    B.close()
+    # Let FIN/FIN-ACK/ACK exchange
+    await asyncio.gather(A_closed, B_closed)
+    assert A._state == Ay.STATE_CLOSED
+    assert B._state == B.STATE_CLOSED
 
 
 @pytest.mark.asyncio
 async def test_send_and_recv(socket_pair: tuple[net.Socket, net.Socket]):
     A, B = socket_pair
+    fA, fB = asyncio.Future(), asyncio.Future()
+    A.on_connect = lambda addr: fA.set_result(None)
+    B.on_connect = lambda addr: fB.set_result(None)
+    # Initiate from A
     A.connect()
-    await asyncio.sleep(0.05)
+    # Let SYN/SYN-ACK/ACK exchange
+    await asyncio.gather(fA, fB)
+    A.connect()
     # Send small message
     msg = b'hello'
     await A.send(msg)
@@ -97,8 +116,11 @@ async def test_send_and_recv(socket_pair: tuple[net.Socket, net.Socket]):
 @pytest.mark.asyncio
 async def test_send_and_recv_large(socket_pair: tuple[net.Socket, net.Socket]):
     A, B = socket_pair
+    fA, fB = asyncio.Future(), asyncio.Future()
+    A.on_connect = lambda addr: fA.set_result(None)
+    B.on_connect = lambda addr: fB.set_result(None)
     A.connect()
-    await asyncio.sleep(0.05)
+    await asyncio.gather(fA, fB)
     # Send large message
     msg = b'x' * (A.MAX_PAYLOAD * 2 + 50)
     await A.send(msg)
@@ -114,8 +136,11 @@ async def test_send_and_recv_large(socket_pair: tuple[net.Socket, net.Socket]):
 @pytest.mark.asyncio
 async def test_send_and_recv_max(socket_pair: tuple[net.Socket, net.Socket]):
     A, B = socket_pair
+    fA, fB = asyncio.Future(), asyncio.Future()
+    A.on_connect = lambda addr: fA.set_result(None)
+    B.on_connect = lambda addr: fB.set_result(None)
     A.connect()
-    await asyncio.sleep(0.05)
+    await asyncio.gather(fA, fB)
     # Send max message
     msg = b'x' * A.MAX_MSG_SIZE
     await A.send(msg)
@@ -129,8 +154,11 @@ async def test_send_and_recv_max(socket_pair: tuple[net.Socket, net.Socket]):
 @pytest.mark.asyncio
 async def test_malformed_packet_closes(socket_pair: tuple[net.Socket, net.Socket]):
     A, B = socket_pair
+    fA, fB = asyncio.Future(), asyncio.Future()
+    A.on_connect = lambda addr: fA.set_result(None)
+    B.on_connect = lambda addr: fB.set_result(None)
     A.connect()
-    await asyncio.sleep(0.05)
+    await asyncio.gather(fA, fB)
     # Send truncated header
     A.transport.sendto(b'\x00\x01', A.peer)
     # B should detect malformed and close
@@ -141,8 +169,11 @@ async def test_malformed_packet_closes(socket_pair: tuple[net.Socket, net.Socket
 @pytest.mark.asyncio
 async def test_window_enforcement(socket_pair: tuple[net.Socket, net.Socket]):
     A, B = socket_pair
+    fA, fB = asyncio.Future(), asyncio.Future()
+    A.on_connect = lambda addr: fA.set_result(None)
+    B.on_connect = lambda addr: fB.set_result(None)
     A.connect()
-    await asyncio.sleep(0.05)
+    await asyncio.gather(fA, fB)
     # Craft out-of-window sequence for B
     bad_seq = (B._ack or 0) + B.MAX_RECV_WINDOW + 1
     hdr = B.HEADER.pack(bad_seq, A._seq, net.Socket.FLAG_ACK)
@@ -161,10 +192,14 @@ def test_seq_lt():
 @pytest.mark.asyncio
 async def test_seq_wrap(socket_pair: tuple[net.Socket, net.Socket]):
     A, B = socket_pair
+    fA, fB = asyncio.Future(), asyncio.Future()
+    A.on_connect = lambda addr: fA.set_result(None)
+    B.on_connect = lambda addr: fB.set_result(None)
     A._seq = 2 ** 32 - 100
+    # Initiate from A
     A.connect()
-    await asyncio.sleep(0.05)
-    # Send large message
+    # Let SYN/SYN-ACK/ACK exchange
+    await asyncio.gather(fA, fB)
     msg = b'x' * (A.MAX_PAYLOAD * 200 + 50)
     await A.send(msg)
     got = await B.recv()
@@ -177,9 +212,11 @@ async def test_seq_wrap(socket_pair: tuple[net.Socket, net.Socket]):
 @pytest.mark.asyncio
 async def test_jitter(socket_pair: tuple[net.Socket, net.Socket]):
     A, B = socket_pair
+    fA, fB = asyncio.Future(), asyncio.Future()
+    A.on_connect = lambda addr: fA.set_result(None)
+    B.on_connect = lambda addr: fB.set_result(None)
     A.connect()
-    await asyncio.sleep(0.05)
-    # Send large message
+    await asyncio.gather(fA, fB)
     A.transport._jitter = 0.005
     msg = b'x' * A.MAX_MSG_SIZE
     await A.send(msg)

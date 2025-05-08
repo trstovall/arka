@@ -335,7 +335,13 @@ class Socket(object):
         # Ensure 3-way handshake
         match self._state:
             case self.STATE_ESTABLISHED:
-                pass
+                if flags & self.FLAG_FIN:
+                    self._state = self.STATE_FIN_ACK
+                    self._seq = (self._seq + 1) & 0xffffffff
+                    self._ack = seq
+                    self._ensure_fin_task = asyncio.create_task(self._ensure_fin())
+                    hdr = self.HEADER.pack(self._seq, self._ack, self.FLAG_FIN | self.FLAG_ACK)
+                    self.transport.sendto(hdr, self.peer)
             case self.STATE_NEW:
                 if flags & self.FLAG_SYN:
                     self._state = self.STATE_SYN_ACK
@@ -434,6 +440,7 @@ class Socket(object):
         # Process payload
         if (
             payload
+            and self._state == self.STATE_ESTABLISHED
             and len(self._reader._buffer) + len(payload) <= self.MAX_READER_SIZE
             and (seq - self._ack) & 0xffffffff < self.MAX_RECV_WINDOW
         ):

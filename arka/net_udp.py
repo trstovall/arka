@@ -610,6 +610,7 @@ class Socket(object):
         self._ensure_seq_task = None
 
     async def _ensure_ack(self):
+        print(f'{self.peer}: ensure_ack called')
         try:
             await asyncio.wait_for(self.closed, self.DELAYED_ACK_TO)
         except asyncio.CancelledError as e:

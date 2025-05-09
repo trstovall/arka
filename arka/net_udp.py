@@ -654,9 +654,10 @@ class Socket(object):
                 self._last_sent = time.monotonic()
                 print(f'fin3: {self.peer}')
                 try:
-                    await asyncio.wait_for(
-                        self.closed, min(timeout - now, self._rto)
-                    )
+                    # await asyncio.wait_for(
+                    #     self.closed, min(timeout - now, self._rto)
+                    # )
+                    await asyncio.sleep(self._rto)
                     print(f'fin4: {self.peer}')
                     break
                 except asyncio.TimeoutError as e:

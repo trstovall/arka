@@ -254,8 +254,8 @@ class Socket(object):
     def __init__(self,
         peer: Address,
         transport: asyncio.DatagramTransport,
-        on_connect: Callable[[Address], None] | None = None,
-        on_close: Callable[[Address], None] | None = None
+        on_connect: Callable[[Socket], None] | None = None,
+        on_close: Callable[[Socket], None] | None = None
     ):
         self.peer = peer
         self.transport = transport
@@ -646,7 +646,7 @@ class Socket(object):
             self._ensure_fin_task.cancel()
         if self.on_close is not None:
             try:
-                self.on_close(self.peer)
+                self.on_close(self)
             except Exception as e:
                 pass
 
@@ -677,7 +677,7 @@ class Socket(object):
 
     async def _call_on_connect(self):
         try:
-            self.on_connect(self.peer)
+            self.on_connect(self)
         except Exception as e:
             pass
 

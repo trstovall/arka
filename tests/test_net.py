@@ -37,8 +37,8 @@ class MockTransport:
             if self._debug:
                 print(f'to: {addr}, {inspect(data)}')
             if self._jitter is None:
-                self._loop.call_soon(
-                    self._socks[addr].datagram_received, data
+                self._loop.create_task(
+                    self.to_task(self._socks[addr].datagram_received, data)
                 )
             else:
                 self._loop.call_later(
@@ -47,8 +47,8 @@ class MockTransport:
                     data
                 )
 
-    def close(self):
-        self._socks.clear()
+    async def to_task(self, func, *args):
+        func(*args)
 
 
 @pytest_asyncio.fixture
@@ -97,7 +97,7 @@ async def test_handshake_syn(socket_pair: tuple[net.Socket, net.Socket]):
     assert B._state == B.STATE_CLOSED
 
 
-@pytest.mark.skipif(skip_all)
+@pytest.mark.skipif(skip_all, reason='')
 @pytest.mark.asyncio
 async def test_handshake_fin(socket_pair: tuple[net.Socket, net.Socket]):
     A, B = socket_pair
@@ -113,7 +113,7 @@ async def test_handshake_fin(socket_pair: tuple[net.Socket, net.Socket]):
     assert B._state == B.STATE_CLOSED
 
 
-@pytest.mark.skipif(skip_all)
+@pytest.mark.skipif(skip_all, reason='')
 @pytest.mark.asyncio
 async def test_send_and_recv(socket_pair: tuple[net.Socket, net.Socket]):
     A, B = socket_pair
@@ -130,7 +130,7 @@ async def test_send_and_recv(socket_pair: tuple[net.Socket, net.Socket]):
     assert echo == msg
 
 
-@pytest.mark.skipif(skip_all)
+@pytest.mark.skipif(skip_all, reason='')
 @pytest.mark.asyncio
 async def test_send_and_recv_large(socket_pair: tuple[net.Socket, net.Socket]):
     A, B = socket_pair
@@ -153,7 +153,7 @@ async def test_send_and_recv_large(socket_pair: tuple[net.Socket, net.Socket]):
     assert echo == msg
 
 
-@pytest.mark.skipif(skip_all)
+@pytest.mark.skipif(skip_all, reason='')
 @pytest.mark.asyncio
 async def test_send_and_recv_max(socket_pair: tuple[net.Socket, net.Socket]):
     A, B = socket_pair
@@ -175,7 +175,7 @@ async def test_send_and_recv_max(socket_pair: tuple[net.Socket, net.Socket]):
     assert echo == msg
 
 
-@pytest.mark.skipif(skip_all)
+@pytest.mark.skipif(skip_all, reason='')
 @pytest.mark.asyncio
 async def test_malformed_packet_closes(socket_pair: tuple[net.Socket, net.Socket]):
     A, B = socket_pair
@@ -189,7 +189,7 @@ async def test_malformed_packet_closes(socket_pair: tuple[net.Socket, net.Socket
     assert B._state == B.STATE_CLOSED
 
 
-@pytest.mark.skipif(skip_all)
+@pytest.mark.skipif(skip_all, reason='')
 @pytest.mark.asyncio
 async def test_window_enforcement(socket_pair: tuple[net.Socket, net.Socket]):
     A, B = socket_pair
@@ -203,7 +203,7 @@ async def test_window_enforcement(socket_pair: tuple[net.Socket, net.Socket]):
     assert bad_seq not in B._recd
 
 
-@pytest.mark.skipif(skip_all)
+@pytest.mark.skipif(skip_all, reason='')
 def test_seq_lt():
     # seq_lt should handle wraparound
     a = 2 ** 32 - 2
@@ -212,7 +212,7 @@ def test_seq_lt():
     assert net.seq_lt(b, a) is False
 
 
-@pytest.mark.skipif(skip_all)
+@pytest.mark.skipif(skip_all, reason='')
 @pytest.mark.asyncio
 async def test_seq_wrap(socket_pair: tuple[net.Socket, net.Socket]):
     A, B = socket_pair
@@ -229,7 +229,7 @@ async def test_seq_wrap(socket_pair: tuple[net.Socket, net.Socket]):
     assert echo == msg
 
 
-@pytest.mark.skipif(skip_all)
+@pytest.mark.skipif(skip_all, reason='')
 @pytest.mark.asyncio
 async def test_jitter(socket_pair: tuple[net.Socket, net.Socket]):
     A, B = socket_pair

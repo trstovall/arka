@@ -304,6 +304,7 @@ class Socket(object):
 
     def connect(self) -> asyncio.Future[None]:
         if self._state == self.STATE_NEW:
+            print(f'{self.peer}: NEW -> connect/SYN -> SYN')
             self._state = self.STATE_SYN
             self._ensure_syn_task = asyncio.create_task(self._ensure_syn())
         return self.connected
@@ -311,6 +312,7 @@ class Socket(object):
     def close(self) -> asyncio.Future[None]:
         match self._state:
             case self.STATE_NEW:
+                print(f'{self.peer}: NEW -> close/- -> CLS')
                 self._state = self.STATE_CLOSED
                 self.closed.set_result(None)
             case state if state in (
@@ -331,7 +333,7 @@ class Socket(object):
             # Close Socket on malformed packet
             return self.close()
         now = time.monotonic()
-        # print(f'e: {(now - self._last_recd) * 1_000_000}')
+        print(f'e: {(now - self._last_recd) * 1_000_000}')
         self._last_recd = now
         # Unpack header
         seq, ack, flags = self.HEADER.unpack_from(data)
@@ -339,24 +341,24 @@ class Socket(object):
         # State transition
         match self._state:
             case self.STATE_ESTABLISHED:
-                if (
-                    payload
-                    and self._reader_len + len(payload) <= self.MAX_READER_SIZE
-                    and (seq - self._ack) & 0xffffffff <= self.MAX_RECV_WINDOW
-                ):
-                    self._process_seq(seq, payload)
-                if flags & self.FLAG_ACK and not seq_lt(self._seq, ack):
-                    self._process_ack(ack, now)
                 if flags & self.FLAG_FIN:
-                    # Accept close request
-                    print(f'{self.peer}: EST -> FIN/FIN_ACK -> FIN_ACK')
-                    self._state = self.STATE_FIN_ACK
-                    self._seq = (self._seq + 1) & 0xffffffff
-                    self._ack = seq
-                    self._ensure_fin_task = asyncio.create_task(self._ensure_fin())
-                    hdr = self.HEADER.pack(self._seq, self._ack, self.FLAG_FIN | self.FLAG_ACK)
-                    self.transport.sendto(hdr, self.peer)
-                    asyncio.create_task(self._ensure_teardown())
+                    if not self._recd:
+                        # Accept close request
+                        print(f'{self.peer}: EST -> FIN/FIN_ACK -> FIN_ACK')
+                        self._state = self.STATE_FIN_ACK
+                        self._seq = (self._seq + 1) & 0xffffffff
+                        self._ack = seq
+                        self._ensure_fin_task = asyncio.create_task(self._ensure_fin())
+                        asyncio.create_task(self._ensure_teardown())
+                else:
+                    if (
+                        payload
+                        and self._reader_len + len(payload) <= self.MAX_READER_SIZE
+                        and (seq - self._ack) & 0xffffffff <= self.MAX_RECV_WINDOW
+                    ):
+                        self._process_seq(seq, payload)
+                    if flags & self.FLAG_ACK and not seq_lt(self._seq, ack):
+                        self._process_ack(ack, now)
             case self.STATE_NEW:
                 if flags & self.FLAG_SYN:
                     # Accept connection request
@@ -497,23 +499,9 @@ class Socket(object):
         try:
             if self._reader is None:
                 return
-            mlen = await self._reader.readexactly(1)
-            self._reader_len -= 1
-            if mlen[0] & 1:
-                if mlen[0] & 2:
-                    if mlen[0] & 4:
-                        await self.close()
-                        return
-                    mlen += await self._reader.readexactly(3)
-                    self._reader_len -= 3
-                    mlen = int.from_bytes(mlen, 'little') >> 3
-                else:
-                    mlen += await self._reader.readexactly(1)
-                    self._reader_len -= 1
-                    mlen = int.from_bytes(mlen, 'little') >> 2
-            else:
-                mlen = mlen[0] >> 1
-            # print(f'recv mlen: {mlen}')
+            mlen = await self._reader.readexactly(4)
+            self._reader_len -= 4
+            mlen = int.from_bytes(mlen, 'little')
             if mlen <= self.MAX_MSG_SIZE:
                 msg = await self._reader.readexactly(mlen)
                 self._reader_len -= mlen
@@ -528,24 +516,22 @@ class Socket(object):
             raise Exception('Cannot send.  Socket connection is not established.')
         if len(data) > self.MAX_MSG_SIZE:
             raise ValueError('Message is too large to send.')
-        mlen = mlen_to_bytes(len(data))
-        # print(f'send mlen: {mlen.hex()}')
-        if len(mlen) + len(data) <= self.MAX_PAYLOAD:
+        mlen = len(data).to_bytes(4, 'little')
+        if len(data) + 4 <= self.MAX_PAYLOAD:
             await self._send_datagram(mlen + data)
         else:
-            offset = self.MAX_PAYLOAD - len(mlen)
+            offset = self.MAX_PAYLOAD - 4
             await self._send_datagram(mlen + data[:offset])
             for i in range(offset, len(data), self.MAX_PAYLOAD):
                 await self._send_datagram(data[i:i+self.MAX_PAYLOAD])
 
     async def _send_datagram(self, data: bytes, flags: int = FLAG_ACK):
-        while len(self._sent) > self._cwnd:
+        while len(self._sent) >= self._cwnd:
             self._acked = asyncio.Future()
             await self._acked
         self._acked = None
         hdr = self.HEADER.pack(self._seq, self._ack, flags)
         pkt = b''.join([hdr, data])
-        # print(f's {self.peer} seq: {self._seq & 0xf}, data: {len(data)}')
         self.transport.sendto(pkt, self.peer)
         now = time.monotonic()
         self._last_sent = now
@@ -572,7 +558,7 @@ class Socket(object):
                     break
             self.transport.sendto(hdr, self.peer)
             self._last_sent = time.monotonic()
-            await time.sleep(1)
+            await asyncio.sleep(1)
             now = time.monotonic()
         self._ensure_syn_task = None
         if self._state != self.STATE_ESTABLISHED:
@@ -619,7 +605,7 @@ class Socket(object):
                     self._seq, self._ack, self.FLAG_ACK | self.FLAG_FIN
                 )
                 self.transport.sendto(hdr, self.peer)
-                await time.sleep(1)
+                await asyncio.sleep(1)
                 now = time.monotonic()
             else:
                 break

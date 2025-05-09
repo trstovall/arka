@@ -352,6 +352,7 @@ class Socket(object):
                 else:
                     if (
                         payload
+                        and seq not in self._recd
                         and self._reader_len + len(payload) <= self.MAX_READER_SIZE
                         and (seq - self._ack) & 0xffffffff <= self.MAX_RECV_WINDOW
                     ):
@@ -456,7 +457,8 @@ class Socket(object):
             self._reader_len += len(recd)
             self._ack = (self._ack + 1) & 0xffffffff
         # Ensure ACK is sent
-        if self._ensure_ack_task is None:
+        if self._ensure_ack_task.done():
+            print(f'{self.peer}: creating ensure_ack_task')
             self._ensure_ack_task = asyncio.create_task(self._ensure_ack())
 
     def _process_ack(self, ack: int, now: float):
@@ -616,7 +618,6 @@ class Socket(object):
                 self.transport.sendto(hdr, self.peer)
                 self._last_sent = time.monotonic()
                 self._last_ack_sent = self._ack
-        self._ensure_ack_task = None
 
     async def _keepalive(self):
         while self._state == self.STATE_ESTABLISHED:

@@ -460,6 +460,7 @@ class Socket(object):
             self._ensure_ack_task = asyncio.create_task(self._ensure_ack())
 
     def _process_ack(self, ack: int, now: float):
+        print(f'{self.peer}: processing ack {ack}')
         if ack == self._peer_ack:
             self._dup_ack_count += 1
             if self._dup_ack_count == 3:
@@ -474,6 +475,7 @@ class Socket(object):
         else:
             self._dup_ack_count = 0
             acked = False
+            print(f'{self.peer}: peer_ack: {self._peer_ack}, ack: {ack}')
             while seq_lt(self._peer_ack, ack):
                 # Clear delivered packets sent
                 match self._sent.pop(self._peer_ack, None):

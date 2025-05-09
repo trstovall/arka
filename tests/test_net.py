@@ -78,48 +78,41 @@ def build_futures(pair: tuple[net.Socket, net.Socket]) -> tuple[
     return A_connected, B_connected, A_closed, B_closed
 
 
-# @pytest.mark.skipif(skip_all)
+@pytest.mark.skipif(skip_all, reason='')
 @pytest.mark.asyncio
-async def test_handshake_syn(socket_pair: tuple[net.Socket, net.Socket]):
+async def test_handshake(socket_pair: tuple[net.Socket, net.Socket]):
     A, B = socket_pair
     A.transport._debug = True
     A_connected, B_connected, A_closed, B_closed = build_futures(socket_pair)
-    # Initiate from A
+    # Initiate connect from A
     A.connect()
     # Let SYN/SYN-ACK/ACK exchange
     await asyncio.gather(A_connected, B_connected)
+    assert A.connected.done()
+    assert B.connected.done()
     assert A._state == A.STATE_ESTABLISHED
     assert B._state == B.STATE_ESTABLISHED
+    # Initiate disconnect from B
     B.close()
     # Let FIN/FIN-ACK/ACK exchange
     await asyncio.gather(A_closed, B_closed)
+    assert A.closed.done()
+    assert B.closed.done()
     assert A._state == A.STATE_CLOSED
     assert B._state == B.STATE_CLOSED
 
 
-@pytest.mark.skipif(skip_all, reason='')
-@pytest.mark.asyncio
-async def test_handshake_fin(socket_pair: tuple[net.Socket, net.Socket]):
-    A, B = socket_pair
-    A.transport._debug = True
-    A_connected, B_connected, A_closed, B_closed = build_futures(socket_pair)
-    # Initiate from A
-    A.connect()
-    await asyncio.gather(A_connected, B_connected)
-    B.close()
-    # Let FIN/FIN-ACK/ACK exchange
-    await asyncio.gather(A_closed, B_closed)
-    assert A._state == A.STATE_CLOSED
-    assert B._state == B.STATE_CLOSED
-
-
-@pytest.mark.skipif(skip_all, reason='')
+# @pytest.mark.skipif(skip_all, reason='')
 @pytest.mark.asyncio
 async def test_send_and_recv(socket_pair: tuple[net.Socket, net.Socket]):
     A, B = socket_pair
     A_connected, B_connected, A_closed, B_closed = build_futures(socket_pair)
     A.connect()
     await asyncio.gather(A_connected, B_connected)
+    assert A.connected.done()
+    assert B.connected.done()
+    assert A._state == A.STATE_ESTABLISHED
+    assert B._state == B.STATE_ESTABLISHED
     # Send small message
     msg = b'hello'
     await A.send(msg)
@@ -128,6 +121,13 @@ async def test_send_and_recv(socket_pair: tuple[net.Socket, net.Socket]):
     await B.send(got)
     echo = await A.recv()
     assert echo == msg
+    B.close()
+    # Let FIN/FIN-ACK/ACK exchange
+    await asyncio.gather(A_closed, B_closed)
+    assert A.closed.done()
+    assert B.closed.done()
+    assert A._state == A.STATE_CLOSED
+    assert B._state == B.STATE_CLOSED
 
 
 @pytest.mark.skipif(skip_all, reason='')

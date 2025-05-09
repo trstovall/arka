@@ -356,7 +356,7 @@ class Socket(object):
                         and (seq - self._ack) & 0xffffffff <= self.MAX_RECV_WINDOW
                     ):
                         self._process_seq(seq, payload)
-                    if flags & self.FLAG_ACK and not seq_lt(self._seq, ack):
+                    if self._sent and flags & self.FLAG_ACK and not seq_lt(self._seq, ack):
                         self._process_ack(ack, now)
             case self.STATE_NEW:
                 if flags & self.FLAG_SYN:
@@ -460,7 +460,7 @@ class Socket(object):
             self._ensure_ack_task = asyncio.create_task(self._ensure_ack())
 
     def _process_ack(self, ack: int, now: float):
-        print(f'{self.peer}: processing ack {ack}')
+        print(f'{self.peer}: processing ack {ack & 0xff}')
         if ack == self._peer_ack:
             self._dup_ack_count += 1
             if self._dup_ack_count == 3:
@@ -490,7 +490,7 @@ class Socket(object):
                             # Congestion avoidance
                             self._cwnd += 1 / self._cwnd
                 self._peer_ack = (self._peer_ack + 1) & 0xffffffff
-            if acked and self._acked is not None:
+            if acked and self._acked is not None and not self._acked.done():
                 # Notify _send_datagram that _sent has been reduced
                 self._acked.set_result(None)
             if not self._sent and self._sent_heap:

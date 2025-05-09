@@ -610,6 +610,8 @@ class Socket(object):
     async def _ensure_ack(self):
         try:
             await asyncio.wait_for(self.closed, self.DELAYED_ACK_TO)
+        except asyncio.CancelledError as e:
+            print(f'{self.peer}: closed is cancelled.')
         except asyncio.TimeoutError as e:
             print(f'{self.peer}: ensure_ack')
             if self._last_ack_sent != self._ack and self._state == self.STATE_ESTABLISHED:

@@ -634,6 +634,7 @@ class Socket(object):
         self._keepalive_task = None
 
     async def _ensure_fin(self):
+        print(f'fin: {self.peer}')
         now = time.monotonic()
         timeout = now + self.TIMEOUT
         while now < timeout:
@@ -656,8 +657,8 @@ class Socket(object):
                 break
             except asyncio.TimeoutError as e:
                 now = time.monotonic()
-        self._ensure_fin_task = None
         try:
+            print(f'fin2: {self.peer}')
             self._teardown()
         except Exception as e:
             pass
@@ -684,8 +685,6 @@ class Socket(object):
             self._ensure_ack_task.cancel()
         if self._keepalive_task is not None:
             self._keepalive_task.cancel()
-        if self._ensure_fin_task is not None:
-            self._ensure_fin_task.cancel()
         if self.on_close is not None:
             try:
                 self.on_close(self)

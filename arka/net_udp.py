@@ -426,6 +426,7 @@ class Socket(object):
                     print(f'{self.peer}: FIN_ACK -> ACK/- -> CLS')
                     self._state = self.STATE_CLOSED
                     self._peer_ack = ack
+                    print(f'{self.peer}: before set_result: {self.closed.done()}')
                     try:
                         self.closed.set_result(None)
                     except Exception as e:

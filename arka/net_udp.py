@@ -639,18 +639,17 @@ class Socket(object):
             now = time.monotonic()
             timeout = now + self.TIMEOUT
             while now < timeout:
-                match self._state:
-                    case self.STATE_FIN:
-                        hdr = self.HEADER.pack(
-                            self._seq, 0, self.FLAG_FIN
-                        )
-                    case self.STATE_FIN_ACK:
-                        hdr = self.HEADER.pack(
-                            self._seq, self._ack, self.FLAG_ACK | self.FLAG_FIN
-                        )
-                        self._last_ack_sent = self._ack
-                    case _:
-                        break
+                if self._state == self.STATE_FIN:
+                    hdr = self.HEADER.pack(
+                        self._seq, 0, self.FLAG_FIN
+                    )
+                elif self._state == self.STATE_FIN_ACK:
+                    hdr = self.HEADER.pack(
+                        self._seq, self._ack, self.FLAG_ACK | self.FLAG_FIN
+                    )
+                    self._last_ack_sent = self._ack
+                else:
+                    break
                 self.transport.sendto(hdr, self.peer)
                 self._last_sent = time.monotonic()
                 print(f'fin3: {self.peer}')

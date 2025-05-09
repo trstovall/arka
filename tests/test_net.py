@@ -7,7 +7,7 @@ import pytest
 import random
 
 
-skip_all = True
+skip_all = False
 
 
 def inspect(data):
@@ -82,7 +82,7 @@ def build_futures(pair: tuple[net.Socket, net.Socket]) -> tuple[
 @pytest.mark.asyncio
 async def test_handshake(socket_pair: tuple[net.Socket, net.Socket]):
     A, B = socket_pair
-    A.transport._debug = True
+    A.transport._debug = False
     A_connected, B_connected, A_closed, B_closed = build_futures(socket_pair)
     # Initiate connect from A
     A.connect()
@@ -106,7 +106,6 @@ async def test_handshake(socket_pair: tuple[net.Socket, net.Socket]):
 @pytest.mark.asyncio
 async def test_simultaneous_syn(socket_pair: tuple[net.Socket, net.Socket]):
     A, B = socket_pair
-    A.transport._debug = True
     A_connected, B_connected, A_closed, B_closed = build_futures(socket_pair)
     # Initiate connect from A
     A.connect()
@@ -131,7 +130,6 @@ async def test_simultaneous_syn(socket_pair: tuple[net.Socket, net.Socket]):
 @pytest.mark.asyncio
 async def test_simultaneous_fin(socket_pair: tuple[net.Socket, net.Socket]):
     A, B = socket_pair
-    A.transport._debug = True
     A_connected, B_connected, A_closed, B_closed = build_futures(socket_pair)
     # Initiate connect from A
     A.connect()
@@ -181,7 +179,7 @@ async def test_send_and_recv(socket_pair: tuple[net.Socket, net.Socket]):
     assert B._state == B.STATE_CLOSED
 
 
-# @pytest.mark.skipif(skip_all, reason='')
+@pytest.mark.skipif(skip_all, reason='')
 @pytest.mark.asyncio
 async def test_send_and_recv_large(socket_pair: tuple[net.Socket, net.Socket]):
     A, B = socket_pair

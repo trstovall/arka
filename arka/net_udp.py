@@ -634,34 +634,39 @@ class Socket(object):
         self._keepalive_task = None
 
     async def _ensure_fin(self):
-        print(f'fin: {self.peer}')
-        now = time.monotonic()
-        timeout = now + self.TIMEOUT
-        while now < timeout:
-            match self._state:
-                case self.STATE_FIN:
-                    hdr = self.HEADER.pack(
-                        self._seq, 0, self.FLAG_FIN
-                    )
-                case self.STATE_FIN_ACK:
-                    hdr = self.HEADER.pack(
-                        self._seq, self._ack, self.FLAG_ACK | self.FLAG_FIN
-                    )
-                    self._last_ack_sent = self._ack
-                case _:
-                    break
-            self.transport.sendto(hdr, self.peer)
-            self._last_sent = time.monotonic()
-            try:
-                await asyncio.wait_for(self.closed, self._rto)
-                break
-            except asyncio.TimeoutError as e:
-                now = time.monotonic()
         try:
-            print(f'fin2: {self.peer}')
-            self._teardown()
+            print(f'fin: {self.peer}')
+            now = time.monotonic()
+            timeout = now + self.TIMEOUT
+            while now < timeout:
+                match self._state:
+                    case self.STATE_FIN:
+                        hdr = self.HEADER.pack(
+                            self._seq, 0, self.FLAG_FIN
+                        )
+                    case self.STATE_FIN_ACK:
+                        hdr = self.HEADER.pack(
+                            self._seq, self._ack, self.FLAG_ACK | self.FLAG_FIN
+                        )
+                        self._last_ack_sent = self._ack
+                    case _:
+                        break
+                self.transport.sendto(hdr, self.peer)
+                self._last_sent = time.monotonic()
+                try:
+                    await asyncio.wait_for(
+                        self.closed, min(timeout - now, self._rto)
+                    )
+                    break
+                except asyncio.TimeoutError as e:
+                    now = time.monotonic()
+            try:
+                print(f'fin2: {self.peer}')
+                self._teardown()
+            except Exception as e:
+                pass
         except Exception as e:
-            pass
+            print(f'err: {self.peer}, {e}')
 
     def _teardown(self):
         print(f'teardown: {self.peer}')

@@ -610,19 +610,13 @@ class Socket(object):
         self._ensure_seq_task = None
 
     async def _ensure_ack(self):
-        print(f'{self.peer}: ensure_ack called')
-        try:
-            await asyncio.wait_for(self.closed, self.DELAYED_ACK_TO)
-        except asyncio.CancelledError as e:
-            print(f'{self.peer}: closed is cancelled.')
-        except asyncio.TimeoutError as e:
-            print(f'{self.peer}: ensure_ack')
-            if self._last_ack_sent != self._ack and self._state == self.STATE_ESTABLISHED:
-                print(f'{self.peer}: last ack: {self._last_ack_sent}, ack: {self._ack}')
-                hdr = self.HEADER.pack(self._seq, self._ack, self.FLAG_ACK)
-                self.transport.sendto(hdr, self.peer)
-                self._last_sent = time.monotonic()
-                self._last_ack_sent = self._ack
+        await asyncio.sleep(self.DELAYED_ACK_TO)
+        if self._last_ack_sent != self._ack and self._state == self.STATE_ESTABLISHED:
+            print(f'{self.peer}: last ack: {self._last_ack_sent}, ack: {self._ack}')
+            hdr = self.HEADER.pack(self._seq, self._ack, self.FLAG_ACK)
+            self.transport.sendto(hdr, self.peer)
+            self._last_sent = time.monotonic()
+            self._last_ack_sent = self._ack
 
     async def _keepalive(self):
         while self._state == self.STATE_ESTABLISHED:

@@ -662,12 +662,14 @@ class Socket(object):
                     await asyncio.wait_for(
                         self.closed, min(timeout - now, self._rto)
                     )
-                    await asyncio.sleep(self._rto)
+                    # await asyncio.sleep(self._rto)
                     print(f'fin4: {self.peer}')
                     break
                 except asyncio.TimeoutError as e:
                     print(f'fin5: {self.peer}')
                     now = time.monotonic()
+                except asyncio.CancelledError as e:
+                    print(f'fin_cancel: {self.peer}')
             try:
                 print(f'fin2: {self.peer}')
                 self._teardown()

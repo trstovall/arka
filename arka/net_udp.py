@@ -412,6 +412,7 @@ class Socket(object):
                         self._peer_ack = ack
                         hdr = self.HEADER.pack(self._seq, self._ack, self.FLAG_ACK)
                         self.transport.sendto(hdr, self.peer)
+                        self.closed.set_result(None)
                         self._teardown()
                     else:
                         # Simultaneous close
@@ -426,6 +427,7 @@ class Socket(object):
                     print(f'{self.peer}: FIN_ACK -> ACK/- -> CLS')
                     self._state = self.STATE_CLOSED
                     self._peer_ack = ack
+                    self.closed.set_result(None)
                     self._teardown()
 
     def _update_srtt_rto(self, rtt: float):
@@ -652,7 +654,8 @@ class Socket(object):
         try:
             await asyncio.wait_for(self.closed, self.TIMEOUT)
         except asyncio.TimeoutError as e:
-            pass
+            self._state = self.STATE_CLOSED
+            self.closed.set_result(None)
         self._teardown()
 
     async def _keepalive(self):

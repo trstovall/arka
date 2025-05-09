@@ -606,11 +606,12 @@ class Socket(object):
         self._ensure_seq_task = None
 
     async def _ensure_ack(self):
-        ts = self._last_sent
         try:
             await asyncio.wait_for(self.closed, self.DELAYED_ACK_TO)
         except asyncio.TimeoutError as e:
+            print(f'{self.peer}: ensure_ack')
             if self._last_ack_sent != self._ack and self._state == self.STATE_ESTABLISHED:
+                print(f'{self.peer}: last ack: {self._last_ack_sent}, ack: {self._ack}')
                 hdr = self.HEADER.pack(self._seq, self._ack, self.FLAG_ACK)
                 self.transport.sendto(hdr, self.peer)
                 self._last_sent = time.monotonic()

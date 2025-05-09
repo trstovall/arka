@@ -410,6 +410,7 @@ class Socket(object):
                         self._last_sent = now
                         self._last_ack_sent = self._ack
                         self.closed.set_result(None)
+                        print(f'{self.peer}: closed: {self.closed.done()}')
                     else:
                         # Simultaneous close
                         print(f'{self.peer}: FIN -> FIN/FIN_ACK -> FIN_ACK')
@@ -426,6 +427,7 @@ class Socket(object):
                     self._state = self.STATE_CLOSED
                     self._peer_ack = ack
                     self.closed.set_result(None)
+                    print(f'{self.peer}: closed: {self.closed.done()}')
 
     def _update_srtt_rto(self, rtt: float):
         # Update smoothed round trip time and resend timeout
@@ -654,9 +656,9 @@ class Socket(object):
                 self._last_sent = time.monotonic()
                 print(f'fin3: {self.peer}')
                 try:
-                    # await asyncio.wait_for(
-                    #     self.closed, min(timeout - now, self._rto)
-                    # )
+                    await asyncio.wait_for(
+                        self.closed, min(timeout - now, self._rto)
+                    )
                     await asyncio.sleep(self._rto)
                     print(f'fin4: {self.peer}')
                     break

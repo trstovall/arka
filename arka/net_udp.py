@@ -653,12 +653,15 @@ class Socket(object):
                         break
                 self.transport.sendto(hdr, self.peer)
                 self._last_sent = time.monotonic()
+                print(f'fin3: {self.peer}')
                 try:
                     await asyncio.wait_for(
                         self.closed, min(timeout - now, self._rto)
                     )
+                    print(f'fin4: {self.peer}')
                     break
                 except asyncio.TimeoutError as e:
+                    print(f'fin5: {self.peer}')
                     now = time.monotonic()
             try:
                 print(f'fin2: {self.peer}')

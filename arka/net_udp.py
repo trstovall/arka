@@ -459,7 +459,7 @@ class Socket(object):
             self._reader_len += len(recd)
             self._ack = (self._ack + 1) & 0xffffffff
         # Ensure ACK is sent
-        if self._ensure_ack_task.done():
+        if self._ensure_ack_task is None or self._ensure_ack_task.done():
             print(f'{self.peer}: creating ensure_ack_task')
             self._ensure_ack_task = asyncio.create_task(self._ensure_ack())
 

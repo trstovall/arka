@@ -354,10 +354,12 @@ class Socket(object):
                         payload
                         and seq not in self._recd
                         and self._reader_len + len(payload) <= self.MAX_READER_SIZE
-                        and (seq - self._ack) & 0xffffffff <= self.MAX_RECV_WINDOW
+                        and (seq - self._ack) & 0xffffffff < self.MAX_RECV_WINDOW
                     ):
+                        print(f'{self.peer}: process_seq')
                         self._process_seq(seq, payload)
                     if self._sent and flags & self.FLAG_ACK and not seq_lt(self._seq, ack):
+                        print(f'{self.peer}: processing ack')
                         self._process_ack(ack, now)
             case self.STATE_NEW:
                 if flags & self.FLAG_SYN:

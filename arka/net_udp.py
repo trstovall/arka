@@ -619,6 +619,7 @@ class Socket(object):
             now = time.monotonic()
             timeout = now + self.TIMEOUT
             while now < timeout:
+                print(f'{self.peer}: _ensure_fin')
                 if self._state in (self.STATE_FIN, self.STATE_FIN_ACK):
                     hdr = self.HEADER.pack(
                         self._seq, self._ack, self.FLAG_ACK | self.FLAG_FIN
@@ -630,6 +631,7 @@ class Socket(object):
                     break
         except asyncio.CancelledError as e:
             pass
+        print(f'{self.peer}: _ensure_fin done')
         self._state = self.STATE_CLOSED
         if self._wait_connect is not None:
             self._wait_connect.cancel()
@@ -652,7 +654,7 @@ class Socket(object):
 
     async def _keepalive(self):
         try:
-            while True:
+            while self._state == self.STATE_ESTABLISHED:
                 now = time.monotonic()
                 recv_wait = self._last_recd + self.TIMEOUT - now
                 if recv_wait < 0:

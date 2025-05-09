@@ -663,6 +663,7 @@ class Socket(object):
             pass
 
     def _teardown(self):
+        print(f'teardown: {self.peer}')
         if self._state != self.STATE_CLOSED:
             self._state = self.STATE_CLOSED
         if not self.closed.done():

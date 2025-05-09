@@ -491,10 +491,8 @@ class Socket(object):
             if acked and self._acked is not None:
                 # Notify _send_datagram that _sent has been reduced
                 self._acked.set_result(None)
-            if not self._sent and self._ensure_seq_task is not None:
-                # Cancel resend if sent is empty
+            if not self._sent and self._sent_heap:
                 self._sent_heap: list[tuple[float, int]] = []
-                self._ensure_seq_task.cancel()
 
     async def recv(self) -> bytes | None:
         try:

@@ -626,7 +626,7 @@ class Socket(object):
     def _teardown(self):
         if not self.connected.done():
             self.connected.cancel()
-        if not self._acked.done():
+        if self._acked is not None and not self._acked.done():
             self._acked.cancel()
         self._sent = {}
         self._sent_heap = []
@@ -648,6 +648,13 @@ class Socket(object):
             except Exception as e:
                 pass
 
+    async def _ensure_teardown(self):
+        try:
+            await asyncio.wait_for(self.closed, self.TIMEOUT)
+        except asyncio.TimeoutError as e:
+            pass
+        self._teardown()
+
     async def _keepalive(self):
         while self._state == self.STATE_ESTABLISHED:
             now = time.monotonic()
@@ -667,8 +674,7 @@ class Socket(object):
 
     async def _call_on_connect(self):
         try:
-            if self.on_connect is not None:
-                self.on_connect(self.peer)
+            self.on_connect(self.peer)
         except Exception as e:
             pass
 

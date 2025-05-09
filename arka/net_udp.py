@@ -426,7 +426,10 @@ class Socket(object):
                     print(f'{self.peer}: FIN_ACK -> ACK/- -> CLS')
                     self._state = self.STATE_CLOSED
                     self._peer_ack = ack
-                    self.closed.set_result(None)
+                    try:
+                        self.closed.set_result(None)
+                    except Exception as e:
+                        print(f'{self.peer}: err: {e}')
                     print(f'{self.peer}: closed: {self.closed.done()}')
 
     def _update_srtt_rto(self, rtt: float):

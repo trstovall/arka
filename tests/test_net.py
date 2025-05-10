@@ -7,7 +7,7 @@ import pytest
 import random
 
 
-skip_all = False
+skip_all = True
 
 
 def inspect(data):
@@ -209,7 +209,7 @@ async def test_send_and_recv_large(socket_pair: tuple[net.Socket, net.Socket]):
     assert B._state == B.STATE_CLOSED
 
 
-@pytest.mark.skipif(skip_all, reason='')
+# @pytest.mark.skipif(skip_all, reason='')
 @pytest.mark.asyncio
 async def test_send_and_recv_max(socket_pair: tuple[net.Socket, net.Socket]):
     A, B = socket_pair

@@ -263,8 +263,6 @@ class Socket(object):
         self.on_close = on_close
 
         # state
-        self.connected: asyncio.Future[None] = asyncio.Future()
-        self.closed: asyncio.Future[None] = asyncio.Future()
         self._state: int = self.STATE_NEW
 
         # keepalive

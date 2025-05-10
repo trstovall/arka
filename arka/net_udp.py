@@ -1,6 +1,7 @@
 
 from __future__ import annotations
 from typing import Generator, Callable
+from collections import deque
 from os import urandom
 
 import types
@@ -64,6 +65,9 @@ MessageList = bytes
 
 def seq_lt(a: int, b: int) -> bool:
     return (a - b) & 0xffffffff > 0x8fffffff
+
+def seq_le(a: int, b: int) -> bool:
+    return a == b or seq_lt(a, b)
 
 def mlen_to_bytes(n: int) -> bytes:
     if n < 0x80:
@@ -232,9 +236,10 @@ class Socket(object):
 
     # Header
     HEADER = struct.Struct('<IIB')    # seq, ack, flags
-    FLAG_SYN = 0x1
-    FLAG_ACK = 0x2
-    FLAG_FIN = 0x4
+    FLAG_SYN = 1
+    FLAG_ACK = 2
+    FLAG_FIN = 4
+    MAX_SACK = 4
 
     # Congestion control defaults
     INITIAL_CWND = 16.0
@@ -247,7 +252,7 @@ class Socket(object):
 
     # Timers
     BACKOFF_MULTIPLIER = 1.5
-    DELAYED_ACK_TO = 0.002
+    DELAYED_ACK_TO = 0.01
     KEEPALIVE_TO = 15.0
     TIMEOUT = 60.0
 
@@ -274,6 +279,7 @@ class Socket(object):
         self._ack: int | None = None
         self._peer_ack: int | None = None
         self._last_ack_sent: int | None = None
+        self._sacks: deque[tuple[int, int]] = deque(maxlen=self.MAX_SACK)
 
         # send/recv buffers
         self._sent: dict[int, tuple[int, float, bytes]] = {}
@@ -333,7 +339,6 @@ class Socket(object):
         self._last_recd = now
         # Unpack header
         seq, ack, flags = self.HEADER.unpack_from(data)
-        payload = data[self.HEADER.size:]
         # State transition
         match self._state:
             case self.STATE_ESTABLISHED:
@@ -346,6 +351,18 @@ class Socket(object):
                         self._ack = seq
                         self._ensure_fin_task = asyncio.create_task(self._ensure_fin())
                 else:
+                    nsack = (flags >> 3) & 0xf
+                    if nsack > self.MAX_SACK:
+                        return self.close()
+                    if len(data) < self.HEADER.size + 8 * nsack:
+                        return self.close()
+                    if nsack:
+                        sacks = struct.unpack_from(
+                            '<' + 'II' * nsack, data, self.HEADER.size
+                        )
+                    else:
+                        sacks = ()
+                    payload = data[self.HEADER.size + 8 * nsack:]
                     if (
                         payload
                         and seq not in self._recd
@@ -353,8 +370,8 @@ class Socket(object):
                         and (seq - self._ack) & 0xffffffff < self.MAX_RECV_WINDOW
                     ):
                         self._process_seq(seq, payload)
-                    if self._sent and flags & self.FLAG_ACK and not seq_lt(self._seq, ack):
-                        self._process_ack(ack, now)
+                    if self._sent and flags & self.FLAG_ACK:
+                        self._process_ack(ack, sacks, now)
             case self.STATE_NEW:
                 if flags & self.FLAG_SYN:
                     # Accept connection request
@@ -372,8 +389,7 @@ class Socket(object):
                         self._ack = seq
                         self._peer_ack = ack
                         self._update_srtt_rto(now - self._last_sent)
-                        hdr = self.HEADER.pack(self._seq, self._ack, self.FLAG_ACK)
-                        self.transport.sendto(hdr, self.peer)
+                        self._send(self._seq, self._ack, self.FLAG_ACK)
                         self._last_sent = now
                         self._last_ack_sent = self._ack
                         self._ensure_syn_task.cancel()
@@ -382,8 +398,7 @@ class Socket(object):
                         # print(f'{self.peer}: SYN -> SYN/SYN_ACK -> SYN_ACK')
                         self._state = self.STATE_SYN_ACK
                         self._ack = seq
-                        hdr = self.HEADER.pack(self._seq, self._ack, self.FLAG_SYN | self.FLAG_ACK)
-                        self.transport.sendto(hdr, self.peer)
+                        self._send(self._seq, self._ack, self.FLAG_SYN | self.FLAG_ACK)
                         self._last_sent = now
                         self._last_ack_sent = self._ack
             case self.STATE_SYN_ACK:
@@ -402,8 +417,7 @@ class Socket(object):
                         self._state = self.STATE_CLOSED
                         self._ack = seq
                         self._peer_ack = ack
-                        hdr = self.HEADER.pack(self._seq, self._ack, self.FLAG_ACK)
-                        self.transport.sendto(hdr, self.peer)
+                        self._send(self._seq, self._ack, self.FLAG_ACK)
                         self._last_sent = now
                         self._last_ack_sent = self._ack
                         self._ensure_fin_task.cancel()
@@ -412,8 +426,7 @@ class Socket(object):
                         # print(f'{self.peer}: FIN -> FIN/FIN_ACK -> FIN_ACK')
                         self._state = self.STATE_FIN_ACK
                         self._ack = seq
-                        hdr = self.HEADER.pack(self._seq, self._ack, self.FLAG_FIN | self.FLAG_ACK)
-                        self.transport.sendto(hdr, self.peer)
+                        self._send(self._seq, self._ack, self.FLAG_FIN | self.FLAG_ACK)
                         self._last_sent = now
                         self._last_ack_sent = self._ack
             case self.STATE_FIN_ACK:
@@ -438,7 +451,7 @@ class Socket(object):
     def _process_seq(self, seq: int, payload: bytes):
         self._recd[seq] = payload
         # print(f'r {self.peer} seq: {seq & 0xf}, data: {len(self._recd[seq])}')
-        # Move data in self._recd into self._reader
+        # Move consecutive data into self._reader
         while True:
             recd = self._recd.pop(self._ack, None)
             if recd is None:
@@ -446,11 +459,53 @@ class Socket(object):
             self._reader.feed_data(recd)
             self._reader_len += len(recd)
             self._ack = (self._ack + 1) & 0xffffffff
+        while self._sacks and seq_le(self._sacks[0][0], self._ack):
+            self._sacks.popleft()
+        if seq_lt(self._ack, seq):
+            # Process out-of-order sequence
+            if len(self._sacks) >= self.MAX_SACK:
+                self._sacks.popleft()
+            self._sacks.append((seq, seq))
+            self._sacks = deque(sorted(self._sacks))
+            merged = deque()
+            for s, e in self._sacks:
+                if not merged or seq_lt(merged[-1][1], (s - 1) & 0xffffffff):
+                    merged.append((s, e))
+                else:
+                    if seq_lt(e, merged[-1][1]):
+                        e = merged[-1][1]
+                    merged[-1] = (merged[-1][0], e)
+            self._sacks = merged
         # Ensure ACK is sent
         if self._ensure_ack_task is None or self._ensure_ack_task.done():
             self._ensure_ack_task = asyncio.create_task(self._ensure_ack())
 
-    def _process_ack(self, ack: int, now: float):
+    def _process_ack(self, ack: int, sacks: tuple[int, ...], now: float):
+        if seq_lt(ack, self._peer_ack):
+            return
+        if seq_lt(self._seq, ack):
+            return self.close()
+        for i in range(0, len(sacks), 2):
+            s, e = sacks[i:i+2]
+            if seq_lt(e, s) or seq_lt(self._seq, e):
+                return self.close()
+            if not seq_lt(ack, s):
+                if seq_lt(ack, e):
+                    ack = e
+                continue
+            while s == e or seq_lt(s, e):
+                # Clear delivered packets sent
+                match self._sent.pop(s, None):
+                    case attempts, ts, pkt:
+                        self._update_srtt_rto(now - ts)
+                        # Congestion control
+                        if self._cwnd < self._ssthresh:
+                            # Slow start
+                            self._cwnd += 1
+                        else:
+                            # Congestion avoidance
+                            self._cwnd += 1 / self._cwnd
+                s = (s + 1) & 0xffffffff
         if ack == self._peer_ack:
             self._dup_ack_count += 1
             if self._dup_ack_count == 3:
@@ -464,12 +519,10 @@ class Socket(object):
                         self._cwnd = self._ssthresh + 3
         else:
             self._dup_ack_count = 0
-            acked = False
             while seq_lt(self._peer_ack, ack):
                 # Clear delivered packets sent
                 match self._sent.pop(self._peer_ack, None):
                     case attempts, ts, pkt:
-                        acked = True
                         self._update_srtt_rto(now - ts)
                         # Congestion control
                         if self._cwnd < self._ssthresh:
@@ -479,11 +532,12 @@ class Socket(object):
                             # Congestion avoidance
                             self._cwnd += 1 / self._cwnd
                 self._peer_ack = (self._peer_ack + 1) & 0xffffffff
-            if acked and self._acked is not None and not self._acked.done():
-                # Notify _send_datagram that _sent has been reduced
+        if self._acked and not self._acked.done():
+            # Notify _send_datagram that _sent has been reduced
+            if len(self._sent) < self._cwnd:
                 self._acked.set_result(None)
-            if not self._sent and self._sent_heap:
-                self._sent_heap: list[tuple[float, int]] = []
+        if not self._sent and self._sent_heap:
+            self._sent_heap: list[tuple[float, int]] = []
 
     async def recv(self) -> bytes | None:
         try:
@@ -516,6 +570,16 @@ class Socket(object):
                     return False
             return True
 
+    def _send(self, seq: int, ack: int, flags: int, data: bytes = b'') -> bytes:
+        if self._sacks and not flags & (self.FLAG_FIN | self.FLAG_SYN):
+            flags |= len(self._sacks) << 3
+            sacks = b''.join(struct.pack('<II', s, e) for s, e in self._sacks)
+        else:
+            sacks = b''
+        hdr = self.HEADER.pack(seq, ack, flags)
+        pkt = b''.join(hdr, sacks, data)
+        self.transport.sendto(pkt, self.peer)
+        return pkt
 
     async def _send_datagram(self, data: bytes, flags: int = FLAG_ACK) -> bool:
         while len(self._sent) >= self._cwnd:
@@ -523,9 +587,7 @@ class Socket(object):
             await self._acked
         self._acked = None
         if self._state == self.STATE_ESTABLISHED:
-            hdr = self.HEADER.pack(self._seq, self._ack, flags)
-            pkt = b''.join([hdr, data])
-            self.transport.sendto(pkt, self.peer)
+            pkt = self._send(self._seq, self._ack, flags, data)
             now = time.monotonic()
             self._last_sent = now
             self._last_ack_sent = self._ack
@@ -544,17 +606,13 @@ class Socket(object):
             while now < timeout:
                 match self._state:
                     case self.STATE_SYN:
-                        hdr = self.HEADER.pack(
-                            self._seq, 0, self.FLAG_SYN
-                        )
+                        ack, flags = 0, self.FLAG_SYN
                     case self.STATE_SYN_ACK:
-                        hdr = self.HEADER.pack(
-                            self._seq, self._ack, self.FLAG_SYN | self.FLAG_ACK
-                        )
-                        self._last_ack_sent = self._ack
+                        ack, flags = self._ack, self.FLAG_SYN | self.FLAG_ACK
+                        self._last_ack_sent = ack
                     case _:
                         break
-                self.transport.sendto(hdr, self.peer)
+                self._send(self._seq, ack, flags)
                 self._last_sent = time.monotonic()
                 await asyncio.sleep(self._rto)
             if self._state != self.STATE_ESTABLISHED:
@@ -591,8 +649,7 @@ class Socket(object):
     async def _ensure_ack(self):
         await asyncio.sleep(self.DELAYED_ACK_TO)
         if self._last_ack_sent != self._ack and self._state == self.STATE_ESTABLISHED:
-            hdr = self.HEADER.pack(self._seq, self._ack, self.FLAG_ACK)
-            self.transport.sendto(hdr, self.peer)
+            self._send(self._seq, self._ack, self.FLAG_ACK)
             self._last_sent = time.monotonic()
             self._last_ack_sent = self._ack
         self._ensure_ack_task = None
@@ -606,8 +663,7 @@ class Socket(object):
                 return self.close()
             ping_wait = self._last_sent + self.KEEPALIVE_TO - now
             if ping_wait < 0:
-                hdr = self.HEADER.pack(self._seq, self._ack, self.FLAG_ACK)
-                self.transport.sendto(hdr, self.peer)
+                self._send(self._seq, self._ack, self.FLAG_ACK)
                 self._last_sent = now
                 self._last_ack_sent = self._ack
             else:
@@ -621,17 +677,13 @@ class Socket(object):
             timeout = now + self.TIMEOUT
             while now < timeout:
                 if self._state == self.STATE_FIN:
-                    hdr = self.HEADER.pack(
-                        self._seq, 0, self.FLAG_FIN
-                    )
+                    ack, flags = 0, self.FLAG_FIN
                 elif self._state == self.STATE_FIN_ACK:
-                    hdr = self.HEADER.pack(
-                        self._seq, self._ack, self.FLAG_ACK | self.FLAG_FIN
-                    )
-                    self._last_ack_sent = self._ack
+                    ack, flags = self._ack, self.FLAG_ACK | self.FLAG_FIN
+                    self._last_ack_sent = ack
                 else:
                     break
-                self.transport.sendto(hdr, self.peer)
+                self._send(self._seq, ack, flags)
                 self._last_sent = time.monotonic()
                 await asyncio.sleep(min(timeout - now, self._rto))
         finally:

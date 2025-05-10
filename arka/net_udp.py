@@ -570,7 +570,9 @@ class Socket(object):
             self.transport.sendto(hdr, self.peer)
             self._last_sent = time.monotonic()
             try:
-                await asyncio.wait_for(self.connected, self._rto)
+                await asyncio.wait_for(
+                    asyncio.shield(self.connected), self._rto
+                )
                 break
             except asyncio.TimeoutError as e:
                 now = time.monotonic()
@@ -603,14 +605,18 @@ class Socket(object):
             if self._sent_heap:
                 wait = max(0.01, self._sent_heap[0][0] - time.monotonic())
                 try:
-                    await asyncio.wait_for(self.closed, wait)
+                    await asyncio.wait_for(
+                        asyncio.shield(self.closed), wait
+                    )
                     break
                 except asyncio.TimeoutError as e:
                     pass
         self._ensure_seq_task = None
 
     async def _ensure_ack(self):
-        await asyncio.sleep(self.DELAYED_ACK_TO)
+        await asyncio.wait_for(
+            asyncio.shield(self.closed), self.DELAYED_ACK_TO
+        )
         if self._last_ack_sent != self._ack and self._state == self.STATE_ESTABLISHED:
             print(f'{self.peer}: last ack: {self._last_ack_sent}, ack: {self._ack}')
             hdr = self.HEADER.pack(self._seq, self._ack, self.FLAG_ACK)
@@ -634,7 +640,7 @@ class Socket(object):
             else:
                 wait = min(recv_wait, ping_wait)
                 try:
-                    await asyncio.wait_for(self.closed, wait)
+                    await asyncio.wait_for(asyncio.shield(self.closed), wait)
                     break
                 except asyncio.TimeoutError as e:
                     pass
@@ -662,7 +668,7 @@ class Socket(object):
                 print(f'fin3: {self.peer}')
                 try:
                     await asyncio.wait_for(
-                        self.closed, min(timeout - now, self._rto)
+                        asyncio.shield(self.closed), min(timeout - now, self._rto)
                     )
                     # await asyncio.sleep(self._rto)
                     print(f'fin4: {self.peer}')

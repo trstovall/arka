@@ -7,7 +7,7 @@ import pytest
 import random
 
 
-skip_all = True
+skip_all = False
 
 
 def inspect(data):

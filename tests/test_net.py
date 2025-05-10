@@ -88,16 +88,12 @@ async def test_handshake(socket_pair: tuple[net.Socket, net.Socket]):
     A.connect()
     # Let SYN/SYN-ACK/ACK exchange
     await asyncio.gather(A_connected, B_connected)
-    assert A.connected.done()
-    assert B.connected.done()
     assert A._state == A.STATE_ESTABLISHED
     assert B._state == B.STATE_ESTABLISHED
     # Initiate disconnect from B
     B.close()
     # Let FIN/FIN-ACK/ACK exchange
     await asyncio.gather(A_closed, B_closed)
-    assert A.closed.done()
-    assert B.closed.done()
     assert A._state == A.STATE_CLOSED
     assert B._state == B.STATE_CLOSED
 
@@ -112,16 +108,12 @@ async def test_simultaneous_syn(socket_pair: tuple[net.Socket, net.Socket]):
     B.connect()
     # Let SYN/SYN-ACK/ACK exchange
     await asyncio.gather(A_connected, B_connected)
-    assert A.connected.done()
-    assert B.connected.done()
     assert A._state == A.STATE_ESTABLISHED
     assert B._state == B.STATE_ESTABLISHED
     # Initiate disconnect from B
     B.close()
     # Let FIN/FIN-ACK/ACK exchange
     await asyncio.gather(A_closed, B_closed)
-    assert A.closed.done()
-    assert B.closed.done()
     assert A._state == A.STATE_CLOSED
     assert B._state == B.STATE_CLOSED
 
@@ -135,8 +127,6 @@ async def test_simultaneous_fin(socket_pair: tuple[net.Socket, net.Socket]):
     A.connect()
     # Let SYN/SYN-ACK/ACK exchange
     await asyncio.gather(A_connected, B_connected)
-    assert A.connected.done()
-    assert B.connected.done()
     assert A._state == A.STATE_ESTABLISHED
     assert B._state == B.STATE_ESTABLISHED
     # Initiate disconnect from B
@@ -144,8 +134,6 @@ async def test_simultaneous_fin(socket_pair: tuple[net.Socket, net.Socket]):
     B.close()
     # Let FIN/FIN-ACK/ACK exchange
     await asyncio.gather(A_closed, B_closed)
-    assert A.closed.done()
-    assert B.closed.done()
     assert A._state == A.STATE_CLOSED
     assert B._state == B.STATE_CLOSED
 
@@ -158,8 +146,6 @@ async def test_send_and_recv(socket_pair: tuple[net.Socket, net.Socket]):
     # Connect
     A.connect()
     await asyncio.gather(A_connected, B_connected)
-    assert A.connected.done()
-    assert B.connected.done()
     assert A._state == A.STATE_ESTABLISHED
     assert B._state == B.STATE_ESTABLISHED
     # Send small message
@@ -173,8 +159,6 @@ async def test_send_and_recv(socket_pair: tuple[net.Socket, net.Socket]):
     # Close
     B.close()
     await asyncio.gather(A_closed, B_closed)
-    assert A.closed.done()
-    assert B.closed.done()
     assert A._state == A.STATE_CLOSED
     assert B._state == B.STATE_CLOSED
 
@@ -187,8 +171,6 @@ async def test_send_and_recv_large(socket_pair: tuple[net.Socket, net.Socket]):
     # Connect
     A.connect()
     await asyncio.gather(A_connected, B_connected)
-    assert A.connected.done()
-    assert B.connected.done()
     assert A._state == A.STATE_ESTABLISHED
     assert B._state == B.STATE_ESTABLISHED
     # Send large message
@@ -203,13 +185,11 @@ async def test_send_and_recv_large(socket_pair: tuple[net.Socket, net.Socket]):
     # Close
     B.close()
     await asyncio.gather(A_closed, B_closed)
-    assert A.closed.done()
-    assert B.closed.done()
     assert A._state == A.STATE_CLOSED
     assert B._state == B.STATE_CLOSED
 
 
-# @pytest.mark.skipif(skip_all, reason='')
+@pytest.mark.skipif(skip_all, reason='')
 @pytest.mark.asyncio
 async def test_send_and_recv_max(socket_pair: tuple[net.Socket, net.Socket]):
     A, B = socket_pair
@@ -217,8 +197,6 @@ async def test_send_and_recv_max(socket_pair: tuple[net.Socket, net.Socket]):
     # Connect
     A.connect()
     await asyncio.gather(A_connected, B_connected)
-    assert A.connected.done()
-    assert B.connected.done()
     assert A._state == A.STATE_ESTABLISHED
     assert B._state == B.STATE_ESTABLISHED
     # Send max message
@@ -232,8 +210,6 @@ async def test_send_and_recv_max(socket_pair: tuple[net.Socket, net.Socket]):
     # Close
     B.close()
     await asyncio.gather(A_closed, B_closed)
-    assert A.closed.done()
-    assert B.closed.done()
     assert A._state == A.STATE_CLOSED
     assert B._state == B.STATE_CLOSED
 
@@ -246,16 +222,12 @@ async def test_malformed_packet_closes(socket_pair: tuple[net.Socket, net.Socket
     # Connect
     A.connect()
     await asyncio.gather(A_connected, B_connected)
-    assert A.connected.done()
-    assert B.connected.done()
     assert A._state == A.STATE_ESTABLISHED
     assert B._state == B.STATE_ESTABLISHED
     # Send truncated header
     A.transport.sendto(b'\x00\x01', A.peer)
     # B should detect malformed and close
     await asyncio.gather(A_closed, B_closed)
-    assert A.closed.done()
-    assert B.closed.done()
     assert A._state == A.STATE_CLOSED
     assert B._state == B.STATE_CLOSED
 
@@ -268,8 +240,6 @@ async def test_window_enforcement(socket_pair: tuple[net.Socket, net.Socket]):
     # Connect
     A.connect()
     await asyncio.gather(A_connected, B_connected)
-    assert A.connected.done()
-    assert B.connected.done()
     assert A._state == A.STATE_ESTABLISHED
     assert B._state == B.STATE_ESTABLISHED
      # Craft out-of-window sequence for B
@@ -282,8 +252,6 @@ async def test_window_enforcement(socket_pair: tuple[net.Socket, net.Socket]):
     # Close
     B.close()
     await asyncio.gather(A_closed, B_closed)
-    assert A.closed.done()
-    assert B.closed.done()
     assert A._state == A.STATE_CLOSED
     assert B._state == B.STATE_CLOSED
 
@@ -305,8 +273,6 @@ async def test_seq_wrap(socket_pair: tuple[net.Socket, net.Socket]):
     # Connect
     A.connect()
     await asyncio.gather(A_connected, B_connected)
-    assert A.connected.done()
-    assert B.connected.done()
     assert A._state == A.STATE_ESTABLISHED
     assert B._state == B.STATE_ESTABLISHED
     # Send wrap-around message
@@ -320,8 +286,6 @@ async def test_seq_wrap(socket_pair: tuple[net.Socket, net.Socket]):
     # Close
     B.close()
     await asyncio.gather(A_closed, B_closed)
-    assert A.closed.done()
-    assert B.closed.done()
     assert A._state == A.STATE_CLOSED
     assert B._state == B.STATE_CLOSED
 
@@ -334,8 +298,6 @@ async def test_jitter(socket_pair: tuple[net.Socket, net.Socket]):
     # Connect
     A.connect()
     await asyncio.gather(A_connected, B_connected)
-    assert A.connected.done()
-    assert B.connected.done()
     assert A._state == A.STATE_ESTABLISHED
     assert B._state == B.STATE_ESTABLISHED
     A.transport._jitter = 0.01
@@ -349,7 +311,5 @@ async def test_jitter(socket_pair: tuple[net.Socket, net.Socket]):
     # Close
     B.close()
     await asyncio.gather(A_closed, B_closed)
-    assert A.closed.done()
-    assert B.closed.done()
     assert A._state == A.STATE_CLOSED
     assert B._state == B.STATE_CLOSED

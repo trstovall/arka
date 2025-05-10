@@ -241,9 +241,9 @@ class Socket(object):
     INITIAL_SSTHRESH = 1000.0
     MAX_ATTEMPTS = 5
     MAX_PAYLOAD = 2**10             # 1 KB
-    MAX_MSG_SIZE = 2**23 + 1        # 8 MB
-    MAX_READER_SIZE = 2**24 + 2     # 16 MB
-    MAX_RECV_WINDOW = 2**13 + 1
+    MAX_MSG_SIZE = 2**23            # 8 MB
+    MAX_READER_SIZE = 2**24         # 16 MB
+    MAX_RECV_WINDOW = 2**13
 
     # Timers
     BACKOFF_MULTIPLIER = 1.5
@@ -507,12 +507,11 @@ class Socket(object):
         if len(data) > self.MAX_MSG_SIZE:
             raise ValueError('Message is too large to send.')
         mlen = len(data).to_bytes(4, 'little')
-        if len(data) + 4 <= self.MAX_PAYLOAD:
+        if len(data) <= self.MAX_PAYLOAD:
             return await self._send_datagram(mlen + data)
         else:
-            offset = self.MAX_PAYLOAD - 4
-            await self._send_datagram(mlen + data[:offset])
-            for i in range(offset, len(data), self.MAX_PAYLOAD):
+            await self._send_datagram(mlen + data[:self.MAX_PAYLOAD])
+            for i in range(self.MAX_PAYLOAD, len(data), self.MAX_PAYLOAD):
                 if not await self._send_datagram(data[i:i+self.MAX_PAYLOAD]):
                     return False
             return True

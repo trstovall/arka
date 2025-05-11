@@ -29,7 +29,7 @@ class MockTransport:
         self._debug: bool = False
         self._jitter: float | None = None
         self._drop: float | None = None
-        self._latency: float = 0
+        self._latency: float = 0.001
 
     def register(self, addr: net.Address, sock: net.Socket):
         self._socks[addr] = sock

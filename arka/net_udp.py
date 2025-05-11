@@ -289,6 +289,8 @@ class Socket(object):
         self._recd: dict[int, bytes] = {}
         self._reader: asyncio.StreamReader = asyncio.StreamReader()
         self._reader_len: int = 0
+        self._wait_ack: int | None = None
+        self._send_done: asyncio.Future[None] | None = None
 
         # congestion control
         self._cwnd: float = self.INITIAL_CWND
@@ -553,6 +555,9 @@ class Socket(object):
                 self._acked.set_result(None)
         if not self._sent and self._sent_heap:
             self._sent_heap: list[tuple[float, int]] = []
+        if self._peer_ack == self._wait_ack:
+            if self._send_done and not self._send_done.done():
+                self._send_done.set_result(None)
 
     async def recv(self) -> bytes | None:
         try:
@@ -576,14 +581,24 @@ class Socket(object):
         if len(data) > self.MAX_MSG_SIZE:
             raise ValueError('Message is too large to send.')
         mlen = len(data).to_bytes(4, 'little')
+        self._wait_ack = (self._seq + len(data) // self.MAX_PAYLOAD + 1) & 0xffffffff
+        self._send_done = asyncio.Future()
         if len(data) <= self.MAX_PAYLOAD:
-            return await self._send_datagram(mlen + data)
+            succ = await self._send_datagram(mlen + data)
         else:
-            await self._send_datagram(mlen + data[:self.MAX_PAYLOAD])
-            for i in range(self.MAX_PAYLOAD, len(data), self.MAX_PAYLOAD):
-                if not await self._send_datagram(data[i:i+self.MAX_PAYLOAD]):
-                    return False
-            return True
+            succ = await self._send_datagram(mlen + data[:self.MAX_PAYLOAD])
+            if succ:
+                for i in range(self.MAX_PAYLOAD, len(data), self.MAX_PAYLOAD):
+                    succ = await self._send_datagram(data[i:i+self.MAX_PAYLOAD])
+                    if not succ:
+                        break
+        if succ:
+            await self._send_done
+            if self._peer_ack != self._wait_ack:
+                succ = False
+        self._wait_ack = None
+        self._send_done = None
+        return succ
 
     def _send(self, seq: int, ack: int, flags: int, data: bytes = b'') -> bytes:
         if self._sacks and not flags & (self.FLAG_FIN | self.FLAG_SYN):
@@ -679,7 +694,7 @@ class Socket(object):
             recv_wait = self._last_recd + self.TIMEOUT - now
             if recv_wait < 0:
                 # Close Socket when peer doesn't send
-                return self.close()
+                break
             ping_wait = self._last_sent + self.KEEPALIVE_TO - now
             if ping_wait < 0:
                 self._send(self._seq, self._ack, self.FLAG_ACK)
@@ -688,6 +703,7 @@ class Socket(object):
             else:
                 wait = min(recv_wait, ping_wait)
                 await asyncio.sleep(wait)
+        self.close()
         self._keepalive_task = None
 
     async def _ensure_fin(self):
@@ -712,6 +728,8 @@ class Socket(object):
                 self._state = self.STATE_CLOSED
             if self._acked and not self._acked.done():
                 self._acked.set_result(None)
+            if self._send_done and not self._send_done.done():
+                self._send_done.set_result(None)
             self._sent = {}
             self._sent_heap = []
             self._recd = {}

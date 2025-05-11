@@ -339,7 +339,6 @@ class Socket(object):
             return self.close()
         now = time.monotonic()
         # print(f'e: {(now - self._last_recd) * 1_000_000}')
-        self._last_recd = now
         # Unpack header
         seq, ack, flags = self.HEADER.unpack_from(data)
         # State transition
@@ -353,6 +352,7 @@ class Socket(object):
                     # Accept close request
                     print(f'{self.peer}: EST -> FIN/FIN_ACK -> FIN_ACK')
                     self._state = self.STATE_FIN_ACK
+                    self._last_recd = now
                     self._seq = (self._seq + 1) & 0xffffffff
                     self._ack = seq
                     self._ensure_fin_task = asyncio.create_task(self._ensure_fin())
@@ -375,14 +375,17 @@ class Socket(object):
                         and self._reader_len + len(payload) <= self.MAX_READER_SIZE
                         and (seq - self._ack) & 0xffffffff < self.MAX_RECV_WINDOW
                     ):
+                        self._last_recd = now
                         self._process_seq(seq, payload)
                     if self._sent and flags & self.FLAG_ACK:
+                        self._last_recd = now
                         self._process_ack(ack, sacks, now)
             case self.STATE_NEW:
                 if flags & self.FLAG_SYN:
                     # Accept connection request
                     print(f'{self.peer}: NEW -> SYN/SYN_ACK -> SYN_ACK')
                     self._state = self.STATE_SYN_ACK
+                    self._last_recd = now
                     self._ack = seq
                     self._ensure_syn_task = asyncio.create_task(self._ensure_syn())
             case self.STATE_SYN:
@@ -392,6 +395,7 @@ class Socket(object):
                         # Connection accepted by peer
                         print(f'{self.peer}: SYN -> SYN_ACK/ACK -> EST')
                         self._state = self.STATE_ESTABLISHED
+                        self._last_recd = now
                         self._ack = seq
                         self._peer_ack = ack
                         self._update_srtt_rto(now - self._last_sent)
@@ -403,6 +407,7 @@ class Socket(object):
                         # Simultaneous connect
                         print(f'{self.peer}: SYN -> SYN/SYN_ACK -> SYN_ACK')
                         self._state = self.STATE_SYN_ACK
+                        self._last_recd = now
                         self._ack = seq
                         self._send(self._seq, self._ack, self.FLAG_SYN | self.FLAG_ACK)
                         self._last_sent = now
@@ -412,6 +417,7 @@ class Socket(object):
                     # Connection accepted by peer
                     print(f'{self.peer}: SYN_ACK -> ACK/- -> EST')
                     self._state = self.STATE_ESTABLISHED
+                    self._last_recd = now
                     self._peer_ack = ack
                     self._ensure_syn_task.cancel()
             case self.STATE_FIN:
@@ -421,6 +427,7 @@ class Socket(object):
                         # Close request accepted by peer
                         print(f'{self.peer}: FIN -> FIN_ACK/ACK -> CLS')
                         self._state = self.STATE_CLOSED
+                        self._last_recd = now
                         self._ack = seq
                         self._peer_ack = ack
                         self._send(self._seq, self._ack, self.FLAG_ACK)
@@ -431,6 +438,7 @@ class Socket(object):
                         # Simultaneous close
                         print(f'{self.peer}: FIN -> FIN/FIN_ACK -> FIN_ACK')
                         self._state = self.STATE_FIN_ACK
+                        self._last_recd = now
                         self._ack = seq
                         self._send(self._seq, self._ack, self.FLAG_FIN | self.FLAG_ACK)
                         self._last_sent = now
@@ -440,6 +448,7 @@ class Socket(object):
                     # Close request accepted by peer
                     print(f'{self.peer}: FIN_ACK -> ACK/- -> CLS')
                     self._state = self.STATE_CLOSED
+                    self._last_recd = now
                     self._peer_ack = ack
                     self._ensure_fin_task.cancel()
 

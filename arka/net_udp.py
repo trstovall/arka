@@ -593,6 +593,7 @@ class Socket(object):
                     if not succ:
                         break
         if succ:
+            print(f'{self.peer}:  Awaiting {self._wait_ack}')
             await self._send_done
             if self._peer_ack != self._wait_ack:
                 succ = False

@@ -333,7 +333,7 @@ async def test_dropped_packets(socket_pair: tuple[net.Socket, net.Socket]):
     assert A._state == A.STATE_ESTABLISHED
     assert B._state == B.STATE_ESTABLISHED
     # msg = b'x' * A.MAX_MSG_SIZE
-    msg = b'x' * A.MAX_PAYLOAD * 10 + 50
+    msg = b'x' * (A.MAX_PAYLOAD * 10 + 50)
     await A.send(msg)
     got = await B.recv()
     assert got == msg

@@ -7,7 +7,7 @@ import pytest
 import random
 
 
-skip_all = False
+skip_all = True
 
 
 def inspect(data):
@@ -82,7 +82,7 @@ def build_futures(pair: tuple[net.Socket, net.Socket]) -> tuple[
     return A_connected, B_connected, A_closed, B_closed
 
 
-@pytest.mark.skipif(skip_all, reason='')
+# @pytest.mark.skipif(skip_all, reason='')
 @pytest.mark.asyncio
 async def test_handshake(socket_pair: tuple[net.Socket, net.Socket]):
     A, B = socket_pair

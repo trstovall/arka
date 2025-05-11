@@ -324,7 +324,7 @@ class Socket(object):
                 self.STATE_SYN_ACK,
                 self.STATE_ESTABLISHED
             ):
-                print(f'{self.peer}: * -> close/- -> FIN')
+                print(f'{self.peer}: * -> close/FIN -> FIN')
                 self._state = self.STATE_FIN
                 self._seq = (self._seq + 1) & 0xffffffff
                 self._ensure_fin_task = asyncio.create_task(self._ensure_fin())
@@ -677,13 +677,14 @@ class Socket(object):
             now = time.monotonic()
             timeout = now + self.TIMEOUT
             while now < timeout:
-                if self._state == self.STATE_FIN:
-                    ack, flags = 0, self.FLAG_FIN
-                elif self._state == self.STATE_FIN_ACK:
-                    ack, flags = self._ack, self.FLAG_ACK | self.FLAG_FIN
-                    self._last_ack_sent = ack
-                else:
-                    break
+                match self._state:
+                    case self.STATE_FIN:
+                        ack, flags = 0, self.FLAG_FIN
+                    case self.STATE_FIN_ACK:
+                        ack, flags = self._ack, self.FLAG_ACK | self.FLAG_FIN
+                        self._last_ack_sent = ack
+                    case _:
+                        break
                 self._send(self._seq, ack, flags)
                 self._last_sent = time.monotonic()
                 await asyncio.sleep(min(timeout - now, self._rto))

@@ -249,6 +249,7 @@ class Socket(object):
     MAX_MSG_SIZE = 2**23            # 8 MB
     MAX_READER_SIZE = 2**24         # 16 MB
     MAX_RECV_WINDOW = 2**13
+    MAX_FIN_RECD = 3
 
     # Timers
     BACKOFF_MULTIPLIER = 1.5
@@ -269,6 +270,7 @@ class Socket(object):
 
         # state
         self._state: int = self.STATE_NEW
+        self._fin_recd: int = 0
 
         # keepalive
         self._last_sent: float = time.monotonic()
@@ -344,13 +346,16 @@ class Socket(object):
         match self._state:
             case self.STATE_ESTABLISHED:
                 if flags & self.FLAG_FIN:
-                    if not self._recd:
-                        # Accept close request
-                        print(f'{self.peer}: EST -> FIN/FIN_ACK -> FIN_ACK')
-                        self._state = self.STATE_FIN_ACK
-                        self._seq = (self._seq + 1) & 0xffffffff
-                        self._ack = seq
-                        self._ensure_fin_task = asyncio.create_task(self._ensure_fin())
+                    if self._recd and self._fin_recd < self.MAX_FIN_RECD:
+                        # Drop FIN to allow missing data to arrive
+                        self._fin_recd += 1
+                        return
+                    # Accept close request
+                    print(f'{self.peer}: EST -> FIN/FIN_ACK -> FIN_ACK')
+                    self._state = self.STATE_FIN_ACK
+                    self._seq = (self._seq + 1) & 0xffffffff
+                    self._ack = seq
+                    self._ensure_fin_task = asyncio.create_task(self._ensure_fin())
                 else:
                     nsack = (flags >> 3) & 0xf
                     if nsack > self.MAX_SACK:

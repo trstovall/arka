@@ -338,6 +338,7 @@ class Socket(object):
             return
         if len(data) < self.HEADER.size:
             # Close Socket on malformed packet
+            print(f'{self.peer}: closed on malformed packet')
             return self.close()
         now = time.monotonic()
         # print(f'e: {(now - self._last_recd) * 1_000_000}')
@@ -361,8 +362,10 @@ class Socket(object):
                 else:
                     nsack = (flags >> 3) & 0xf
                     if nsack > self.MAX_SACK:
+                        print(f'{self.peer}: closed for too many SACKs')
                         return self.close()
                     if len(data) < self.HEADER.size + 8 * nsack:
+                        print(f'{self.peer}: closed, SACKs not in header')
                         return self.close()
                     if nsack:
                         sacks = struct.unpack_from(
@@ -501,10 +504,12 @@ class Socket(object):
         if seq_lt(ack, self._peer_ack):
             return
         if seq_lt(self._seq, ack):
+            print(f'{self.peer}: closed, ACK > self._seq')
             return self.close()
         for i in range(0, len(sacks), 2):
             s, e = sacks[i:i+2]
             if seq_lt(e, s) or seq_lt(self._seq, e):
+                print(f'{self.peer}: closed, invalid SACK range')
                 return self.close()
             if not seq_lt(ack, s):
                 if seq_lt(ack, e):
@@ -571,6 +576,7 @@ class Socket(object):
                 self._reader_len -= mlen
                 return msg
             else:
+                print(f'{self.peer}: closed, mlen > MAX_MSG_SIZE')
                 self.close()
         except asyncio.IncompleteReadError as e:
             self._reader = None
@@ -648,6 +654,7 @@ class Socket(object):
                 await asyncio.sleep(self._rto)
                 now = time.monotonic()
             if self._state != self.STATE_ESTABLISHED:
+                print(f'{self.peer}: closed, _ensure_syn, state != EST')
                 self.close()
         finally:
             if self._state == self.STATE_ESTABLISHED:
@@ -704,6 +711,7 @@ class Socket(object):
             else:
                 wait = min(recv_wait, ping_wait)
                 await asyncio.sleep(wait)
+        print(f'{self.peer}: closed, keepalive, state != EST')
         self.close()
         self._keepalive_task = None
 

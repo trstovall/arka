@@ -638,15 +638,18 @@ class Socket(object):
             now = time.monotonic()
             while self._sent_heap and self._sent_heap[0][0] <= now:
                 seq = heapq.heappop(self._sent_heap)[1]
-                match self._sent.pop(seq, None):
-                    case attempts, ts, pkt:
-                        if attempts > self.MAX_ATTEMPTS:
-                            return self.close()
-                        self.transport.sendto(pkt, self.peer)
-                        self._last_sent = now
-                        self._sent[seq] = attempts + 1, now, pkt
-                        rto = now + self._rto * self.BACKOFF_MULTIPLIER ** attempts
-                        heapq.heappush(self._sent_heap, (rto, seq))
+                if (seq - self._peer_ack) & 0xffffffff < self._cwnd:
+                    match self._sent.pop(seq, None):
+                        case attempts, ts, pkt:
+                            if attempts > self.MAX_ATTEMPTS:
+                                return self.close()
+                            self.transport.sendto(pkt, self.peer)
+                            self._last_sent = now
+                            self._sent[seq] = attempts + 1, now, pkt
+                            rto = now + self._rto * self.BACKOFF_MULTIPLIER ** attempts
+                            heapq.heappush(self._sent_heap, (rto, seq))
+                else:
+                    heapq.heappush(self._sent_heap, (now + self._rto, seq))
             if self._sent_heap:
                 wait = max(0.01, self._sent_heap[0][0] - time.monotonic())
                 await asyncio.sleep(wait)

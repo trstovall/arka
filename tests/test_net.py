@@ -29,6 +29,7 @@ class MockTransport:
         self._debug: bool = False
         self._jitter: float | None = None
         self._drop: float | None = None
+        self._latency: float = 0
 
     def register(self, addr: net.Address, sock: net.Socket):
         self._socks[addr] = sock
@@ -39,13 +40,13 @@ class MockTransport:
                 return
             if self._debug:
                 print(f'to: {addr}, {inspect(data)}')
-            if self._jitter is None:
+            if self._jitter is None and not self._latency:
                 self._loop.create_task(
                     self.to_task(self._socks[addr].datagram_received, data)
                 )
             else:
                 self._loop.call_later(
-                    self._jitter * random.random(),
+                    self._latency + (self._jitter or 0) * random.random(),
                     self._socks[addr].datagram_received,
                     data
                 )
@@ -325,6 +326,7 @@ async def test_dropped_packets(socket_pair: tuple[net.Socket, net.Socket]):
     A_connected, B_connected, A_closed, B_closed = build_futures(socket_pair)
     A.transport._debug = True
     A.transport._drop = 0.10     # 10% dropped packets
+    A.transport._latency = .1
     # Connect
     A.connect()
     await asyncio.gather(A_connected, B_connected)

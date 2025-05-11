@@ -309,14 +309,14 @@ class Socket(object):
 
     def connect(self):
         if self._state == self.STATE_NEW:
-            # print(f'{self.peer}: NEW -> connect/SYN -> SYN')
+            print(f'{self.peer}: NEW -> connect/SYN -> SYN')
             self._state = self.STATE_SYN
             self._ensure_syn_task = asyncio.create_task(self._ensure_syn())
 
     def close(self):
         match self._state:
             case self.STATE_NEW:
-                # print(f'{self.peer}: NEW -> close/- -> CLS')
+                print(f'{self.peer}: NEW -> close/- -> CLS')
                 self._state = self.STATE_CLOSED
                 self.closed.set_result(None)
             case state if state in (
@@ -324,6 +324,7 @@ class Socket(object):
                 self.STATE_SYN_ACK,
                 self.STATE_ESTABLISHED
             ):
+                print(f'{self.peer}: * -> close/- -> FIN')
                 self._state = self.STATE_FIN
                 self._seq = (self._seq + 1) & 0xffffffff
                 self._ensure_fin_task = asyncio.create_task(self._ensure_fin())
@@ -345,7 +346,7 @@ class Socket(object):
                 if flags & self.FLAG_FIN:
                     if not self._recd:
                         # Accept close request
-                        # print(f'{self.peer}: EST -> FIN/FIN_ACK -> FIN_ACK')
+                        print(f'{self.peer}: EST -> FIN/FIN_ACK -> FIN_ACK')
                         self._state = self.STATE_FIN_ACK
                         self._seq = (self._seq + 1) & 0xffffffff
                         self._ack = seq
@@ -375,7 +376,7 @@ class Socket(object):
             case self.STATE_NEW:
                 if flags & self.FLAG_SYN:
                     # Accept connection request
-                    # print(f'{self.peer}: NEW -> SYN/SYN_ACK -> SYN_ACK')
+                    print(f'{self.peer}: NEW -> SYN/SYN_ACK -> SYN_ACK')
                     self._state = self.STATE_SYN_ACK
                     self._ack = seq
                     self._ensure_syn_task = asyncio.create_task(self._ensure_syn())
@@ -384,7 +385,7 @@ class Socket(object):
                     self._ack = seq
                     if flags & self.FLAG_ACK and ack == self._seq:
                         # Connection accepted by peer
-                        # print(f'{self.peer}: SYN -> SYN_ACK/ACK -> EST')
+                        print(f'{self.peer}: SYN -> SYN_ACK/ACK -> EST')
                         self._state = self.STATE_ESTABLISHED
                         self._ack = seq
                         self._peer_ack = ack
@@ -395,7 +396,7 @@ class Socket(object):
                         self._ensure_syn_task.cancel()
                     else:
                         # Simultaneous connect
-                        # print(f'{self.peer}: SYN -> SYN/SYN_ACK -> SYN_ACK')
+                        print(f'{self.peer}: SYN -> SYN/SYN_ACK -> SYN_ACK')
                         self._state = self.STATE_SYN_ACK
                         self._ack = seq
                         self._send(self._seq, self._ack, self.FLAG_SYN | self.FLAG_ACK)
@@ -404,7 +405,7 @@ class Socket(object):
             case self.STATE_SYN_ACK:
                 if flags & self.FLAG_ACK and ack == self._seq:
                     # Connection accepted by peer
-                    # print(f'{self.peer}: SYN_ACK -> ACK/- -> EST')
+                    print(f'{self.peer}: SYN_ACK -> ACK/- -> EST')
                     self._state = self.STATE_ESTABLISHED
                     self._peer_ack = ack
                     self._ensure_syn_task.cancel()
@@ -413,7 +414,7 @@ class Socket(object):
                     self._ack = seq
                     if flags & self.FLAG_ACK and ack == self._seq:
                         # Close request accepted by peer
-                        # print(f'{self.peer}: FIN -> FIN_ACK/ACK -> CLS')
+                        print(f'{self.peer}: FIN -> FIN_ACK/ACK -> CLS')
                         self._state = self.STATE_CLOSED
                         self._ack = seq
                         self._peer_ack = ack
@@ -423,7 +424,7 @@ class Socket(object):
                         self._ensure_fin_task.cancel()
                     else:
                         # Simultaneous close
-                        # print(f'{self.peer}: FIN -> FIN/FIN_ACK -> FIN_ACK')
+                        print(f'{self.peer}: FIN -> FIN/FIN_ACK -> FIN_ACK')
                         self._state = self.STATE_FIN_ACK
                         self._ack = seq
                         self._send(self._seq, self._ack, self.FLAG_FIN | self.FLAG_ACK)
@@ -432,7 +433,7 @@ class Socket(object):
             case self.STATE_FIN_ACK:
                 if flags & self.FLAG_ACK and ack == self._seq:
                     # Close request accepted by peer
-                    # print(f'{self.peer}: FIN_ACK -> ACK/- -> CLS')
+                    print(f'{self.peer}: FIN_ACK -> ACK/- -> CLS')
                     self._state = self.STATE_CLOSED
                     self._peer_ack = ack
                     self._ensure_fin_task.cancel()

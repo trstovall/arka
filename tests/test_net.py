@@ -82,7 +82,7 @@ def build_futures(pair: tuple[net.Socket, net.Socket]) -> tuple[
 @pytest.mark.asyncio
 async def test_handshake(socket_pair: tuple[net.Socket, net.Socket]):
     A, B = socket_pair
-    A.transport._debug = False
+    A.transport._debug = True
     A_connected, B_connected, A_closed, B_closed = build_futures(socket_pair)
     # Initiate connect from A
     A.connect()

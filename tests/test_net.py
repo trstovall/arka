@@ -28,12 +28,15 @@ class MockTransport:
         self._socks: dict[net.Address, net.Socket] = {}
         self._debug: bool = False
         self._jitter: float | None = None
+        self._drop: float | None = None
 
     def register(self, addr: net.Address, sock: net.Socket):
         self._socks[addr] = sock
 
     def sendto(self, data: bytes, addr: net.Address):
         if addr in self._socks:
+            if self._drop and random.random() < self._drop:
+                return
             if self._debug:
                 print(f'to: {addr}, {inspect(data)}')
             if self._jitter is None:
@@ -295,6 +298,32 @@ async def test_seq_wrap(socket_pair: tuple[net.Socket, net.Socket]):
 async def test_jitter(socket_pair: tuple[net.Socket, net.Socket]):
     A, B = socket_pair
     A_connected, B_connected, A_closed, B_closed = build_futures(socket_pair)
+    # Connect
+    A.connect()
+    await asyncio.gather(A_connected, B_connected)
+    assert A._state == A.STATE_ESTABLISHED
+    assert B._state == B.STATE_ESTABLISHED
+    A.transport._jitter = 0.01      # 10 ms jitter
+    msg = b'x' * A.MAX_MSG_SIZE
+    await A.send(msg)
+    got = await B.recv()
+    assert got == msg
+    await B.send(got)
+    echo = await A.recv()
+    assert echo == msg
+    # Close
+    B.close()
+    await asyncio.gather(A_closed, B_closed)
+    assert A._state == A.STATE_CLOSED
+    assert B._state == B.STATE_CLOSED
+
+
+@pytest.mark.skipif(skip_all, reason='')
+@pytest.mark.asyncio
+async def test_dropped_packets(socket_pair: tuple[net.Socket, net.Socket]):
+    A, B = socket_pair
+    A_connected, B_connected, A_closed, B_closed = build_futures(socket_pair)
+    A.transport._drop = 0.5     # 50% dropped packets
     # Connect
     A.connect()
     await asyncio.gather(A_connected, B_connected)

@@ -641,7 +641,6 @@ class Socket(object):
                 match self._sent.pop(seq, None):
                     case attempts, ts, pkt:
                         if attempts > self.MAX_ATTEMPTS:
-                            self._ensure_seq_task = None
                             return self.close()
                         self.transport.sendto(pkt, self.peer)
                         self._last_sent = now

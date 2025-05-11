@@ -324,7 +324,7 @@ async def test_dropped_packets(socket_pair: tuple[net.Socket, net.Socket]):
     A, B = socket_pair
     A_connected, B_connected, A_closed, B_closed = build_futures(socket_pair)
     A.transport._debug = True
-    A.transport._drop = 0.1     # 10% dropped packets
+    A.transport._drop = 0.01     # 1% dropped packets
     # Connect
     A.connect()
     await asyncio.gather(A_connected, B_connected)

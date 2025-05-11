@@ -616,6 +616,7 @@ class Socket(object):
                 self._send(self._seq, ack, flags)
                 self._last_sent = time.monotonic()
                 await asyncio.sleep(self._rto)
+                now = time.monotonic()
             if self._state != self.STATE_ESTABLISHED:
                 self.close()
         finally:
@@ -688,6 +689,7 @@ class Socket(object):
                 self._send(self._seq, ack, flags)
                 self._last_sent = time.monotonic()
                 await asyncio.sleep(min(timeout - now, self._rto))
+                now = time.monotonic()
         finally:
             if self._state != self.STATE_CLOSED:
                 self._state = self.STATE_CLOSED

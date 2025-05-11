@@ -330,7 +330,6 @@ async def test_dropped_packets(socket_pair: tuple[net.Socket, net.Socket]):
     await asyncio.gather(A_connected, B_connected)
     assert A._state == A.STATE_ESTABLISHED
     assert B._state == B.STATE_ESTABLISHED
-    A.transport._jitter = 0.01
     msg = b'x' * A.MAX_MSG_SIZE
     await A.send(msg)
     got = await B.recv()

@@ -692,7 +692,7 @@ class Socket(object):
             if self._state != self.STATE_CLOSED:
                 self._state = self.STATE_CLOSED
             if self._acked and not self._acked.done():
-                self._acked.cancel()
+                self._acked.set_result(None)
             self._sent = {}
             self._sent_heap = []
             self._recd = {}

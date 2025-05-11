@@ -711,7 +711,7 @@ class Socket(object):
             else:
                 wait = min(recv_wait, ping_wait)
                 await asyncio.sleep(wait)
-        print(f'{self.peer}: closed, keepalive, state != EST')
+        print(f'{self.peer}: closed, keepalive, state == {self._state}')
         self.close()
         self._keepalive_task = None
 

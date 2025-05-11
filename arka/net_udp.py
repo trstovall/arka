@@ -578,7 +578,7 @@ class Socket(object):
         else:
             sacks = b''
         hdr = self.HEADER.pack(seq, ack, flags)
-        pkt = b''.join(hdr, sacks, data)
+        pkt = b''.join([hdr, sacks, data])
         self.transport.sendto(pkt, self.peer)
         return pkt
 

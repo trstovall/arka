@@ -510,7 +510,7 @@ class Socket(object):
                 if seq_lt(ack, e):
                     ack = e
                 continue
-            while s == e or seq_lt(s, e):
+            while seq_le(s, e):
                 # Clear delivered packets sent
                 match self._sent.pop(s, None):
                     case attempts, ts, pkt:

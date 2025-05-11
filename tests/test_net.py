@@ -180,13 +180,12 @@ async def test_send_and_recv_large(socket_pair: tuple[net.Socket, net.Socket]):
     assert A._state == A.STATE_ESTABLISHED
     assert B._state == B.STATE_ESTABLISHED
     # Send large message
-    msg = b'x' * (A.MAX_PAYLOAD * 2 + 50)
+    msg = b'x' * (A.MAX_PAYLOAD * 10 + 50)
     await A.send(msg)
     got = await B.recv()
     assert got == msg
     await B.send(got)
     echo = await A.recv()
-    await asyncio.sleep(.1)
     assert echo == msg
     # Close
     B.close()

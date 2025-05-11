@@ -7,7 +7,7 @@ import pytest
 import random
 
 
-skip_all = True
+skip_all = False
 
 
 def inspect(data):
@@ -319,7 +319,7 @@ async def test_jitter(socket_pair: tuple[net.Socket, net.Socket]):
     assert B._state == B.STATE_CLOSED
 
 
-# @pytest.mark.skipif(skip_all, reason='')
+@pytest.mark.skipif(skip_all, reason='')
 @pytest.mark.asyncio
 async def test_dropped_packets(socket_pair: tuple[net.Socket, net.Socket]):
     A, B = socket_pair

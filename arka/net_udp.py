@@ -588,7 +588,7 @@ class Socket(object):
         return pkt
 
     async def _send_datagram(self, data: bytes, flags: int = FLAG_ACK) -> bool:
-        while len(self._sent) >= self._cwnd:
+        while (self._seq - self._peer_ack) & 0xffffffff >= self._cwnd:
             self._acked = asyncio.Future()
             await self._acked
         self._acked = None

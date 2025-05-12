@@ -249,7 +249,6 @@ class Socket(object):
     MAX_MSG_SIZE = 2**23            # 8 MB
     MAX_READER_SIZE = 2**24         # 16 MB
     MAX_RECV_WINDOW = 2**13
-    MAX_FIN_RECD = 3
 
     # Timers
     BACKOFF_MULTIPLIER = 1.5
@@ -293,6 +292,7 @@ class Socket(object):
         self._send_done: asyncio.Future[None] | None = None
 
         # congestion control
+        self._swnd: int | None = None
         self._cwnd: float = self.INITIAL_CWND
         self._ssthresh: float = self.INITIAL_SSTHRESH
         self._last_ack_recd: int | None = None
@@ -339,7 +339,8 @@ class Socket(object):
         if len(data) < self.HEADER.size:
             # Close Socket on malformed packet
             print(f'{self.peer}: closed on malformed packet')
-            return self.close()
+            self.close()
+            return
         now = time.monotonic()
         # print(f'e: {(now - self._last_recd) * 1_000_000}')
         # Unpack header
@@ -348,28 +349,34 @@ class Socket(object):
         match self._state:
             case self.STATE_ESTABLISHED:
                 self._last_recd = now
-                if flags & self.FLAG_SYN and seq == self._ack:
-                    # Resend dropped ACK
-                    self._send(self._seq, self._ack, self.FLAG_ACK)
                 if flags & self.FLAG_FIN:
-                    if self._recd and self._fin_recd < self.MAX_FIN_RECD:
-                        # Drop FIN to allow missing data to arrive
-                        self._fin_recd += 1
-                        return
                     # Accept close request
                     print(f'{self.peer}: EST -> FIN/FIN_ACK -> FIN_ACK')
                     self._state = self.STATE_FIN_ACK
                     self._seq = (self._seq + 1) & 0xffffffff
                     self._ack = seq
                     self._ensure_fin_task = asyncio.create_task(self._ensure_fin())
+                elif flags & self.FLAG_SYN:
+                    if seq == self._ack:
+                        # Resend dropped ACK
+                        print(f'{self.peer}: EST -> SYN|SYN_ACK/ACK -> EST')
+                        self._send(self._seq, self._ack, self.FLAG_ACK)
+                        self._last_sent = now
+                    else:
+                        # Corrupted, duplicate SYN
+                        print(f'{self.peer}: closed, corrupted SYN')
+                        self.close()
                 else:
+                    # Normal operation
                     nsack = (flags >> 3) & 0xf
                     if nsack > self.MAX_SACK:
                         print(f'{self.peer}: closed for too many SACKs')
-                        return self.close()
+                        self.close()
+                        return
                     if len(data) < self.HEADER.size + 8 * nsack:
                         print(f'{self.peer}: closed, SACKs not in header')
-                        return self.close()
+                        self.close()
+                        return
                     if nsack:
                         sacks = struct.unpack_from(
                             '<' + 'II' * nsack, data, self.HEADER.size
@@ -379,47 +386,94 @@ class Socket(object):
                     payload = data[self.HEADER.size + 8 * nsack:]
                     if (
                         payload
-                        and seq not in self._recd
-                        and self._reader_len + len(payload) <= self.MAX_READER_SIZE
                         and (seq - self._ack) & 0xffffffff < self.MAX_RECV_WINDOW
+                        and self._reader_len + len(payload) <= self.MAX_READER_SIZE
+                        and seq not in self._recd
                     ):
+                        # EST -> data/ACK -> EST
                         self._process_seq(seq, payload)
                     if self._sent and flags & self.FLAG_ACK:
+                        # EST -> ACK/- -> EST
                         self._process_ack(ack, sacks, now)
             case self.STATE_NEW:
-                if flags & self.FLAG_SYN:
+                if flags & self.FLAG_FIN:
+                    print(f'{self.peer}: NEW -> FIN/close -> CLS')
+                    self.close()
+                elif flags & self.FLAG_SYN:
+                    if len(data) >= self.HEADER.size + 2:
+                        self._swnd = struct.unpack_from('<H', data, self.HEADER.size)
+                    if not self._swnd:
+                        print(f'{self.peer}: Closing, invalid WINDOW parameter')
+                        self.close()
+                        return
                     # Accept connection request
                     print(f'{self.peer}: NEW -> SYN/SYN_ACK -> SYN_ACK')
                     self._state = self.STATE_SYN_ACK
                     self._last_recd = now
                     self._ack = seq
                     self._ensure_syn_task = asyncio.create_task(self._ensure_syn())
+                else:
+                    print(f'{self.peer}: NEW -> ~SYN/close -> CLS')
+                    self.close()
             case self.STATE_SYN:
-                if flags & self.FLAG_SYN:
+                if flags & self.FLAG_FIN:
+                    # Accept close request
+                    print(f'{self.peer}: SYN -> FIN/FIN_ACK -> FIN_ACK')
+                    self._state = self.STATE_FIN_ACK
                     self._ack = seq
-                    if flags & self.FLAG_ACK and ack == self._seq:
-                        # Connection accepted by peer
-                        print(f'{self.peer}: SYN -> SYN_ACK/ACK -> EST')
-                        self._state = self.STATE_ESTABLISHED
-                        self._last_recd = now
-                        self._ack = seq
-                        self._peer_ack = ack
-                        self._update_srtt_rto(now - self._last_sent)
-                        self._send(self._seq, self._ack, self.FLAG_ACK)
-                        self._last_sent = now
-                        self._last_ack_sent = self._ack
-                        self._ensure_syn_task.cancel()
+                    self._last_recd = now
+                    self._ensure_syn_task.cancel()
+                    self._ensure_fin_task = asyncio.create_task(self._ensure_fin())
+                elif flags & self.FLAG_SYN:
+                    if len(data) >= self.HEADER.size + 2:
+                        self._swnd = struct.unpack_from('<H', data, self.HEADER.size)
+                    if not self._swnd:
+                        print(f'{self.peer}: Closing, invalid WINDOW parameter')
+                        self.close()
+                        return
+                    self._ack = seq
+                    if flags & self.FLAG_ACK:
+                        if ack == self._seq:
+                            # Connection accepted by peer
+                            print(f'{self.peer}: SYN -> SYN_ACK/ACK -> EST')
+                            self._state = self.STATE_ESTABLISHED
+                            self._last_recd = now
+                            self._ack = seq
+                            self._peer_ack = ack
+                            self._update_srtt_rto(now - self._last_sent)
+                            self._send(self._seq, self._ack, self.FLAG_ACK)
+                            self._last_sent = now
+                            self._last_ack_sent = self._ack
+                            self._ensure_syn_task.cancel()
                     else:
                         # Simultaneous connect
                         print(f'{self.peer}: SYN -> SYN/SYN_ACK -> SYN_ACK')
                         self._state = self.STATE_SYN_ACK
                         self._last_recd = now
                         self._ack = seq
-                        self._send(self._seq, self._ack, self.FLAG_SYN | self.FLAG_ACK)
-                        self._last_sent = now
-                        self._last_ack_sent = self._ack
             case self.STATE_SYN_ACK:
-                if flags & self.FLAG_ACK and ack == self._seq:
+                if flags & self.FLAG_FIN:
+                    # Accept close request
+                    print(f'{self.peer}: SYN_ACK -> FIN/FIN_ACK -> FIN_ACK')
+                    self._state = self.STATE_FIN_ACK
+                    self._ack = seq
+                    self._last_recd = now
+                    self._ensure_syn_task.cancel()
+                    self._ensure_fin_task = asyncio.create_task(self._ensure_fin())
+                elif flags & self.FLAG_SYN:
+                    if flags & self.FLAG_ACK:
+                        if seq == self._ack and ack == self._seq:
+                            print(f'{self.peer}: SYN_ACK -> SYN_ACK/ACK -> EST')
+                            self._state = self.STATE_ESTABLISHED
+                            self._last_recd = now
+                            self._send(self._seq, self._ack, self.FLAG_ACK)
+                            self._last_sent = now
+                            self._last_ack_sent = self._ack
+                            self._ensure_syn_task.cancel()
+                    elif seq == self._ack:
+                        print(f'{self.peer}: SYN_ACK -> SYN/SYN_ACK -> SYN_ACK')
+                        self._last_recd = now
+                elif flags & self.FLAG_ACK and ack == self._seq:
                     # Connection accepted by peer
                     print(f'{self.peer}: SYN_ACK -> ACK/- -> EST')
                     self._state = self.STATE_ESTABLISHED
@@ -450,13 +504,32 @@ class Socket(object):
                         self._last_sent = now
                         self._last_ack_sent = self._ack
             case self.STATE_FIN_ACK:
-                if flags & self.FLAG_ACK and ack == self._seq:
-                    # Close request accepted by peer
-                    print(f'{self.peer}: FIN_ACK -> ACK/- -> CLS')
-                    self._state = self.STATE_CLOSED
-                    self._last_recd = now
-                    self._peer_ack = ack
-                    self._ensure_fin_task.cancel()
+                if flags & self.FLAG_FIN:
+                    if flags & self.FLAG_ACK:
+                        print(f'{self.peer}: FIN_ACK -> FIN_ACK/ACK -> CLS')
+                        self._state = self.STATE_CLOSED
+                        self._last_recd = now
+                        self._ack = seq
+                        self._peer_ack = ack
+                        self._send(self._seq, self._ack, self.FLAG_ACK)
+                        self._last_sent = now
+                        self._last_ack_sent = self._ack
+                        self._ensure_fin_task.cancel()
+                    else:
+                        print(f'{self.peer}: FIN_ACK -> FIN/FIN_ACK -> FIN_ACK')
+                        self._last_recd = now
+                        self._ack = seq
+                        self._send(self._seq, self._ack, self.FLAG_FIN | self.FLAG_ACK)
+                        self._last_sent = now
+                        self._last_ack_sent = self._ack
+                elif flags & self.FLAG_ACK:
+                    if ack == self._seq:
+                        # Close request accepted by peer
+                        print(f'{self.peer}: FIN_ACK -> ACK/- -> CLS')
+                        self._state = self.STATE_CLOSED
+                        self._last_recd = now
+                        self._peer_ack = ack
+                        self._ensure_fin_task.cancel()
 
     def _update_srtt_rto(self, rtt: float):
         # Update smoothed round trip time and resend timeout
@@ -557,7 +630,7 @@ class Socket(object):
                 self._peer_ack = (self._peer_ack + 1) & 0xffffffff
         if self._acked and not self._acked.done():
             # Notify _send_datagram that _sent has been reduced
-            if len(self._sent) < self._cwnd:
+            if (self._seq - self._peer_ack) & 0xffffffff < min(self._swnd, self._cwnd):
                 self._acked.set_result(None)
         if not self._sent and self._sent_heap:
             self._sent_heap: list[tuple[float, int]] = []
@@ -609,6 +682,8 @@ class Socket(object):
         return succ
 
     def _send(self, seq: int, ack: int, flags: int, data: bytes = b'') -> bytes:
+        if flags & self.FLAG_SYN:
+            data = self.MAX_RECV_WINDOW.to_bytes(2, 'little')
         if self._sacks and not flags & (self.FLAG_FIN | self.FLAG_SYN):
             flags |= len(self._sacks) << 3
             sacks = b''.join(struct.pack('<II', s, e) for s, e in self._sacks)
@@ -620,7 +695,7 @@ class Socket(object):
         return pkt
 
     async def _send_datagram(self, data: bytes, flags: int = FLAG_ACK) -> bool:
-        while (self._seq - self._peer_ack) & 0xffffffff >= self._cwnd:
+        while (self._seq - self._peer_ack) & 0xffffffff >= min(self._swnd, self._cwnd):
             self._acked = asyncio.Future()
             await self._acked
         self._acked = None
@@ -673,7 +748,7 @@ class Socket(object):
                 seq = heapq.heappop(self._sent_heap)[1]
                 match self._sent.pop(seq, None):
                     case attempts, ts, pkt:
-                        if (seq - self._peer_ack) & 0xffffffff < self._cwnd:
+                        if (seq - self._peer_ack) & 0xffffffff < min(self._swnd, self._cwnd):
                             # Resend packet
                             self.transport.sendto(pkt, self.peer)
                             self._last_sent = now

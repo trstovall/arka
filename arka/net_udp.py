@@ -401,7 +401,7 @@ class Socket(object):
                     self.close()
                 elif flags & self.FLAG_SYN:
                     if len(data) >= self.HEADER.size + 2:
-                        self._swnd = struct.unpack_from('<H', data, self.HEADER.size)
+                        self._swnd = struct.unpack_from('<H', data, self.HEADER.size)[0]
                     if not self._swnd:
                         print(f'{self.peer}: Closing, invalid WINDOW parameter')
                         self.close()
@@ -426,7 +426,7 @@ class Socket(object):
                     self._ensure_fin_task = asyncio.create_task(self._ensure_fin())
                 elif flags & self.FLAG_SYN:
                     if len(data) >= self.HEADER.size + 2:
-                        self._swnd = struct.unpack_from('<H', data, self.HEADER.size)
+                        self._swnd = struct.unpack_from('<H', data, self.HEADER.size)[0]
                     if not self._swnd:
                         print(f'{self.peer}: Closing, invalid WINDOW parameter')
                         self.close()

@@ -347,6 +347,10 @@ class Socket(object):
         # State transition
         match self._state:
             case self.STATE_ESTABLISHED:
+                self._last_recd = now
+                if flags & self.FLAG_SYN and seq == self._ack:
+                    # Resend dropped ACK
+                    self._send(self._seq, self._ack, self.FLAG_ACK)
                 if flags & self.FLAG_FIN:
                     if self._recd and self._fin_recd < self.MAX_FIN_RECD:
                         # Drop FIN to allow missing data to arrive
@@ -355,7 +359,6 @@ class Socket(object):
                     # Accept close request
                     print(f'{self.peer}: EST -> FIN/FIN_ACK -> FIN_ACK')
                     self._state = self.STATE_FIN_ACK
-                    self._last_recd = now
                     self._seq = (self._seq + 1) & 0xffffffff
                     self._ack = seq
                     self._ensure_fin_task = asyncio.create_task(self._ensure_fin())
@@ -380,10 +383,8 @@ class Socket(object):
                         and self._reader_len + len(payload) <= self.MAX_READER_SIZE
                         and (seq - self._ack) & 0xffffffff < self.MAX_RECV_WINDOW
                     ):
-                        self._last_recd = now
                         self._process_seq(seq, payload)
                     if self._sent and flags & self.FLAG_ACK:
-                        self._last_recd = now
                         self._process_ack(ack, sacks, now)
             case self.STATE_NEW:
                 if flags & self.FLAG_SYN:
@@ -587,7 +588,7 @@ class Socket(object):
         if len(data) > self.MAX_MSG_SIZE:
             raise ValueError('Message is too large to send.')
         mlen = len(data).to_bytes(4, 'little')
-        self._wait_ack = (self._seq + len(data) // self.MAX_PAYLOAD + 1) & 0xffffffff
+        self._wait_ack = (self._seq + (len(data) + self.MAX_PAYLOAD - 1) // self.MAX_PAYLOAD) & 0xffffffff
         self._send_done = asyncio.Future()
         if len(data) <= self.MAX_PAYLOAD:
             succ = await self._send_datagram(mlen + data)

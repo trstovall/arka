@@ -302,7 +302,7 @@ class Socket(object):
         # RTT + RTO
         self._srtt: float | None = None
         self._rttvar: float | None = None
-        self._rto: float = 1.0
+        self._rto: float = 0.2      # 200 ms
 
         # background tasks
         self._ensure_syn_task: asyncio.Task | None = None

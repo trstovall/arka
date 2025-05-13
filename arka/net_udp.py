@@ -1,6 +1,7 @@
 
 from __future__ import annotations
 from typing import Generator, Callable
+from arka import broker
 from collections import deque
 from os import urandom
 
@@ -45,7 +46,7 @@ class MSG:
     WORK_REQ = b'\x42'
     WORK_RES = b'\x43'
 
-    # EOF, gracefully close connection after peers exchange NONE
+    # EOF, gracefully close connection after peer sends NONE
     NONE = b'\xfd'
 
     # Ignored, but planned conditional responses
@@ -60,6 +61,13 @@ Address = tuple[str, int]
 Message = bytes
 Datagram = bytes
 MessageList = bytes
+EventQueue = asyncio.Queue[broker.AbstractBrokerEvent]
+
+class AbstractMessageEvent(object):
+    pass
+
+MessageQueue = asyncio.Queue[broker.AbstractBrokerEvent | AbstractMessageEvent]
+
 
 ### Helpers
 
@@ -181,7 +189,14 @@ def msg_meet_intro(neighbor: Address) -> Message:
 
 ### Message deserializers
 
-class PeersUpdateMessage(object):
+class MsgPeersSub(AbstractMessageEvent):
+
+    def __init__(self, msg: Message):
+        # self.subbed
+        self.subbed = bool(msg[1])
+        
+
+class MsgPeersPub(AbstractMessageEvent):
 
     def __init__(self, msg: Message):
         if msg[1] & 1:
@@ -193,32 +208,69 @@ class PeersUpdateMessage(object):
         if msg[offset] & 1:
             num_removed = struct.unpack_from('<H', msg, offset)[0] >> 1
             offset += 2
-        if len(msg) != offset + 32 * (num_added + num_removed):
-            raise ValueError('Invalid msg passed to `PeersUpdateMessage`.')
+        else:
+            num_removed = msg[offset] >> 1
+            offset += 1
+        if len(msg) != offset + 18 * (num_added + num_removed):
+            raise ValueError('Invalid message size.')
         start, end = offset, offset + 18 * num_added
+        # self.added
         self.added: set[Address] = {
             bytes_to_addr(msg[i:i+18]) for i in range(start, end, 18)
         }
         start, end = end, end + 18 * num_removed
+        # self.removed
         self.removed: set[Address] = {
             bytes_to_addr(msg[i:i+18]) for i in range(start, end, 18)
         }
 
 
-class MeetRequestMessage(object):
+class MsgPeersReq(AbstractMessageEvent):
 
     def __init__(self, msg: Message):
         if len(msg) != 19:
-            raise ValueError('Invalid message size for `MeetRequestMessage`.')
+            raise ValueError('Invalid message size.')
+        # self.neighbor
         self.neighbor: Address = bytes_to_addr(msg[1:])
 
 
-class MeetIntroMessage(object):
+class MsgPeersRes(AbstractMessageEvent):
 
     def __init__(self, msg: Message):
         if len(msg) != 19:
-            raise ValueError('Invalid message size for `MeetIntroMessage`.')
+            raise ValueError('Invalid message size.')
+        # self.neighbor
         self.neighbor: Address = bytes_to_addr(msg[1:])
+
+
+DESERIALIZE: dict[bytes, type[AbstractMessageEvent]] = {
+    MSG.PEERS_SUB: MsgPeersSub,
+    MSG.PEERS_PUB: MsgPeersPub,
+    MSG.PEERS_REQ: MsgPeersReq,
+    MSG.PEERS_RES: MsgPeersRes,
+
+    # MSG.TX_SUB: MsgTxSub,
+    # MSG.TX_PUB: MsgTxPub,
+    # MSG.TX_REQ: MsgTxReq,
+    # MSG.TX_RES: MsgTxRes,
+
+    # MSG.BLOCK_SUB: MsgBlockSub,
+    # MSG.BLOCK_PUB: MsgBlockPub,
+    # MSG.BLOCK_REQ: MsgBlockReq,
+    # MSG.BLOCK_RES: MsgBlockRes,
+
+    # MSG.TIP_SUB: MsgTipSub,
+    # MSG.TIP_PUB: MsgTipPub,
+    # MSG.TIP_REQ: MsgTipReq,
+    # MSG.TIP_RES: MsgTipRes,
+    
+    # MSG.WORK_SUB: MsgWorkSub,
+    # MSG.WORK_PUB: MsgWorkPub,
+    # MSG.WORK_REQ: MsgWorkReq,
+    # MSG.WORK_RES: MsgWorkRes,
+
+    # MSG.NONE: MsgNone
+}
 
 
 ### Socket
@@ -834,32 +886,35 @@ class Socket(object):
                     pass
 
 
+class Peer(object):
+
+    def __init__(self,
+        addr: Address, sock: Socket, msg_q: MessageQueue,
+        handler: asyncio.Task | None = None,
+        recvr: asyncio.Task | None = None
+    ):
+        self.addr = addr
+        self.sock = sock
+        self.msg_q = msg_q
+        self.handler = handler
+        self.recvr = recvr
+
+
 ### MeshProtocol
 
 class MeshProtocol(asyncio.DatagramProtocol):
     '''Protocol to handle UDP datagrams for the Mesh class.'''
-    def __init__(self, mesh: Mesh, blacklist: dict[Address, float] = {}):
+    def __init__(self, mesh: Mesh):
         self.mesh = mesh
-        self.blacklist = blacklist
 
     def connection_made(self, transport: asyncio.DatagramTransport):
         self.transport = transport
-    
+
     def datagram_received(self, data: Datagram, addr: Address):
-        # Check blacklist
-        timeout = self.blacklist.get(addr, 0)
-        if timeout:
-            if time.monotonic() < timeout:
-                # Drop Datagrams from blacklisted peers
-                return
-            del self.blacklist[addr]
         # Route Datagram to mesh.peers[addr]
-        peer = self.mesh.peers.get(addr)
-        if peer is None:
-            peer = self.mesh.accept(addr)
-            if peer is None:
-                return
-        peer.datagram_received(data)
+        peer = self.mesh.peers.get(addr) or self.mesh.accept(addr)
+        if peer:
+            peer.sock.datagram_received(data)
 
     def error_received(self, exc: OSError):
        print(f'Error receieved: {exc}')
@@ -872,45 +927,116 @@ class Mesh(object):
     BLACKLIST_TIMEOUT = 600.0
 
     def __init__(self,
+            addr: Address,
+            broker: broker.Broker,
             bootstrap: list[Address] = [],
             loop: asyncio.AbstractEventLoop | None = None
     ):
+        self.addr = addr
+        self.broker = broker
         self.bootstrap = bootstrap
         self.loop = loop or asyncio.get_running_loop()
-        self.peer_counter: int = 0
-        self.peers: dict[Address | int, Socket] = {}
+        self.peers: dict[Address, Peer] = {}
         self.blacklist: dict[Address, float] = {}
-        self.transport: asyncio.DatagramTransport = None
+        self.transport: asyncio.DatagramTransport | None = None
+        self.protocol: MeshProtocol | None = None
         self.running: bool = False
+        self.handler: asyncio.Task | None = None
 
     async def start(self):
-        pass
+        if self.running:
+            return
+        self.running = True
+        self.transport, self.protocol = await self.loop.create_datagram_endpoint(
+            lambda: MeshProtocol(self),
+            local_addr=self.addr,
+            family=socket.AF_INET6
+        )
+        self.handler = self.loop.create_task(self.handle_broker())
 
     async def stop(self):
-        pass
+        if not self.running:
+            return
+        self.running = False
+        self.transport.close()
+        self.transport = None
+        self.protocol = None
+        if self.handler and not self.handler.done():
+            self.handler.cancel()
 
-    def connect(self, addr: Address) -> Socket:
+    def accept(self, addr: Address) -> Peer | None:
+        # Check blacklist
+        timeout = self.blacklist.get(addr, 0)
+        if timeout:
+            if time.monotonic() < timeout:
+                # Drop requests from blacklisted peers
+                return
+            del self.blacklist[addr]
         # Create connection
-        peer = Socket(
-            addr=addr,
+        sock = Socket(
+            peer=addr,
             transport=self.transport,
             on_connect=self.handle_connect,
             on_close=self.handle_close
-        ).connect()
-        self.peer_counter += 1
+        )
+        peer = Peer(addr, sock, asyncio.Queue())
         # Add peer to self.peers
-        self.peers[peer.id] = peer
         self.peers[addr] = peer
         return peer
 
-    def disconnect(self, peer: Socket, blacklist: bool = True):
-        peer = self.peers.pop(peer.id, None)
-        if peer is not None:
-            self.peers.pop(peer.addr, None)
-            peer.close(blacklist=blacklist)
+    def connect(self, addr: Address):
+        peer = self.accept(addr)
+        if peer:
+            peer.sock.connect()
 
-    def handle_close(self, peer: Socket, blacklist: bool = True):
+    def handle_connect(self, sock: Socket):
+        peer = self.peers.get(sock.peer, None)
+        if not peer:
+            return
+        peer.handler = self.loop.create_task(self.handle_peer(peer))
+        self.broker.pub(broker.PeerConnected(peer.addr))
+
+    def handle_close(self, sock: Socket, blacklist: bool = True):
+        peer = self.peers.pop(sock.peer, None)
+        if not peer:
+            return
+        if peer.handler:
+            self.broker.pub(broker.PeerDisconnected(peer.addr))
+            if not peer.handler.done():
+                peer.handler.cancel()
         if blacklist:
             self.blacklist[peer.addr] = time.monotonic() + self.BLACKLIST_TIMEOUT
-        self.peers.pop(peer.id, None)
-        self.peers.pop(peer.addr, None)
+
+    async def handle_peer(self, peer: Peer):
+        try:
+            peer.recvr = self.loop.create_task(self.handle_recv(peer))
+        finally:
+            if peer.recvr and not peer.recvr.done():
+                peer.recvr.cancel()
+
+    async def handle_recv(self, peer: Peer):
+        while True:
+            msg = await peer.sock.recv()
+            try:
+                msg = DESERIALIZE[msg[:1]](msg)
+            except Exception as e:
+                await peer.msg_q.put(None)
+                break
+            await peer.msg_q.put(msg)
+
+    async def handle_broker(self):
+        subs = {broker.PeerConnected, broker.PeerDisconnected}
+        try:
+            event_q: EventQueue = asyncio.Queue()
+            for sub in subs:
+                self.broker.sub(sub, event_q)
+            while self.running:
+                event = await event_q.get()
+                match event:
+                    case broker.PeerConnected():
+                        print(f'{event.addr} connected.')
+                    case broker.PeerDisconnected():
+                        print(f'{event.addr} disconnected.')
+        finally:
+            for sub in subs:
+                self.broker.unsub(sub, event_q)

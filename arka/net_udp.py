@@ -321,7 +321,6 @@ class Socket(object):
 
         # state
         self._state: int = self.STATE_NEW
-        self._fin_recd: int = 0
 
         # keepalive
         self._last_sent: float = time.monotonic()
@@ -362,6 +361,10 @@ class Socket(object):
         self._ensure_ack_task: asyncio.Task | None = None
         self._ensure_fin_task: asyncio.Task | None = None
         self._keepalive_task: asyncio.Task | None = None
+
+    @property
+    def state(self) -> int:
+        return self._state
 
     def connect(self):
         if self._state == self.STATE_NEW:

@@ -299,7 +299,7 @@ class Socket(object):
     MAX_ATTEMPTS = 5
     MAX_PAYLOAD = 2**10             # 1 KB
     MAX_MSG_SIZE = 2**23            # 8 MB
-    MAX_READER_SIZE = 2**24         # 16 MB
+    MAX_READER_SIZE = 2**24 + 8     # 16 MB
     MAX_RECV_WINDOW = 2**13
 
     # Timers

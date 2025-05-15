@@ -532,6 +532,7 @@ class Socket(object):
                         if seq == self._ack and ack == self._seq:
                             print(f'{self.peer}: SYN_ACK -> SYN_ACK/ACK -> EST')
                             self._state = self.STATE_ESTABLISHED
+                            self._peer_ack = ack
                             self._last_recd = now
                             self._send(self._seq, self._ack, self.FLAG_ACK)
                             self._last_sent = now

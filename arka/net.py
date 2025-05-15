@@ -333,6 +333,8 @@ class Socket(object):
 
         # state
         self._state: int = self.STATE_NEW
+        self.connected: asyncio.Future[None] = asyncio.Future()
+        self.closed: asyncio.Future[None] = asyncio.Future()
 
         # keepalive
         self._last_sent: float = time.monotonic()
@@ -378,18 +380,24 @@ class Socket(object):
     def state(self) -> int:
         return self._state
 
-    def connect(self):
+    def connect(self) -> asyncio.Future[None]:
         if self._state == self.STATE_NEW:
             print(f'{self.peer}: NEW -> connect/SYN -> SYN')
             self._state = self.STATE_SYN
             self._ensure_syn_task = asyncio.create_task(self._ensure_syn())
+        return self.connected
 
-    def close(self):
+    def close(self) -> asyncio.Future[None]:
         match self._state:
             case self.STATE_NEW:
                 print(f'{self.peer}: NEW -> close/- -> CLS')
                 self._state = self.STATE_CLOSED
                 self.closed.set_result(None)
+                if self.on_close:
+                    try:
+                        self.on_close(self)
+                    except Exception as e:
+                        pass
             case state if state in (
                 self.STATE_SYN,
                 self.STATE_SYN_ACK,
@@ -399,6 +407,7 @@ class Socket(object):
                 self._state = self.STATE_FIN
                 self._seq = (self._seq + 1) & 0xffffffff
                 self._ensure_fin_task = asyncio.create_task(self._ensure_fin())
+        return self.closed
 
     def datagram_received(self, data: Datagram):
         if self._state == self.STATE_CLOSED:
@@ -647,12 +656,14 @@ class Socket(object):
             return
         if seq_lt(self._seq, ack):
             print(f'{self.peer}: closed, ACK > self._seq')
-            return self.close()
+            self.close()
+            return
         for i in range(0, len(sacks), 2):
             s, e = sacks[i:i+2]
             if seq_lt(e, s) or seq_lt(self._seq, e):
                 print(f'{self.peer}: closed, invalid SACK range')
-                return self.close()
+                self.close()
+                return
             if not seq_lt(ack, s):
                 if seq_lt(ack, e):
                     ack = e
@@ -802,6 +813,8 @@ class Socket(object):
                 self.close()
         finally:
             if self._state == self.STATE_ESTABLISHED:
+                if not self.connected.done():
+                    self.connected.set_result(None)
                 self._keepalive_task = asyncio.create_task(self._keepalive())
                 if self.on_connect is not None:
                     try:
@@ -879,6 +892,8 @@ class Socket(object):
         finally:
             if self._state != self.STATE_CLOSED:
                 self._state = self.STATE_CLOSED
+            if not self.closed.done():
+                self.closed.set_result(None)
             if self._acked and not self._acked.done():
                 self._acked.set_result(None)
             if self._send_done and not self._send_done.done():
@@ -979,7 +994,7 @@ class Mesh(object):
             self.connect(addr)
         self.expander = self.loop.create_task(self.expand_network())
 
-    def stop(self):
+    async def stop(self):
         if not self.running:
             return
         self.running = False
@@ -990,6 +1005,8 @@ class Mesh(object):
         for peer in self.peers.values():
             if peer.handler and not peer.handler.done():
                 peer.handler.cancel()
+        futures = [p.sock.close() for p in self.peers.values()]
+        await asyncio.wait_for(asyncio.gather(*futures), 5)
         self.blacklist.clear()
         self.peers.clear()
         self.neighbors.clear()
@@ -1106,7 +1123,6 @@ class Mesh(object):
             await self.broker.pub(broker.PeerDisconnected(peer.addr))
             if peer.recvr and not peer.recvr.done():
                 peer.recvr.cancel()
-            peer.sock.close()
 
     async def handle_recv(self, peer: Peer):
         while True:

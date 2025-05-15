@@ -1127,13 +1127,13 @@ class Mesh(object):
                 event = await event_q.get()
                 match event:
                     case broker.PeerConnected():
-                        msg = MsgToSend(msg_peers_pub(added=event.addr))
+                        msg = MsgToSend(msg_peers_pub(added={event.addr}))
                         for addr, peer in self.peers.items():
                             if peer.peers_sub and addr != event.addr:
                                 await peer.msg_q.put(msg)
                         msg = None
                     case broker.PeerDisconnected():
-                        msg = MsgToSend(msg_peers_pub(removed=event.addr))
+                        msg = MsgToSend(msg_peers_pub(removed={event.addr}))
                         for addr, peer in self.peers.items():
                             if peer.peers_sub:
                                 await peer.msg_q.put(msg)

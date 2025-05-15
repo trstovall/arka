@@ -1096,7 +1096,9 @@ class Mesh(object):
                             # Don't exceed limit of self.max_peers
                             continue
                         self.connect(msg.neighbor)
-
+        except Exception as e:
+            print(f'{self.addr}, {peer.addr}: Exception: {e}')
+            raise
         finally:
             print(f'{self.addr}, {peer.addr}: recvr done: {peer.recvr.done()}')
             print(f'{self.addr}, {peer.addr}: peer state: {peer.sock.state}')

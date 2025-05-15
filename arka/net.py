@@ -159,10 +159,12 @@ def bytes_to_addr(binary: bytes) -> Address:
 
 ### Message serializers
 
-def msg_peers_sub(active: bool) -> Message:
+def msg_peers_sub(active: bool = True) -> Message:
     return MSG.PEERS_SUB + int(active).to_bytes(1, 'little')
 
-def msg_peers_pub(added: set[Address], removed: set[Address]) -> Message:
+def msg_peers_pub(
+        added: set[Address] = set(), removed: set[Address] = set()
+) -> Message:
     msg_type = MSG.PEERS_PUB
     num_added = len(added)
     if num_added < 0x80:
@@ -1050,7 +1052,6 @@ class Mesh(object):
             while not peer.recvr.done() and peer.sock.state == peer.sock.STATE_ESTABLISHED:
                 match await peer.msg_q.get():
                     case None:
-                        print(f'{self.addr}, {peer.addr}: Got NONE')
                         break
                     case MsgToSend() as msg:
                         await peer.sock.send(msg.msg)
@@ -1100,11 +1101,8 @@ class Mesh(object):
             print(f'{self.addr}, {peer.addr}: Exception: {e}')
             raise
         finally:
-            print(f'{self.addr}, {peer.addr}: recvr done: {peer.recvr.done()}')
-            print(f'{self.addr}, {peer.addr}: peer state: {peer.sock.state}')
             if peer.recvr and not peer.recvr.done():
                 peer.recvr.cancel()
-            print(f'{self.addr}: closing peer socket to {peer.addr}')
             peer.sock.close()
 
     async def handle_recv(self, peer: Peer):

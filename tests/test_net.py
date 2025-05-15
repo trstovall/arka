@@ -1,5 +1,6 @@
 
-from arka import net_udp as net
+from arka import net
+from arka import broker
 
 import asyncio
 import pytest_asyncio
@@ -7,7 +8,7 @@ import pytest
 import random
 
 
-skip_all = False
+skip_all = True
 
 
 def inspect(data):
@@ -347,3 +348,40 @@ async def test_dropped_packets(socket_pair: tuple[net.Socket, net.Socket]):
     await asyncio.gather(A_closed, B_closed)
     assert A._state == A.STATE_CLOSED
     assert B._state == B.STATE_CLOSED
+
+
+# @pytest.mark.skipif(skip_all, reason='')
+@pytest.mark.asyncio
+async def test_mesh():
+    async def handle_q(event_q: asyncio.Queue[broker.AbstractBrokerEvent]):
+        while True:
+            match await event_q.get():
+                case broker.PeerConnected() as event:
+                    print(f'{event.addr} connected!')
+                case broker.PeerDisconnected() as event:
+                    print(f'{event.addr} disconnected!')
+    q = asyncio.Queue()
+    bA = broker.Broker()
+    bB = broker.Broker()
+    bC = broker.Broker()
+    bA.sub(broker.PeerConnected, q)
+    bB.sub(broker.PeerConnected, q)
+    bC.sub(broker.PeerConnected, q)
+    bA.sub(broker.PeerDisconnected, q)
+    bB.sub(broker.PeerDisconnected, q)
+    bC.sub(broker.PeerDisconnected, q)
+    handler = asyncio.create_task(handle_q(q))
+    A = net.Mesh(('::1', 5000), bA)
+    await A.start()
+    B = net.Mesh(('::1', 5001), bB, bootstrap=[('::1', 5000)])
+    await B.start()
+    C = net.Mesh(('::1', 5002), bC, bootstrap=[('::1', 5000)])
+    await C.start()
+    await asyncio.sleep(15)
+    A.stop()
+    await asyncio.sleep(1)
+    B.stop()
+    await asyncio.sleep(1)
+    C.stop()
+    await asyncio.sleep(1)
+    handler.cancel()

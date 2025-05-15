@@ -1029,14 +1029,12 @@ class Mesh(object):
         if not peer:
             return
         peer.handler = self.loop.create_task(self.handle_peer(peer))
-        self.broker.pub(broker.PeerConnected(peer.addr))
 
     def handle_close(self, sock: Socket, blacklist: bool = True):
         peer = self.peers.pop(sock.peer, None)
         if not peer:
             return
         if peer.handler:
-            self.broker.pub(broker.PeerDisconnected(peer.addr))
             if not peer.handler.done():
                 peer.handler.cancel()
         if blacklist:
@@ -1045,6 +1043,7 @@ class Mesh(object):
 
     async def handle_peer(self, peer: Peer):
         try:
+            await self.broker.pub(broker.PeerConnected(peer.addr))
             # Set up connection
             await peer.sock.send(msg_peers_sub(active=True))
             # Process peer.msg_q
@@ -1098,9 +1097,12 @@ class Mesh(object):
                             continue
                         self.connect(msg.neighbor)
         except Exception as e:
+            import traceback
             print(f'{self.addr}, {peer.addr}: Exception: {e}')
+            traceback.print_exc()
             raise
         finally:
+            await self.broker.pub(broker.PeerDisconnected(peer.addr))
             if peer.recvr and not peer.recvr.done():
                 peer.recvr.cancel()
             peer.sock.close()

@@ -1050,6 +1050,7 @@ class Mesh(object):
             while not peer.recvr.done() and peer.sock.state == peer.sock.STATE_ESTABLISHED:
                 match await peer.msg_q.get():
                     case None:
+                        print(f'{self.addr}, {peer.addr}: Got NONE')
                         break
                     case MsgToSend() as msg:
                         await peer.sock.send(msg.msg)

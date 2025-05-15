@@ -1097,6 +1097,8 @@ class Mesh(object):
                         self.connect(msg.neighbor)
 
         finally:
+            print(f'{self.addr}, {peer.addr}: recvr done: {peer.recvr.done()}')
+            print(f'{self.addr}, {peer.addr}: peer state: {peer.sock.state}')
             if peer.recvr and not peer.recvr.done():
                 peer.recvr.cancel()
             print(f'{self.addr}: closing peer socket to {peer.addr}')
@@ -1107,9 +1109,7 @@ class Mesh(object):
             msg = await peer.sock.recv()
             try:
                 msg = DESERIALIZE[msg[:1]](msg)
-                print(f'{self.addr}: recd {type(msg)}')
             except Exception as e:
-                print(f'{self.addr}: deserialize error.')
                 await peer.msg_q.put(None)
                 break
             await peer.msg_q.put(msg)

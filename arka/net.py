@@ -926,6 +926,7 @@ class MeshProtocol(asyncio.DatagramProtocol):
 
     def datagram_received(self, data: Datagram, addr: Address):
         # Route Datagram to mesh.peers[addr]
+        addr = addr[:2]
         peer = self.mesh.peers.get(addr) or self.mesh.accept(addr)
         if peer:
             peer.sock.datagram_received(data)
@@ -1138,7 +1139,7 @@ class Mesh(object):
     async def expand_network(self):
         while self.running:
             # Sleep when at max peers
-            if len(self.peers) >= self.max_peers:
+            if self.max_peers and len(self.peers) >= self.max_peers:
                 await asyncio.sleep(5)
                 continue
             # Find neighbor connected to peer

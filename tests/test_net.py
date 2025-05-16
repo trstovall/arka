@@ -328,7 +328,7 @@ async def test_dropped_packets(socket_pair: tuple[net.Socket, net.Socket]):
     A, B = socket_pair
     A_connected, B_connected, A_closed, B_closed = build_futures(socket_pair)
     A.transport._debug = True
-    A.transport._drop = 0.5         # 10% dropped packets
+    A.transport._drop = 0.1         # 10% dropped packets
     A.transport._latency = .05      # 50 ms
     # Connect
     A.connect()

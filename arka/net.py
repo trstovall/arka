@@ -4,6 +4,7 @@ from typing import Generator, Callable
 from arka import broker
 from collections import deque
 from os import urandom
+from sys import platform
 
 import types
 import asyncio
@@ -776,8 +777,11 @@ class Socket(object):
         return pkt
     
     def _send_raw(self, data: Datagram):
-        # Use zero appended address for the sake of Win32
-        self.transport.sendto(data, self._zaddr)
+        if platform != 'win32':
+            self.transport.sendto(data, self.peer)
+        else:
+            # Use zero appended address for the sake of Win32
+            self.transport.sendto(data, self._zaddr)
 
     async def _send_datagram(self, data: bytes, flags: int = FLAG_ACK) -> bool:
         while (self._seq - self._peer_ack) & 0xffffffff >= min(self._swnd, self._cwnd):
@@ -1173,7 +1177,7 @@ class Mesh(object):
         while self.running:
             # Sleep when at max peers
             if self.max_peers and len(self.peers) >= self.max_peers:
-                await asyncio.sleep(5)
+                await asyncio.sleep(1)
                 continue
             # Find neighbor connected to peer
             peer = None
@@ -1197,13 +1201,13 @@ class Mesh(object):
                 else:
                     break
             if peer is None or neighbor is None:
-                await asyncio.sleep(5)
+                await asyncio.sleep(1)
                 continue
             peer = self.peers.get(peer)
             if peer is None:
-                await asyncio.sleep(5)
+                await asyncio.sleep(1)
                 continue
             # Send request to meet neighbor to peer
             msg = MsgToSend(msg_peers_req(neighbor=neighbor))
             await peer.msg_q.put(msg)
-            await asyncio.sleep(5)
+            await asyncio.sleep(1)

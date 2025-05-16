@@ -36,6 +36,7 @@ class MockTransport:
         self._socks[addr] = sock
 
     def sendto(self, data: bytes, addr: net.Address):
+        addr = addr[:2]
         if addr in self._socks:
             if self._drop and random.random() < self._drop:
                 return

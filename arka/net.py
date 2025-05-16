@@ -13,6 +13,7 @@ import socket
 import heapq
 import random
 
+
 # Message Types
 class MSG:
     
@@ -327,6 +328,7 @@ class Socket(object):
         on_close: Callable[[Socket], None] | None = None
     ):
         self.peer = peer
+        self._zaddr = peer + (0, 0)
         self.transport = transport
         self.on_connect = on_connect
         self.on_close = on_close
@@ -687,7 +689,7 @@ class Socket(object):
                 # Fast retransmit
                 match self._sent.get(ack):
                     case retries, ts, pkt:
-                        self.transport.sendto(pkt, self.peer)
+                        self._send_raw(pkt)
                         self._last_sent = now
                         # Enter fast recovery
                         self._ssthresh = max(self._cwnd // 2, 1)
@@ -770,8 +772,12 @@ class Socket(object):
             sacks = b''
         hdr = self.HEADER.pack(seq, ack, flags)
         pkt = b''.join([hdr, sacks, data])
-        self.transport.sendto(pkt, self.peer)
+        self._send_raw(pkt)
         return pkt
+    
+    def _send_raw(self, data: Datagram):
+        # Use zero appended address for the sake of Win32
+        self.transport.sendto(data, self._zaddr)
 
     async def _send_datagram(self, data: bytes, flags: int = FLAG_ACK) -> bool:
         while (self._seq - self._peer_ack) & 0xffffffff >= min(self._swnd, self._cwnd):
@@ -831,7 +837,7 @@ class Socket(object):
                     case attempts, ts, pkt:
                         if (seq - self._peer_ack) & 0xffffffff < min(self._swnd, self._cwnd):
                             # Resend packet
-                            self.transport.sendto(pkt, self.peer)
+                            self._send_raw(pkt)
                             self._last_sent = now
                             self._sent[seq] = attempts + 1, now, pkt
                             rto = now + self._rto * self.BACKOFF_MULTIPLIER ** attempts
@@ -1006,7 +1012,11 @@ class Mesh(object):
             if peer.handler and not peer.handler.done():
                 peer.handler.cancel()
         futures = [p.sock.close() for p in self.peers.values()]
-        await asyncio.wait_for(asyncio.gather(*futures), 5)
+        futures = [f for f in futures if not f.done()]
+        try:
+            await asyncio.wait_for(asyncio.gather(*futures), 5)
+        except asyncio.TimeoutError as e:
+            pass
         self.blacklist.clear()
         self.peers.clear()
         self.neighbors.clear()

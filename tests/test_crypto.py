@@ -121,7 +121,7 @@ async def test_key_exchange_bad_key_async():
     vk2 = await kp2.verifier()
     kp4 = await kp1.spawn(vk2)
     kp5 = await kp3.spawn(vk1)
-    assert kp4._seed == kp5._seed
+    assert kp4._seed != kp5._seed
 
 
 def test_keccak_800():

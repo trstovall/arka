@@ -1052,6 +1052,7 @@ class Mesh(object):
         return peer
 
     def connect(self, addr: Address):
+        addr = bytes_to_addr(addr_to_bytes(addr))
         peer = self.accept(addr)
         if peer:
             peer.sock.connect()

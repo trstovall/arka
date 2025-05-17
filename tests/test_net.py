@@ -354,35 +354,77 @@ async def test_dropped_packets(socket_pair: tuple[net.Socket, net.Socket]):
 @pytest.mark.skipif(skip_all, reason='')
 @pytest.mark.asyncio
 async def test_mesh():
-    async def handle_q(event_q: asyncio.Queue[broker.AbstractBrokerEvent]):
-        while True:
-            match await event_q.get():
-                case broker.PeerConnected() as event:
-                    print(f'{event.addr} connected!')
-                case broker.PeerDisconnected() as event:
-                    print(f'{event.addr} disconnected!')
-    q = asyncio.Queue()
+    futures = [asyncio.Future() for i in range(12)]
+    qA = asyncio.Queue()
+    qB = asyncio.Queue()
+    qC = asyncio.Queue()
     bA = broker.Broker()
     bB = broker.Broker()
     bC = broker.Broker()
-    bA.sub(broker.PeerConnected, q)
-    bB.sub(broker.PeerConnected, q)
-    bC.sub(broker.PeerConnected, q)
-    bA.sub(broker.PeerDisconnected, q)
-    bB.sub(broker.PeerDisconnected, q)
-    bC.sub(broker.PeerDisconnected, q)
-    handler = asyncio.create_task(handle_q(q))
+    bA.sub(broker.PeerConnected, qA)
+    bB.sub(broker.PeerConnected, qB)
+    bC.sub(broker.PeerConnected, qC)
+    bA.sub(broker.PeerDisconnected, qA)
+    bB.sub(broker.PeerDisconnected, qB)
+    bC.sub(broker.PeerDisconnected, qC)
+    async def handle_A():
+        while True:
+            match await qA.get():
+                case broker.PeerConnected() as event:
+                    if event.addr[1] == 5001:
+                        futures[0].set_result(None)
+                    if event.addr[1] == 5002:
+                        futures[1].set_result(None)
+                case broker.PeerDisconnected() as event:
+                    if event.addr[1] == 5001:
+                        futures[2].set_result(None)
+                    if event.addr[1] == 5002:
+                        futures[3].set_result(None)
+    async def handle_B():
+        while True:
+            match await qB.get():
+                case broker.PeerConnected() as event:
+                    if event.addr[1] == 5000:
+                        futures[4].set_result(None)
+                    if event.addr[1] == 5002:
+                        futures[5].set_result(None)
+                case broker.PeerDisconnected() as event:
+                    if event.addr[1] == 5000:
+                        futures[6].set_result(None)
+                    if event.addr[1] == 5002:
+                        futures[7].set_result(None)
+    async def handle_C():
+        while True:
+            match await qC.get():
+                case broker.PeerConnected() as event:
+                    if event.addr[1] == 5000:
+                        futures[8].set_result(None)
+                    if event.addr[1] == 5001:
+                        futures[9].set_result(None)
+                case broker.PeerDisconnected() as event:
+                    if event.addr[1] == 5000:
+                        futures[10].set_result(None)
+                    if event.addr[1] == 5001:
+                        futures[11].set_result(None)
+    hA = asyncio.create_task(handle_A())
+    hB = asyncio.create_task(handle_B())
+    hC = asyncio.create_task(handle_C())
     A = net.Mesh(('::1', 5000), bA)
     await A.start()
     B = net.Mesh(('::1', 5001), bB, bootstrap=[('::1', 5000)])
     await B.start()
     C = net.Mesh(('::1', 5002), bC, bootstrap=[('::1', 5000)])
     await C.start()
-    await asyncio.sleep(15)
+    await asyncio.sleep(10)
     await A.stop()
     await asyncio.sleep(1)
     await B.stop()
     await asyncio.sleep(1)
     await C.stop()
     await asyncio.sleep(1)
-    handler.cancel()
+    try:
+        await asyncio.wait_for(asyncio.gather(*futures), 5)
+    finally:
+        hA.cancel()
+        hB.cancel()
+        hC.cancel()

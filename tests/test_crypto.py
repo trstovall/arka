@@ -1,82 +1,169 @@
 
 from os import urandom
-from arka._crypto import (
-    keypair, sign, verify, key_exchange_vartime, mint, check_mint,
-    keccak_800, keccak_1600
-)
+from arka import crypto, _crypto
 import keccak
+import pytest
+import pytest_asyncio
 
 
 def test_sign_happy_case():
     seed = urandom(32)
-    kp = keypair(seed)
+    kp = _crypto.keypair(seed)
     sk, pk = kp[:32], kp[32:]
     assert seed == sk
     msg = urandom(32)
-    sig = sign(kp, msg)
-    assert verify(pk, sig, msg)
+    sig = _crypto.sign(kp, msg)
+    assert _crypto.verify(pk, sig, msg)
+
+
+@pytest.mark.asyncio
+async def test_sign_happy_case_async():
+    seed = urandom(32)
+    kp = crypto.Keypair(seed)
+    hash = urandom(32)
+    sig = await kp.sign(hash)
+    verifier = await kp.verifier()
+    assert await verifier.verify(sig, hash)
 
 
 def test_sign_bad_pkey():
-    xA = keypair(urandom(32))
-    yQ = keypair(urandom(32))
+    xA = _crypto.keypair(urandom(32))
+    yQ = _crypto.keypair(urandom(32))
     Q = yQ[32:]
     msg = urandom(32)
-    sig = sign(xA, msg)
-    assert not verify(Q, sig, msg)
+    sig = _crypto.sign(xA, msg)
+    assert not _crypto.verify(Q, sig, msg)
+
+
+@pytest.mark.asyncio
+async def test_sign_bad_pkey_async():
+    kp1 = crypto.Keypair(urandom(32))
+    kp2 = crypto.Keypair(urandom(32))
+    hash = urandom(32)
+    sig = await kp1.sign(hash)
+    verifier1 = await kp1.verifier()
+    verifier2 = await kp2.verifier()
+    assert await verifier1.verify(sig, hash)
+    assert not await verifier2.verify(sig, hash)
 
 
 def test_sign_bad_msg():
-    xA = keypair(urandom(32))
+    xA = _crypto.keypair(urandom(32))
     msg = urandom(32)
-    sig = sign(xA, msg)
-    assert not verify(xA[32:], sig, urandom(32))
+    sig = _crypto.sign(xA, msg)
+    assert not _crypto.verify(xA[32:], sig, urandom(32))
+
+
+@pytest.mark.asyncio
+async def test_sign_bad_msg_async():
+    kp = crypto.Keypair(urandom(32))
+    hash = urandom(32)
+    sig = await kp.sign(hash)
+    verifier = await kp.verifier()
+    assert await verifier.verify(sig, hash)
+    assert not await verifier.verify(sig, urandom(32))
 
 
 def test_sign_bad_sig():
-    xA = keypair(urandom(32))
+    xA = _crypto.keypair(urandom(32))
     msg = urandom(32)
-    assert not verify(xA[32:], urandom(64), msg)
+    assert not _crypto.verify(xA[32:], urandom(64), msg)
+
+
+@pytest.mark.asyncio
+async def test_sign_bad_sig_async():
+    kp = crypto.Keypair(urandom(32))
+    hash = urandom(32)
+    sig = await kp.sign(hash)
+    verifier = await kp.verifier()
+    assert await verifier.verify(sig, hash)
+    assert not await verifier.verify(urandom(64), hash)
 
 
 def test_key_exchange_happy_case():
-    xA = keypair(urandom(32))
-    yQ = keypair(urandom(32))
+    xA = _crypto.keypair(urandom(32))
+    yQ = _crypto.keypair(urandom(32))
     x, A = xA[:32], xA[32:]
     y, Q = yQ[:32], yQ[32:]
-    s1 = key_exchange_vartime(x, Q)
-    s2 = key_exchange_vartime(y, A)
+    s1 = _crypto.key_exchange_vartime(x, Q)
+    s2 = _crypto.key_exchange_vartime(y, A)
     assert s1 == s2
 
 
+
+@pytest.mark.asyncio
+async def test_key_exchange_happy_case_async():
+    kp1 = crypto.Keypair(urandom(32))
+    kp2 = crypto.Keypair(urandom(32))
+    vk1 = await kp1.verifier()
+    vk2 = await kp2.verifier()
+    kp3 = await kp1.spawn(vk2)
+    kp4 = await kp2.spawn(vk1)
+    assert kp3._seed == kp4._seed
+
+
 def test_key_exchange_bad_key():
-    xA = keypair(urandom(32))
-    yQ = keypair(urandom(32))
+    xA = _crypto.keypair(urandom(32))
+    yQ = _crypto.keypair(urandom(32))
     x, A = xA[:32], xA[32:]
     y, Q = yQ[:32], yQ[32:]
-    s1 = key_exchange_vartime(x, Q)
-    s2 = key_exchange_vartime(urandom(32), A)
+    s1 = _crypto.key_exchange_vartime(x, Q)
+    s2 = _crypto.key_exchange_vartime(urandom(32), A)
     assert s1 != s2
+
+
+@pytest.mark.asyncio
+async def test_key_exchange_bad_key_async():
+    kp1 = crypto.Keypair(urandom(32))
+    kp2 = crypto.Keypair(urandom(32))
+    kp3 = crypto.Keypair(urandom(32))
+    vk1 = await kp1.verifier()
+    vk2 = await kp2.verifier()
+    kp4 = await kp1.spawn(vk2)
+    kp5 = await kp3.spawn(vk1)
+    assert kp4._seed == kp5._seed
 
 
 def test_keccak_800():
     for x in (b'', urandom(32), urandom(64), 
         urandom(128), urandom(256)
     ):
-        assert keccak_800(x) == keccak.keccak_800(x)
-        assert keccak_800(x, 16) == keccak.keccak_800(x, 16)
-        assert keccak_800(x, 64) == keccak.keccak_800(x, 64)
-        assert keccak_800(x, 256) == keccak.keccak_800(x, 256)
+        assert _crypto.keccak_800(x) == keccak.keccak_800(x)
+        assert _crypto.keccak_800(x, 16) == keccak.keccak_800(x, 16)
+        assert _crypto.keccak_800(x, 64) == keccak.keccak_800(x, 64)
+        assert _crypto.keccak_800(x, 256) == keccak.keccak_800(x, 256)
+
+
+@pytest.mark.asyncio
+async def test_keccak_800_async():
+    for x in (b'', urandom(32), urandom(64), 
+        urandom(128), urandom(256)
+    ):
+        assert (await crypto.keccak_800(x)) == keccak.keccak_800(x)
+        assert (await crypto.keccak_800(x, 16)) == keccak.keccak_800(x, 16)
+        assert (await crypto.keccak_800(x, 64)) == keccak.keccak_800(x, 64)
+        assert (await crypto.keccak_800(x, 256)) == keccak.keccak_800(x, 256)
 
 
 def test_keccak_1600():
     for x in (b'', urandom(32), urandom(64), 
         urandom(128), urandom(256)
     ):
-        assert keccak_1600(x) == keccak.keccak_1600(x)
-        assert keccak_1600(x, 16) == keccak.keccak_1600(x, 16)
-        assert keccak_1600(x, 64) == keccak.keccak_1600(x, 64)
-        assert keccak_1600(x, 256) == keccak.keccak_1600(x, 256)
+        assert _crypto.keccak_1600(x) == keccak.keccak_1600(x)
+        assert _crypto.keccak_1600(x, 16) == keccak.keccak_1600(x, 16)
+        assert _crypto.keccak_1600(x, 64) == keccak.keccak_1600(x, 64)
+        assert _crypto.keccak_1600(x, 256) == keccak.keccak_1600(x, 256)
+
+
+@pytest.mark.asyncio
+async def test_keccak_1600_async():
+    for x in (b'', urandom(32), urandom(64), 
+        urandom(128), urandom(256)
+    ):
+        assert (await crypto.keccak_1600(x)) == keccak.keccak_1600(x)
+        assert (await crypto.keccak_1600(x, 16)) == keccak.keccak_1600(x, 16)
+        assert (await crypto.keccak_1600(x, 64)) == keccak.keccak_1600(x, 64)
+        assert (await crypto.keccak_1600(x, 256)) == keccak.keccak_1600(x, 256)
 
 
 def test_mint_happy_case():
@@ -85,9 +172,21 @@ def test_mint_happy_case():
     iteration = None
     while iteration is None:
         prefix = urandom(56)
-        iteration: int = mint(prefix, diff_x, diff_n, limit)
+        iteration: int = _crypto.mint(prefix, diff_x, diff_n, limit)
     preimage = prefix + iteration.to_bytes(length=8, byteorder='little')
-    assert check_mint(preimage, diff_x, diff_n)
+    assert _crypto.check_mint(preimage, diff_x, diff_n)
+
+
+@pytest.mark.asyncio
+async def test_mint_happy_case_async():
+    diff = 128, 8     # diff = 128 * 2 ** 8 = 32768
+    limit = 2**30
+    iteration = None
+    while iteration is None:
+        prefix = urandom(56)
+        iteration: int = await crypto.mint(prefix, diff, limit)
+    preimage = prefix + iteration.to_bytes(length=8, byteorder='little')
+    assert await crypto.check_mint(preimage, diff)
 
 
 def test_check_mint():
@@ -96,9 +195,32 @@ def test_check_mint():
     iteration = None
     while iteration is None:
         prefix = urandom(56)
-        iteration: int = mint(prefix, diff_x, diff_n, limit)
+        iteration: int = _crypto.mint(prefix, diff_x, diff_n, limit)
     preimage = prefix + iteration.to_bytes(length=8, byteorder='little')
-    assert check_mint(preimage, diff_x, diff_n)
+    assert _crypto.check_mint(preimage, diff_x, diff_n)
+    # Use Python keccak module
+    digest = keccak.keccak_800(preimage)
+    # Test linear difficulty
+    x = int.from_bytes(digest[:2], 'little')
+    err = (x * diff_x) >> 16
+    assert not err
+    # Test exponential difficulty
+    n = int.from_bytes(digest[2:32], 'little')
+    success = ((n >> diff_n) << diff_n) == n
+    assert success
+
+
+@pytest.mark.asyncio
+async def test_check_mint_async():
+    diff_x, diff_n = 128, 8     # diff = 128 * 2 ** 8 = 32768
+    diff = diff_x, diff_n
+    limit = 2**30
+    iteration = None
+    while iteration is None:
+        prefix = urandom(56)
+        iteration: int = await crypto.mint(prefix, diff, limit)
+    preimage = prefix + iteration.to_bytes(length=8, byteorder='little')
+    assert await crypto.check_mint(preimage, diff)
     # Use Python keccak module
     digest = keccak.keccak_800(preimage)
     # Test linear difficulty

@@ -321,6 +321,8 @@ class Socket(object):
     DELAYED_ACK_TO = 0.01
     KEEPALIVE_TO = 15.0
     TIMEOUT = 60.0
+    SYN_TIMEOUT = 10.0
+    FIN_TIMEOUT = 10.0
 
     def __init__(self,
         peer: Address,
@@ -804,7 +806,7 @@ class Socket(object):
     async def _ensure_syn(self):
         try:
             now = time.monotonic()
-            timeout = now + self.TIMEOUT
+            timeout = now + self.SYN_TIMEOUT
             while now < timeout:
                 match self._state:
                     case self.STATE_SYN:
@@ -885,7 +887,7 @@ class Socket(object):
     async def _ensure_fin(self):
         try:
             now = time.monotonic()
-            timeout = now + self.TIMEOUT
+            timeout = now + self.FIN_TIMEOUT
             while now < timeout:
                 match self._state:
                     case self.STATE_FIN:

@@ -11442,7 +11442,7 @@ int ed25519_keypair(
     ge_p3 A;
 
     memmove(keypair, seed, 32);
-    keccak800(az, 32, keypair, 32);
+    keccak1600(az, 32, keypair, 32);
     az[0] &= 248;
     az[31] &= 63;
     az[31] |= 64;
@@ -11465,20 +11465,20 @@ int ed25519_sign(
     unsigned char hram[64];
     ge_p3 R;
 
-    keccak800(az, 64, keypair, 32);
+    keccak1600(az, 64, keypair, 32);
     az[0] &= 248;
     az[31] &= 63;
     az[31] |= 64;
 
     memcpy(sm + 64, message_hash, 32);
     memcpy(sm + 32, az + 32, 32);
-    keccak800(nonce, 64, sm + 32, 64);
+    keccak1600(nonce, 64, sm + 32, 64);
     sc_reduce(nonce);
     ge_scalarmult_base( & R, nonce);
 
     ge_p3_tobytes(sm, & R);
     memcpy(sm + 32, keypair + 32, 32);
-    keccak800(hram, 64, sm, 96);
+    keccak1600(hram, 64, sm, 96);
     sc_reduce(hram);
     sc_muladd(sm + 32, hram, az, nonce);
 
@@ -11507,7 +11507,7 @@ int ed25519_verify(
     memcpy(ram     , signature, 32);
     memcpy(ram + 32, pub_key, 32);
     memcpy(ram + 64, message_hash, 32);
-    keccak800(hram, 64, ram, 96);
+    keccak1600(hram, 64, ram, 96);
     sc_reduce(hram);
 
     ge_double_scalarmult_vartime( & R, hram, & A, signature + 32);
@@ -11528,7 +11528,7 @@ int ed25519_key_exchange_vartime(
     ge_p3 A;
     ge_p2 R;
 
-    keccak800(az, 32, x, 32);
+    keccak1600(az, 32, x, 32);
     az[0] &= 248;
     az[31] &= 63;
     az[31] |= 64;
@@ -11539,7 +11539,7 @@ int ed25519_key_exchange_vartime(
     ge_double_scalarmult_vartime(& R, az, & A, zero);
     ge_tobytes(xQ, & R);
 
-    keccak800(seed, 32, xQ, 32);
+    keccak1600(seed, 32, xQ, 32);
 
     return 0;
 }

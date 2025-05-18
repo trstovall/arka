@@ -8,6 +8,7 @@
 #include "stdlib.h"
 
 #include "ed25519.h"
+#include "not_sha512.h"
 
 
 static PyObject * keypair(PyObject * self, PyObject * args);
@@ -19,6 +20,8 @@ static PyObject * keccak_1600(PyObject * self, PyObject * args, PyObject * kwarg
 static PyObject * mint(PyObject * self, PyObject * args);
 static PyObject * check_mint(PyObject * self, PyObject * args);
 static PyObject * djb2(PyObject * self, PyObject * args);
+static PyObject * derive_key(PyObject * self, PyObject * args, PyObject * kwargs);
+static PyObject * encrypt(PyObject * self, PyObject * args);
 
 
 // Method definition table
@@ -32,6 +35,8 @@ static PyMethodDef crypto_methods[] = {
     {"mint", mint, METH_VARARGS, "Find nonce such that keccak800(prefix|iteration) ~= 0."},
     {"check_mint", check_mint, METH_VARARGS, "Check preimage against target difficulty."},
     {"djb2", djb2, METH_VARARGS, "Hash string to 32-bit digest."},
+    {"derive_key", (PyCFunction)derive_key, METH_VARARGS | METH_KEYWORDS, "Derive an encryption key from a password and salt."},
+    {"encrypt", encrypt, METH_VARARGS, "Encrypt/decrypt a message/ciphertext with a key and nonce."},
     {NULL, NULL, 0, NULL}  // Sentinel
 };
 
@@ -531,4 +536,186 @@ static PyObject * djb2(PyObject * self, PyObject * args) {
     // Return result
     return PyLong_FromUnsignedLongLong(result);
 
+}
+
+
+static PyObject * derive_key(PyObject * self, PyObject * args, PyObject * kwds) {
+    Py_buffer password_buffer, salt_buffer;
+    uint8_t mask_width = 20;
+    uint64_t iterations = 1;
+    static char* kwlist[] = {"password", "salt", "mask_width", "iterations", NULL};
+
+    // Parse the input arguments
+    if (!PyArg_ParseTupleAndKeywords(
+        args, kwds, "y*y*|BK", kwlist,
+        &password_buffer, &salt_buffer, &mask_width, &iterations
+    )) {
+        return NULL;
+    }
+
+    // Validate mask_width
+    if ((mask_width + 5) >= 64) {
+        PyBuffer_Release(&password_buffer);
+        PyBuffer_Release(&salt_buffer);
+        PyErr_SetString(PyExc_ValueError, "mask_width + 5 must be < 64");
+        return NULL;
+    }
+
+    // Release the GIL
+    PyThreadState* _save = PyEval_SaveThread();
+
+    // Allocate preimage
+    uint64_t preimage_len = password_buffer.len + salt_buffer.len;
+    uint8_t *preimage = (uint8_t*) PyMem_Malloc(preimage_len);
+    if (preimage == NULL) {
+        PyBuffer_Release(&password_buffer);
+        PyBuffer_Release(&salt_buffer);
+        PyEval_RestoreThread(_save);
+        PyErr_NoMemory();
+        return NULL;
+    }
+
+    // Prepare preimage
+    memcpy(preimage, password_buffer.buf, password_buffer.len);
+    memcpy(preimage + password_buffer.len, salt_buffer.buf, salt_buffer.len);
+
+    // Release input buffers
+    PyBuffer_Release(&password_buffer);
+    PyBuffer_Release(&salt_buffer);
+
+    // Allocate digest
+    uint64_t digest_len = 1 << (mask_width + 5);
+    uint8_t *digest = (uint8_t*) PyMem_Malloc(digest_len);
+    if (digest == NULL) {
+        PyMem_Free(preimage);
+        PyEval_RestoreThread(_save);
+        PyErr_NoMemory();
+        return NULL;
+    }
+
+    // Hash the preimage
+    keccak1600(digest, digest_len, preimage, preimage_len);
+
+    // Release preimage
+    PyMem_Free(preimage);
+
+    uint64_t acc[4];
+    uint64_t mask = (1 << mask_width) - 1;
+    uint8_t *offset = digest;
+
+    // Initialize accumulator
+    acc[0] = load64(offset);
+    acc[1] = load64(offset + 8);
+    acc[2] = load64(offset + 16);
+    acc[3] = load64(offset + 24);
+
+    // Iterate not_sha512
+    for (uint64_t i = 0; i < iterations; i++) {
+        not_sha512(acc, acc);
+        offset = digest + ((acc[0] & mask) << 5);
+        acc[0] += load64(offset);
+        acc[1] += load64(offset + 8);
+        acc[2] += load64(offset + 16);
+        acc[3] += load64(offset + 24);
+    }
+
+    // Release digest
+    PyMem_Free(digest);
+
+    // Copy accumulator to output
+    uint8_t output[32];
+    store64(output, acc[0]);
+    store64(output + 8, acc[1]);
+    store64(output + 16, acc[2]);
+    store64(output + 24, acc[3]);
+
+    // Reacquire the GIL
+    PyEval_RestoreThread(_save);
+
+    // Return the result
+    return PyBytes_FromStringAndSize((const char*)output, 32);
+}
+
+
+static PyObject * encrypt(PyObject * self, PyObject * args) {
+    Py_buffer key_buffer, nonce_buffer, message_buffer;
+
+    // Parse the inputs
+    if (!PyArg_ParseTuple(args, "y*y*y*",
+        &key_buffer, &nonce_buffer, &message_buffer
+    )){
+        return NULL;
+    }
+
+    // Create a Python bytes object for the output
+    PyObject* result = PyBytes_FromStringAndSize(NULL, message_buffer.len);
+    if (result == NULL) {
+        PyBuffer_Release(&key_buffer);
+        PyBuffer_Release(&nonce_buffer);
+        PyBuffer_Release(&message_buffer);
+        return NULL;
+    }
+
+    // Release the GIL
+    PyThreadState* _save = PyEval_SaveThread();
+
+    // Allocate preimage
+    uint64_t preimage_len = key_buffer.len + nonce_buffer.len;
+    uint8_t *preimage = (uint8_t*) PyMem_Malloc(preimage_len);
+    if (preimage == NULL) {
+        PyBuffer_Release(&key_buffer);
+        PyBuffer_Release(&nonce_buffer);
+        PyBuffer_Release(&message_buffer);
+        PyEval_RestoreThread(_save);
+        Py_DECREF(result);
+        PyErr_NoMemory();
+        return NULL;
+    }
+
+    // Prepare preimage
+    memcpy(preimage, key_buffer.buf, key_buffer.len);
+    memcpy(preimage + key_buffer.len, nonce_buffer.buf, nonce_buffer.len);
+
+    // Release input buffers
+    PyBuffer_Release(&key_buffer);
+    PyBuffer_Release(&nonce_buffer);
+
+    // Allocate digest
+    uint64_t digest_len = message_buffer.len;
+    uint8_t *digest = (uint8_t*) PyMem_Malloc(digest_len);
+    if (digest == NULL) {
+        PyMem_Free(preimage);
+        PyBuffer_Release(&message_buffer);
+        PyEval_RestoreThread(_save);
+        Py_DECREF(result);
+        PyErr_NoMemory();
+        return NULL;
+    }
+
+    // Hash the preimage
+    keccak1600(digest, digest_len, preimage, preimage_len);
+
+    // Release preimage
+    PyMem_Free(preimage);
+
+    // Get pointers to underlying buffers
+    uint8_t *message = (uint8_t*) message_buffer.buf;
+    uint8_t *output = (uint8_t*) PyBytes_AS_STRING(result);
+
+    // Encrypt/decrypt message
+    for (uint64_t i = 0; i < digest_len; i++) {
+        output[i] = message[i] ^ digest[i];
+    }
+
+    // Release input message buffer
+    PyBuffer_Release(&message_buffer);
+
+    // Release digest
+    PyMem_Free(digest);
+
+    // Reacquire the GIL
+    PyEval_RestoreThread(_save);
+
+    // Return the result
+    return result;
 }

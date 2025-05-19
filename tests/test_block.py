@@ -2,6 +2,8 @@
 from arka import block
 from os import urandom
 
+import pytest
+
 def test_parameters():
     target = int.from_bytes(urandom(32), 'little')
     block_reward = 100_000 * 10 ** 6
@@ -23,3 +25,31 @@ def test_parameters():
     assert params.executive == executive
     params = block.Parameters.decode(param_bytes + urandom(32))
     assert params.size == len(param_bytes)
+
+
+def test_spender_hash():
+    hash = urandom(32)
+    spender = block.SpenderHash(hash)
+    assert spender.hash == hash
+    assert spender.encode() == hash
+    assert block.SpenderHash.decode(hash).hash == hash
+    assert block.SpenderHash.decode(hash + urandom(32)).hash == hash
+
+@pytest.mark.asyncio
+async def test_spender_key():
+    key = urandom(32)
+    spender = block.SpenderKey(key)
+    assert spender.key == key
+    assert spender.encode() == key
+    assert block.SpenderKey.decode(key).key == key
+    assert block.SpenderKey.decode(key + urandom(32)).key == key
+    hash = await spender.hash()
+    assert isinstance(hash, block.SpenderHash)
+    assert isinstance(hash.hash, bytes)
+    assert len(hash.hash) == 32
+
+
+@pytest.mark.asyncio
+async def test_spender_list():
+    pass
+

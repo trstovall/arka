@@ -51,53 +51,83 @@ class Parameters(object):
         return cls(target, reward, fund, utxo_fee, data_fee, exec)
 
 
-class SpenderEnum(IntEnum):
-    SPENDER_LIST = 0
-    SPENDER_HASH = 1
-    SPENDER_KEY = 2
-
-
 class SpenderHash(object):
+
+    SIZE = 32
 
     def __init__(self, hash: bytes):
         self.hash = hash
 
-    def encode(self) -> bytearray:
-        return bytearray([SpenderEnum.SPENDER_HASH.value]) + self.hash
+    @property
+    def size(self) -> int:
+        return self.SIZE
+
+    def encode(self) -> bytes:
+        return self.hash
        
     @classmethod
-    def decode(cls, view: memoryview) -> tuple["SpenderHash", int]:
-        if len(view) < 21:
-            raise ValueError('`view` too short to decode `SpenderHash`.')
-        return cls(bytes(view[1:21])), 21
+    def decode(cls, view: bytes | bytearray | memoryview) -> SpenderHash:
+        if len(view) < cls.SIZE:
+            raise ValueError('Invalid size when decoding.')
+        hash = view if len(view) == cls.SIZE else view[:cls.SIZE]
+        hash = hash if isinstance(hash, bytes) else bytes(hash)
+        return cls(hash)
 
 
 class SpenderKey(object):
 
+    SIZE = 32
+
     def __init__(self, key: bytes):
         self.key = key
 
-    def hash(self) -> SpenderHash:
-        return SpenderHash(keccak_800(self.key, 20))
-    
-    def encode(self) -> bytearray:
-        return bytearray([SpenderEnum.SPENDER_KEY.value]) + self.key
+    @property
+    def size(self) -> int:
+        return self.SIZE
 
+    def encode(self) -> bytes:
+        return self.key
+       
     @classmethod
-    def decode(cls, view: memoryview) -> tuple["SpenderKey", int]:
-        if len(view) < 33:
-            raise ValueError('`view` too short to decode `SpenderKey`.')
-        return cls(bytes(view[1:33])), 33
+    def decode(cls, view: bytes | bytearray | memoryview) -> SpenderKey:
+        if len(view) < cls.SIZE:
+            raise ValueError('Invalid size when decoding.')
+        key = view if len(view) == cls.SIZE else view[:cls.SIZE]
+        key = key if isinstance(key, bytes) else bytes(key)
+        return cls(key)
+
+    async def hash(self) -> SpenderHash:
+        return SpenderHash(await keccak_800(self.key))    
 
 
 class SpenderList(object):
 
+    SPENDER_HASH = 0
+    SPENDER_KEY = 1
+    SPENDER_LIST = 2
+
     def __init__(self,
         spenders: list[SpenderList | SpenderHash | SpenderKey],
-        threshold: int
+        threshold: int,
+        _encoding: bytes | None = None
     ):
+        if len(spenders) <= 0 or len(spenders) >= 0x8000:
+            raise ValueError('Invalid spender list.')
+        if threshold <= 0 or threshold > len(spenders):
+            raise ValueError('Invalid threshold.')
         self.spenders = spenders
         self.threshold = threshold
+        self._encoding = _encoding
+
+    @property
+    def size(self) -> int:
+        if self._encoding:
+            return len(self._encoding)
+        n = 1 if len(self.spenders) < 0x80 else 2
+        n += 1 if self.threshold < 0x80 else 2
+        n += (len(self.spenders) + 3) // 4
+        n += sum(s.size for s in self.spenders)
+        return n
 
     @property
     def keys(self) -> list[bytes]:
@@ -121,107 +151,81 @@ class SpenderList(object):
                 output.append(k)
         return output
 
-    def hash(self) -> SpenderHash:
-        if not self.spenders or not self.threshold:
-            raise ValueError("Cannot hash empty SpenderList.")
-        prefix = bytearray(1
-            + (1 if len(self.spenders) < 128 else 2)
-            + (1 if self.threshold < 128 else 2)
-        )
-        prefix[0] = SpenderEnum.SPENDER_LIST.value
-        if len(self.spenders) < 128:
-            prefix[1] = len(self.spenders) << 1
-            i = 2
-        else:
-            prefix[1] = ((len(self.spenders) & 0x7f) << 1) | 1
-            prefix[2] = (len(self.spenders) >> 7) & 0xff
-            i = 3
-        if self.threshold < 128:
-            prefix[i] = self.threshold << 1
-        else:
-            prefix[i] = ((self.threshold & 0x7f) << 1) | 1
-            prefix[i+1] = (self.threshold >> 7) & 0xff
+    async def hash(self) -> SpenderHash:
+        prefix = pack('<HH', len(self.spenders), self.threshold)
         hashes: list[bytes] = []
-        for s in self.spenders:
+        for i, s in enumerate(self.spenders):
             match s:
                 case SpenderHash():
                     hashes.append(s.hash)
                 case SpenderKey() | SpenderList():
-                    hashes.append(s.hash().hash)
-        buffer = bytearray(len(prefix) + 20 * len(hashes))
-        view = memoryview(buffer)
-        i = 0
-        view[i:i+len(prefix)] = prefix
-        i += len(prefix)
-        for h in hashes:
-            view[i:i+len(h)] = h
-            i += len(h)
-        return SpenderHash(keccak_1600(buffer, 20))
+                    hashes.append((await s.hash()).hash)
+                case _:
+                    raise ValueError('Invalid spender type.')
+        preimage = b''.join([prefix] + hashes)
+        return SpenderHash(await keccak_1600(preimage))
 
-    def encode(self) -> bytearray:
-        if not self.spenders or not self.threshold:
-            raise ValueError("Cannot encode empty SpenderList.")
-        prefix = bytearray(1
-            + (1 if len(self.spenders) < 128 else 2)
-            + (1 if self.threshold < 128 else 2)
-        )
-        prefix[0] = SpenderEnum.SPENDER_LIST.value
-        if len(self.spenders) < 128:
-            prefix[1] = len(self.spenders) << 1
-            i = 2
-        else:
-            prefix[1] = ((len(self.spenders) & 0x7f) << 1) | 1
-            prefix[2] = (len(self.spenders) >> 7) & 0xff
-            i = 3
-        if self.threshold < 128:
-            prefix[i] = self.threshold << 1
-        else:
-            prefix[i] = ((self.threshold & 0x7f) << 1) | 1
-            prefix[i+1] = (self.threshold >> 7) & 0xff
-        spenders = [s.encode() for s in self.spenders]
-        buffer = bytearray(len(prefix) + sum(len(s) for s in spenders))
-        view = memoryview(buffer)
-        i = 0
-        view[i:i+len(prefix)] = prefix
-        i += len(prefix)
-        for s in spenders:
-            view[i:i+len(s)] = s
-            i += len(s)
-        return buffer
+    def encode(self) -> bytes:
+        if self._encoding:
+            return self._encoding
+        n = len(self.spenders)
+        n = (n << 1) | (0 if n < 0x80 else 1)
+        n = n.to_bytes(2 if n & 1 else 1, 'little')
+        x = self.threshold
+        x = (x << 1) | (0 if x < 0x80 else 1)
+        x = x.to_bytes(2 if x & 1 else 1, 'little')
+        types = bytearray((len(self.spenders) + 3) // 4)
+        encodings: list[bytes] = []
+        for i, s in enumerate(self.spenders):
+            match s:
+                case SpenderHash():
+                    t = self.SPENDER_HASH
+                case SpenderKey():
+                    t = self.SPENDER_KEY
+                case SpenderList():
+                    t = self.SPENDER_LIST
+                case _:
+                    raise ValueError('Invalid spender type.')
+            types[i // 4] |= t << (i & 3)
+            encodings.append(s.encode())
+        self._encoding = b''.join([n, x, types] + encodings)
+        return self._encoding
 
     @classmethod
-    def decode(cls, view: memoryview) -> tuple["SpenderList", int]:
+    def decode(cls, view: bytes | bytearray | memoryview) -> SpenderList:
         try:
             spenders: list[SpenderHash | SpenderKey | SpenderList] = []
-            nspenders = view[1]
-            i = 2
-            if nspenders & 1:
-                nspenders += view[i] << 8
-                i += 1
-            nspenders >>= 1
-            threshold = view[i]
-            i += 1
-            if threshold & 1:
-                threshold += view[i] << 8
-                i += 1
-            threshold >>= 1
-            if not nspenders or not threshold:
+            n = view[0]
+            offset = 1
+            if n & 1:
+                n += view[offset] << 8
+                offset += 1
+            n >>= 1
+            x = view[offset]
+            offset += 1
+            if x & 1:
+                x += view[offset] << 8
+                offset += 1
+            x >>= 1
+            if not n or not x:
                 raise ValueError('Decoded `SpenderList` must not be empty.')
-            for j in range(nspenders):
-                match view[i]:
-                    case SpenderEnum.SPENDER_HASH.value:
-                        x, n = SpenderHash.decode(view[i:])
-                    case SpenderEnum.SPENDER_KEY.value:
-                        x, n = SpenderKey.decode(view[i:])
-                    case SpenderEnum.SPENDER_LIST.value:
-                        x, n = SpenderList.decode(view[i:])
+            types = view[offset:offset + ((n + 3) >> 2)]
+            offset += len(types)
+            for i in range(n):
+                match (types[i >> 2] >> (i & 3)) & 3:
+                    case cls.SPENDER_HASH:
+                        spenders.append(SpenderHash.decode(view[offset:]))
+                    case cls.SPENDER_KEY:
+                        spenders.append(SpenderKey.decode(view[offset:]))
+                    case cls.SPENDER_LIST:
+                        spenders.append(SpenderList.decode(view[offset:]))
                     case _:
-                        raise ValueError('Invalid spender type encoded.')
-                spenders.append(x)
-                i += n
+                        raise ValueError('Invalid spender type.')
+                offset += spenders[-1].size
         except IndexError as e:
-            raise ValueError('`view` too short to decode `SpenderList`.')
-        return SpenderList(spenders, threshold), i
+            raise ValueError('Invalid size when decoding.')
+        encoding = bytes(view if len(view) == offset else view[:offset])
+        return SpenderList(spenders, x, encoding)
 
 
 class UTXORefByIndex(object):

@@ -18,8 +18,7 @@ def test_sign_happy_case():
 
 @pytest.mark.asyncio
 async def test_sign_happy_case_async():
-    seed = urandom(32)
-    kp = crypto.Keypair(seed)
+    kp = await crypto.Keypair()
     hash = urandom(32)
     sig = await kp.sign(hash)
     verifier = await kp.verifier()
@@ -37,8 +36,8 @@ def test_sign_bad_pkey():
 
 @pytest.mark.asyncio
 async def test_sign_bad_pkey_async():
-    kp1 = crypto.Keypair(urandom(32))
-    kp2 = crypto.Keypair(urandom(32))
+    kp1 = await crypto.Keypair()
+    kp2 = await crypto.Keypair()
     hash = urandom(32)
     sig = await kp1.sign(hash)
     verifier1 = await kp1.verifier()
@@ -56,7 +55,7 @@ def test_sign_bad_msg():
 
 @pytest.mark.asyncio
 async def test_sign_bad_msg_async():
-    kp = crypto.Keypair(urandom(32))
+    kp = await crypto.Keypair()
     hash = urandom(32)
     sig = await kp.sign(hash)
     verifier = await kp.verifier()
@@ -72,7 +71,7 @@ def test_sign_bad_sig():
 
 @pytest.mark.asyncio
 async def test_sign_bad_sig_async():
-    kp = crypto.Keypair(urandom(32))
+    kp = await crypto.Keypair()
     hash = urandom(32)
     sig = await kp.sign(hash)
     verifier = await kp.verifier()
@@ -93,8 +92,8 @@ def test_key_exchange_happy_case():
 
 @pytest.mark.asyncio
 async def test_key_exchange_happy_case_async():
-    kp1 = crypto.Keypair(urandom(32))
-    kp2 = crypto.Keypair(urandom(32))
+    kp1 = await crypto.Keypair()
+    kp2 = await crypto.Keypair()
     vk1 = await kp1.verifier()
     vk2 = await kp2.verifier()
     kp3 = await kp1.spawn(vk2)
@@ -114,14 +113,59 @@ def test_key_exchange_bad_key():
 
 @pytest.mark.asyncio
 async def test_key_exchange_bad_key_async():
-    kp1 = crypto.Keypair(urandom(32))
-    kp2 = crypto.Keypair(urandom(32))
-    kp3 = crypto.Keypair(urandom(32))
+    kp1 = await crypto.Keypair()
+    kp2 = await crypto.Keypair()
+    kp3 = await crypto.Keypair()
     vk1 = await kp1.verifier()
     vk2 = await kp2.verifier()
     kp4 = await kp1.spawn(vk2)
     kp5 = await kp3.spawn(vk1)
     assert kp4._seed != kp5._seed
+
+
+def test_derive_key():
+    pw = b'hello'
+    salt = urandom(16)
+    iters = 5_000_000
+    key = _crypto.derive_key(pw, salt, iterations=iters)
+    assert isinstance(key, bytes)
+    assert len(key) == 32
+
+
+@pytest.mark.asyncio
+async def test_derive_key_async():
+    pw = b'hello'
+    salt = urandom(16)
+    cipher = await crypto.Cipher(pw, salt)
+    key = cipher._key
+    assert isinstance(key, bytes)
+    assert len(key) == 32
+
+
+def test_encrypt():
+    key = urandom(32)
+    nonce = urandom(16)
+    msg = urandom(32)
+    ctext = _crypto.encrypt(key, nonce, msg)
+    assert isinstance(ctext, bytes)
+    assert len(ctext) == 32
+    assert ctext != msg
+    ptext = _crypto.encrypt(key, nonce, ctext)
+    assert ptext == msg
+
+
+@pytest.mark.asyncio
+async def test_encrypt_async():
+    cipher = crypto.Cipher(None, None)
+    cipher._key = urandom(32)
+    nonce = urandom(16)
+    msg = urandom(32)
+    ctext = await cipher.encrypt(nonce, msg)
+    assert isinstance(ctext, bytes)
+    assert len(ctext) == 32
+    assert ctext != msg
+    ptext = await cipher.encrypt(nonce, ctext)
+    assert ptext == msg
 
 
 def test_keccak_800():

@@ -78,10 +78,14 @@ class Cipher(object):
     def __init__(self,
         password: bytes,
         salt: bytes,
+        mask_width: int = MASK_WIDTH,
+        iterations: int = ITERATIONS,
         loop: asyncio.AbstractEventLoop | None = None
     ):
         self._password = password
         self._salt = salt
+        self._mask_width = mask_width
+        self._iterations = iterations
         self._loop = loop or asyncio.get_running_loop()
         self._key: bytes | None = None
 
@@ -93,7 +97,7 @@ class Cipher(object):
             return self
         self._key = await self._loop.run_in_executor(
             None, _crypto.derive_key, self._password, self._salt,
-            self.MASK_WIDTH, self.ITERATIONS
+            self._mask_width, self._iterations
         )
         return self
 

@@ -1,6 +1,6 @@
 
 from __future__ import annotations
-from typing import Generator
+from typing import Generator, Any
 from secrets import token_bytes as rand
 from arka import _crypto
 
@@ -40,7 +40,7 @@ class Keypair(object):
         self._verifier: bytes | None = None
         self._loop = loop or asyncio.get_running_loop()
     
-    def __await__(self) -> Generator[object, object, Keypair]:
+    def __await__(self) -> Generator[Any, None, Keypair]:
         return self.derive().__await__()
 
     async def derive(self) -> Keypair:
@@ -89,7 +89,7 @@ class Cipher(object):
         self._loop = loop or asyncio.get_running_loop()
         self._key: bytes | None = None
 
-    def __await__(self) -> Generator[object, object, Cipher]:
+    def __await__(self) -> Generator[Any, None, Cipher]:
         return self.derive().__await__()
 
     async def derive(self) -> Cipher:
@@ -113,7 +113,7 @@ async def keccak_800(
     msg: bytes | bytearray,
     outlen: int = 32,
     loop: asyncio.AbstractEventLoop | None = None
-):
+) -> bytes:
     loop = loop or asyncio.get_running_loop()
     return await loop.run_in_executor(
         None, _crypto.keccak_800, msg, outlen
@@ -124,7 +124,7 @@ async def keccak_1600(
     msg: bytes | bytearray,
     outlen: int = 32,
     loop: asyncio.AbstractEventLoop | None = None
-):
+) -> bytes:
     loop = loop or asyncio.get_running_loop()
     return await loop.run_in_executor(
         None, _crypto.keccak_1600, msg, outlen

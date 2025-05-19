@@ -1,40 +1,54 @@
 
 from __future__ import annotations
 
-from struct import pack_into, unpack_from
+from struct import pack, unpack_from
 from enum import IntEnum
-from ._crypto import keccak_800, keccak_1600
-
+from arka.crypto import keccak_800, keccak_1600
 
 
 class Parameters(object):
 
+    SIZE = 66
+
     def __init__(self,
         target: int,            # mint difficulty x * 2 ** y
-        block_reward: int,      # units generated each block
+        block_reward: int,      # units generated each block for publishers
+        exec_fund: int,         # units generated per epoch for executive spends
         utxo_fee: int,          # decay of UTXOs per block as a fraction z / 2**64
         data_fee: int,          # units to destroy per byte in payment
+        executive: bytes        # account address of elected executive
     ):
         self.target = target
         self.block_reward = block_reward
+        self.exec_fund = exec_fund
         self.utxo_fee = utxo_fee
         self.data_fee = data_fee
+        self.executive = executive
 
-    def encode(self) -> bytearray:
-        buffer = bytearray(26)
-        view = memoryview(buffer)
-        view[1] = max(0, self.target.bit_length() - 8)
-        view[0] = self.target >> view[1]
-        pack_into('<QQQ', view, 2, self.block_reward, self.utxo_fee, self.data_fee)
-        return buffer
+    @property
+    def size(self) -> int:
+        return self.SIZE
+
+    def encode(self) -> bytes:
+        n = max(0, self.target.bit_length() - 8)
+        x = self.target >> n
+        target = bytes([x, n])
+        ints = pack('<QQQQ', 
+            self.block_reward, self.exec_fund, self.utxo_fee, self.data_fee
+        )
+        encoding = b''.join([target, ints, self.executive])
+        if len(encoding) != self.SIZE:
+            raise ValueError('Invalid size when encoding.')
+        return encoding
 
     @classmethod
-    def decode(cls, view: memoryview) -> tuple["Parameters", int]:
-        if len(view) < 26:
-            raise ValueError('`view` too short to decode `Parameters`.')
+    def decode(cls, view: bytes | bytearray | memoryview) -> Parameters:
+        if len(view) < cls.SIZE:
+            raise ValueError('Invalid size when decoding.')
         target = view[0] * (1 << view[1])
-        block_reward, utxo_fee, data_fee = unpack_from('<QQQ', view, 2)
-        return cls(target, block_reward, utxo_fee, data_fee), 26
+        reward, fund, utxo_fee, data_fee = unpack_from('<QQQQ', view, 2)
+        exec = bytes(view[34:66])
+        return cls(target, reward, fund, utxo_fee, data_fee, exec)
 
 
 class SpenderEnum(IntEnum):

@@ -3,7 +3,7 @@ from arka import block
 from os import urandom
 
 def test_parameters():
-    target = int.from_bytes(urandom(32))
+    target = int.from_bytes(urandom(32), 'little')
     block_reward = 100_000 * 10 ** 6
     exec_fund = 0
     utxo_fee = 2**64 // (1000 * 60 * 24 * 365)

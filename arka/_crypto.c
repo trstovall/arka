@@ -561,21 +561,18 @@ static PyObject * derive_key(PyObject * self, PyObject * args, PyObject * kwds) 
         return NULL;
     }
 
-    // Release the GIL
-    PyThreadState* _save = PyEval_SaveThread();
-
     // Allocate preimage
     uint64_t preimage_len = password_buffer.len + salt_buffer.len;
     uint8_t *preimage = (uint8_t*) PyMem_Malloc(preimage_len);
+
     if (preimage == NULL) {
         PyBuffer_Release(&password_buffer);
         PyBuffer_Release(&salt_buffer);
-        PyEval_RestoreThread(_save);
         PyErr_NoMemory();
         return NULL;
     }
 
-    // Prepare preimage
+    // preimage = password + salt
     memcpy(preimage, password_buffer.buf, password_buffer.len);
     memcpy(preimage + password_buffer.len, salt_buffer.buf, salt_buffer.len);
 
@@ -588,16 +585,15 @@ static PyObject * derive_key(PyObject * self, PyObject * args, PyObject * kwds) 
     uint8_t *digest = (uint8_t*) PyMem_Malloc(digest_len);
     if (digest == NULL) {
         PyMem_Free(preimage);
-        PyEval_RestoreThread(_save);
         PyErr_NoMemory();
         return NULL;
     }
 
+    // Release the GIL
+    PyThreadState* _save = PyEval_SaveThread();
+
     // Hash the preimage
     keccak1600(digest, digest_len, preimage, preimage_len);
-
-    // Release preimage
-    PyMem_Free(preimage);
 
     uint64_t acc[4];
     uint64_t mask = (1 << mask_width) - 1;
@@ -619,9 +615,6 @@ static PyObject * derive_key(PyObject * self, PyObject * args, PyObject * kwds) 
         acc[3] += load64(offset + 24);
     }
 
-    // Release digest
-    PyMem_Free(digest);
-
     // Copy accumulator to output
     uint8_t output[32];
     store64(output, acc[0]);
@@ -631,6 +624,12 @@ static PyObject * derive_key(PyObject * self, PyObject * args, PyObject * kwds) 
 
     // Reacquire the GIL
     PyEval_RestoreThread(_save);
+
+    // Release preimage
+    PyMem_Free(preimage);
+
+    // Release digest
+    PyMem_Free(digest);
 
     // Return the result
     return PyBytes_FromStringAndSize((const char*)output, 32);
@@ -656,9 +655,6 @@ static PyObject * encrypt(PyObject * self, PyObject * args) {
         return NULL;
     }
 
-    // Release the GIL
-    PyThreadState* _save = PyEval_SaveThread();
-
     // Allocate preimage
     uint64_t preimage_len = key_buffer.len + nonce_buffer.len;
     uint8_t *preimage = (uint8_t*) PyMem_Malloc(preimage_len);
@@ -666,13 +662,12 @@ static PyObject * encrypt(PyObject * self, PyObject * args) {
         PyBuffer_Release(&key_buffer);
         PyBuffer_Release(&nonce_buffer);
         PyBuffer_Release(&message_buffer);
-        PyEval_RestoreThread(_save);
         Py_DECREF(result);
         PyErr_NoMemory();
         return NULL;
     }
 
-    // Prepare preimage
+    // preimage = key + nonce
     memcpy(preimage, key_buffer.buf, key_buffer.len);
     memcpy(preimage + key_buffer.len, nonce_buffer.buf, nonce_buffer.len);
 
@@ -686,17 +681,16 @@ static PyObject * encrypt(PyObject * self, PyObject * args) {
     if (digest == NULL) {
         PyMem_Free(preimage);
         PyBuffer_Release(&message_buffer);
-        PyEval_RestoreThread(_save);
         Py_DECREF(result);
         PyErr_NoMemory();
         return NULL;
     }
 
+    // Release the GIL
+    PyThreadState* _save = PyEval_SaveThread();
+
     // Hash the preimage
     keccak1600(digest, digest_len, preimage, preimage_len);
-
-    // Release preimage
-    PyMem_Free(preimage);
 
     // Get pointers to underlying buffers
     uint8_t *message = (uint8_t*) message_buffer.buf;
@@ -707,14 +701,17 @@ static PyObject * encrypt(PyObject * self, PyObject * args) {
         output[i] = message[i] ^ digest[i];
     }
 
+    // Reacquire the GIL
+    PyEval_RestoreThread(_save);
+
     // Release input message buffer
     PyBuffer_Release(&message_buffer);
 
+    // Release preimage
+    PyMem_Free(preimage);
+
     // Release digest
     PyMem_Free(digest);
-
-    // Reacquire the GIL
-    PyEval_RestoreThread(_save);
 
     // Return the result
     return result;

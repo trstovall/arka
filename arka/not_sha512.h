@@ -89,11 +89,11 @@ int not_sha512(uint64_t *in, uint64_t *out) {
         h = g;
         g = f;
         f = e;
-        e = d + temp1;
+        e = d + t1;
         d = c;
         c = b;
         b = a;
-        a = temp1 + temp2;
+        a = t1 + t2;
     }
     
     out[0] = a + b;

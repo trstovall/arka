@@ -51,7 +51,7 @@ class Parameters(object):
         return cls(target, reward, fund, utxo_fee, data_fee, exec)
 
 
-class SpenderHash(object):
+class SignerHash(object):
 
     SIZE = 32
 
@@ -66,7 +66,7 @@ class SpenderHash(object):
         return self.hash
        
     @classmethod
-    def decode(cls, view: bytes | bytearray | memoryview) -> SpenderHash:
+    def decode(cls, view: bytes | bytearray | memoryview) -> SignerHash:
         if len(view) < cls.SIZE:
             raise ValueError('Invalid size when decoding.')
         hash = view if len(view) == cls.SIZE else view[:cls.SIZE]
@@ -74,7 +74,7 @@ class SpenderHash(object):
         return cls(hash)
 
 
-class SpenderKey(object):
+class SignerKey(object):
 
     SIZE = 32
 
@@ -89,33 +89,33 @@ class SpenderKey(object):
         return self.key
        
     @classmethod
-    def decode(cls, view: bytes | bytearray | memoryview) -> SpenderKey:
+    def decode(cls, view: bytes | bytearray | memoryview) -> SignerKey:
         if len(view) < cls.SIZE:
             raise ValueError('Invalid size when decoding.')
         key = view if len(view) == cls.SIZE else view[:cls.SIZE]
         key = key if isinstance(key, bytes) else bytes(key)
         return cls(key)
 
-    async def hash(self) -> SpenderHash:
-        return SpenderHash(await keccak_800(self.key))    
+    async def hash(self) -> SignerHash:
+        return SignerHash(await keccak_800(self.key))    
 
 
-class SpenderList(object):
+class SignerList(object):
 
-    SPENDER_HASH = 0
-    SPENDER_KEY = 1
-    SPENDER_LIST = 2
+    SIGNER_HASH = 0
+    SIGNER_KEY = 1
+    SIGNER_LIST = 2
 
     def __init__(self,
-        spenders: list[SpenderList | SpenderHash | SpenderKey],
+        signers: list[SignerList | SignerHash | SignerKey],
         threshold: int,
         _encoding: bytes | None = None
     ):
-        if len(spenders) <= 0 or len(spenders) >= 0x8000:
+        if len(signers) <= 0 or len(signers) >= 0x8000:
             raise ValueError('Invalid spender list.')
-        if threshold <= 0 or threshold > len(spenders):
+        if threshold <= 0 or threshold > len(signers):
             raise ValueError('Invalid threshold.')
-        self.spenders = spenders
+        self.signers = signers
         self.threshold = threshold
         self._encoding = _encoding
 
@@ -123,10 +123,10 @@ class SpenderList(object):
     def size(self) -> int:
         if self._encoding:
             return len(self._encoding)
-        n = 1 if len(self.spenders) < 0x80 else 2
+        n = 1 if len(self.signers) < 0x80 else 2
         n += 1 if self.threshold < 0x80 else 2
-        n += (len(self.spenders) + 3) // 4
-        n += sum(s.size for s in self.spenders)
+        n += (len(self.signers) + 3) // 4
+        n += sum(s.size for s in self.signers)
         return n
 
     @property
@@ -135,55 +135,55 @@ class SpenderList(object):
         values: list[bytes] = []
         output: list[bytes] = []
         unique: set[bytes] = set()
-        for s in self.spenders:
+        for s in self.signers:
             match s:
-                case SpenderList():
+                case SignerList():
                     values.extend(s.keys)
                     key_count += 1
-                case SpenderKey():
+                case SignerKey():
                     values.append(s.key)
                     key_count += 1
         if key_count < self.threshold:
-            raise ValueError("SpenderList keys does not meet threshold.")
+            raise ValueError("SignerList keys does not meet threshold.")
         for k in values:
             if k not in unique:
                 unique.add(k)
                 output.append(k)
         return output
 
-    async def hash(self) -> SpenderHash:
-        prefix = pack('<HH', len(self.spenders), self.threshold)
+    async def hash(self) -> SignerHash:
+        prefix = pack('<HH', len(self.signers), self.threshold)
         hashes: list[bytes] = []
-        for i, s in enumerate(self.spenders):
+        for i, s in enumerate(self.signers):
             match s:
-                case SpenderHash():
+                case SignerHash():
                     hashes.append(s.hash)
-                case SpenderKey() | SpenderList():
+                case SignerKey() | SignerList():
                     hashes.append((await s.hash()).hash)
                 case _:
                     raise ValueError('Invalid spender type.')
         preimage = b''.join([prefix] + hashes)
-        return SpenderHash(await keccak_1600(preimage))
+        return SignerHash(await keccak_1600(preimage))
 
     def encode(self) -> bytes:
         if self._encoding:
             return self._encoding
-        n = len(self.spenders)
+        n = len(self.signers)
         n = (n << 1) | (0 if n < 0x80 else 1)
         n = n.to_bytes(2 if n & 1 else 1, 'little')
         x = self.threshold
         x = (x << 1) | (0 if x < 0x80 else 1)
         x = x.to_bytes(2 if x & 1 else 1, 'little')
-        types = bytearray((len(self.spenders) + 3) // 4)
+        types = bytearray((len(self.signers) + 3) // 4)
         encodings: list[bytes] = []
-        for i, s in enumerate(self.spenders):
+        for i, s in enumerate(self.signers):
             match s:
-                case SpenderHash():
-                    t = self.SPENDER_HASH
-                case SpenderKey():
-                    t = self.SPENDER_KEY
-                case SpenderList():
-                    t = self.SPENDER_LIST
+                case SignerHash():
+                    t = self.SIGNER_HASH
+                case SignerKey():
+                    t = self.SIGNER_KEY
+                case SignerList():
+                    t = self.SIGNER_LIST
                 case _:
                     raise ValueError('Invalid spender type.')
             types[i // 4] |= t << (i & 3)
@@ -192,9 +192,9 @@ class SpenderList(object):
         return self._encoding
 
     @classmethod
-    def decode(cls, view: bytes | bytearray | memoryview) -> SpenderList:
+    def decode(cls, view: bytes | bytearray | memoryview) -> SignerList:
         try:
-            spenders: list[SpenderHash | SpenderKey | SpenderList] = []
+            signers: list[SignerHash | SignerKey | SignerList] = []
             n = view[0]
             offset = 1
             if n & 1:
@@ -208,24 +208,24 @@ class SpenderList(object):
                 offset += 1
             x >>= 1
             if not n or not x:
-                raise ValueError('Decoded `SpenderList` must not be empty.')
+                raise ValueError('Decoded `SignerList` must not be empty.')
             types = view[offset:offset + ((n + 3) >> 2)]
             offset += len(types)
             for i in range(n):
                 match (types[i >> 2] >> (i & 3)) & 3:
-                    case cls.SPENDER_HASH:
-                        spenders.append(SpenderHash.decode(view[offset:]))
-                    case cls.SPENDER_KEY:
-                        spenders.append(SpenderKey.decode(view[offset:]))
-                    case cls.SPENDER_LIST:
-                        spenders.append(SpenderList.decode(view[offset:]))
+                    case cls.SIGNER_HASH:
+                        signers.append(SignerHash.decode(view[offset:]))
+                    case cls.SIGNER_KEY:
+                        signers.append(SignerKey.decode(view[offset:]))
+                    case cls.SIGNER_LIST:
+                        signers.append(SignerList.decode(view[offset:]))
                     case _:
                         raise ValueError('Invalid spender type.')
-                offset += spenders[-1].size
+                offset += signers[-1].size
         except IndexError as e:
             raise ValueError('Invalid size when decoding.')
         encoding = bytes(view if len(view) == offset else view[:offset])
-        return SpenderList(spenders, x, encoding)
+        return SignerList(signers, x, encoding)
 
 
 class UTXORefByIndex(object):
@@ -250,7 +250,7 @@ class UTXORefByIndex(object):
 class PaymentInput(object):
 
     def __init__(self,
-        utxo: UTXORefByIndex, spender: SpenderKey | SpenderList
+        utxo: UTXORefByIndex, spender: SignerKey | SignerList
     ):
         self.utxo, self.spender = utxo, spender
 
@@ -263,10 +263,10 @@ class PaymentInput(object):
         if len(view) == i:
             raise ValueError('`view` too short to decode `PaymentInput`.')
         match view[i]:
-            case SpenderEnum.SPENDER_KEY.value:
-                spender, n = SpenderKey.decode(view[i:])
-            case SpenderEnum.SPENDER_LIST.value:
-                spender, n = SpenderList.decode(view[i:])
+            case SpenderEnum.SIGNER_KEY.value:
+                spender, n = SignerKey.decode(view[i:])
+            case SpenderEnum.SIGNER_LIST.value:
+                spender, n = SignerList.decode(view[i:])
             case _:
                 raise ValueError('Invalid `Spender*` type encoded in `view`.')
         return cls(utxo, spender), i + n
@@ -300,7 +300,7 @@ class Vote(object):
 class PaymentOutput(object):
 
     def __init__(self,
-        spender: SpenderHash | None,            # 16-32 bytes digest of receipient's public key
+        spender: SignerHash | None,            # 16-32 bytes digest of receipient's public key
         units: int = 0,                         # 1 coin = 10**9 units
         block_reward_vote: int | None = None,   # adjustment to block_reward
         utxo_fee_vote: int | None = None,       # adjustment to utxo_fee
@@ -380,7 +380,7 @@ class PaymentOutput(object):
         if flags & 1:
             if len(view) < i + 20:
                 raise ValueError('`view` too short to decode `PaymentOutput`.')
-            spender = SpenderHash(bytes(view[i:i+20]))
+            spender = SignerHash(bytes(view[i:i+20]))
             i += 20
         else:
             spender = None
@@ -531,7 +531,7 @@ class Payment(object):
 class BlockHeader(object):
 
     def __init__(self, id: int, timestamp: int, prev_hash: bytes,
-        uid: SpenderHash, payments_digest: bytes,
+        uid: SignerHash, payments_digest: bytes,
         nonce: bytes, parameters: Parameters | None = None
     ):
         self.id = id
@@ -581,12 +581,12 @@ class BlockHeader(object):
         if len(view) < offset + 1:
             raise ValueError('`view` is too short to decode `BlockHeader`.')
         match view[offset] & 3:
-            case SpenderEnum.SPENDER_HASH.value:
-                uid, n = SpenderHash.decode(view[offset:])
-            case SpenderEnum.SPENDER_KEY.value:
-                uid, n = SpenderKey.decode(view[offset:])
+            case SpenderEnum.SIGNER_HASH.value:
+                uid, n = SignerHash.decode(view[offset:])
+            case SpenderEnum.SIGNER_KEY.value:
+                uid, n = SignerKey.decode(view[offset:])
                 if uid.truncate:
-                    raise ValueError('`BlockHeader` `SpenderKey` must not be truncated.')
+                    raise ValueError('`BlockHeader` `SignerKey` must not be truncated.')
         offset += n
         if id % 10000 == 0:
             parameters, n = Parameters.decode(view[offset:])
@@ -610,7 +610,7 @@ class Block(object):
         timestamp: int,                         # microseconds since UNIX epoch
         prev_hash: bytes,                       # hash digest of most recent block
         nonce: bytes,                           # nonce required to hash block to target difficulty
-        uid: SpenderHash | SpenderKey,          # uid of block worker
+        uid: SignerHash | SignerKey,          # uid of block worker
         parameters: Parameters | None = None,   # epoch blocks publish network parameters
         payments: list[Payment] = []            # payment transactions to commit by this block
     ):

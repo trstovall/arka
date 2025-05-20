@@ -4,7 +4,7 @@ from os import urandom
 
 import pytest
 
-def test_parameters():
+def test_parameters_serdes():
     target = int.from_bytes(urandom(32), 'little')
     block_reward = 100_000 * 10 ** 6
     exec_fund = 0
@@ -27,29 +27,69 @@ def test_parameters():
     assert params.size == len(param_bytes)
 
 
-def test_spender_hash():
+def test_signer_hash_serdes():
     hash = urandom(32)
-    spender = block.SpenderHash(hash)
-    assert spender.hash == hash
-    assert spender.encode() == hash
-    assert block.SpenderHash.decode(hash).hash == hash
-    assert block.SpenderHash.decode(hash + urandom(32)).hash == hash
+    signer = block.SignerHash(hash)
+    assert signer.hash == hash
+    assert signer.encode() == hash
+    assert block.SignerHash.decode(hash).hash == hash
+    assert block.SignerHash.decode(hash + urandom(32)).hash == hash
+
+def test_signer_key_serdes():
+    key = urandom(32)
+    signer = block.SignerKey(key)
+    assert signer.key == key
+    assert signer.encode() == key
+    assert block.SignerKey.decode(key).key == key
+    assert block.SignerKey.decode(key + urandom(32)).key == key
+
 
 @pytest.mark.asyncio
-async def test_spender_key():
+async def test_signer_key_hash():
     key = urandom(32)
-    spender = block.SpenderKey(key)
-    assert spender.key == key
-    assert spender.encode() == key
-    assert block.SpenderKey.decode(key).key == key
-    assert block.SpenderKey.decode(key + urandom(32)).key == key
-    hash = await spender.hash()
-    assert isinstance(hash, block.SpenderHash)
+    signer = block.SignerKey(key)
+    hash = await signer.hash()
+    assert isinstance(hash, block.SignerHash)
     assert isinstance(hash.hash, bytes)
     assert len(hash.hash) == 32
 
 
-@pytest.mark.asyncio
-async def test_spender_list():
-    pass
+def test_signer_list_serdes():
+    s = block.SignerList([
+        block.SignerList([
+            block.SignerKey(urandom(32)),
+            block.SignerHash(urandom(32))
+        ], 1),
+        block.SignerHash(urandom(32)),
+        block.SignerKey(urandom(32))
+    ], 2)
+    ss = block.SignerList.decode(s.encode())
+    assert s.threshold == ss.threshold
+    assert s.keys == ss.keys
+    assert len(s.keys) == 2
+    assert isinstance(ss.signers[0], block.SignerList)
+    assert ss.signers[0].threshold == s.signers[0].threshold
+    assert ss.signers[0].keys == s.signers[0].keys
+    assert len(ss.signers[0].keys) == 1
+    assert isinstance(ss.signers[0].signers[0], block.SignerKey)
+    assert ss.signers[0].signers[0].key == s.signers[0].signers[0].key
+    assert isinstance(ss.signers[0].signers[1], block.SignerHash)
+    assert ss.signers[0].signers[1].hash == s.signers[0].signers[1].hash
+    assert isinstance(ss.signers[1], block.SignerHash)
+    assert ss.signers[1].hash == s.signers[1].hash
+    assert isinstance(ss.signers[2], block.SignerKey)
+    assert ss.signers[2].key == s.signers[2].key
 
+
+@pytest.mark.asyncio
+async def test_signer_list_hash():
+    s = block.SignerList([
+        block.SignerList([
+            block.SignerKey(urandom(32)),
+            block.SignerHash(urandom(32))
+        ], 1),
+        block.SignerHash(urandom(32)),
+        block.SignerKey(urandom(32))
+    ], 2)
+    ss = block.SignerList.decode(s.encode())
+    assert (await s.hash()).hash == (await ss.hash()).hash

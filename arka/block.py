@@ -351,7 +351,8 @@ class UTXOUnlock(AbstractTXInput):
     SIGNER_LIST = 2
 
     def __init__(self,
-        utxo: UTXORefByIndex | UTXORefByHash, signer: SignerKey | SignerList | None
+        utxo: UTXORefByIndex | UTXORefByHash,
+        signer: SignerKey | SignerList | None = None
     ):
         self.utxo, self.signer = utxo, signer
 
@@ -400,7 +401,7 @@ class UTXOUnlock(AbstractTXInput):
         return b''.join([
             pack('<B', prefix),
             self.utxo.encode(),
-            self.signer.encode()
+            self.signer.encode() if self.signer else b''
         ])
 
     @classmethod

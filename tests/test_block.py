@@ -63,16 +63,16 @@ def test_signer_list_serdes():
 async def test_signer_list_hash():
     keys = [block.SignerKey(urandom(32)) for i in range(6)]
     l1 = block.SignerList([
-        keys[0], await keys[1].hash(), keys[2],
-        await keys[3].hash(), keys[4], await keys[5].hash()
+        keys[0], (await keys[1].hash()), keys[2],
+        (await keys[3].hash()), keys[4], (await keys[5].hash())
     ], 3),
     l2 = block.SignerList([
-        l1, await keys[0].hash(), keys[1], await keys[2].hash(),
-        keys[3], await keys[4].hash(), keys[5]
+        l1, (await keys[0].hash()), keys[1], (await keys[2].hash()),
+        keys[3], (await keys[4].hash()), keys[5]
     ], 4)
     l3 = block.SignerList([
-        await l1.hash(), keys[0], await keys[1], keys[2],
-        await keys[3].hash(), keys[4], keys[5]
+        (await l1.hash()), keys[0], (await keys[1].hash()), keys[2],
+        (await keys[3].hash()), keys[4], keys[5]
     ], 4)
     x = await l2.hash()
     y = await l3.hash()

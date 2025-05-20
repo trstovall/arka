@@ -65,7 +65,7 @@ async def test_signer_list_hash():
     l1 = block.SignerList([
         keys[0], (await keys[1].hash()), keys[2],
         (await keys[3].hash()), keys[4], (await keys[5].hash())
-    ], 3),
+    ], 3)
     l2 = block.SignerList([
         l1, (await keys[0].hash()), keys[1], (await keys[2].hash()),
         keys[3], (await keys[4].hash()), keys[5]

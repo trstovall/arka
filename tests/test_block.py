@@ -5,43 +5,33 @@ from os import urandom
 import pytest
 
 def test_parameters_serdes():
-    target = int.from_bytes(urandom(32), 'little')
-    block_reward = 100_000 * 10 ** 6
-    exec_fund = 0
-    utxo_fee = 2**64 // (1000 * 60 * 24 * 365)
-    data_fee = block_reward // 1_000_000
-    executive = urandom(32)
-    param_bytes = block.Parameters(
-        target, block_reward, exec_fund,
-        utxo_fee, data_fee, executive
-    ).encode()
-    params = block.Parameters.decode(param_bytes)
-    assert params.size == len(param_bytes)
-    assert .99 * target < params.target < 1.01 * target
-    assert params.block_reward == block_reward
-    assert params.exec_fund == exec_fund
-    assert params.utxo_fee == utxo_fee
-    assert params.data_fee == data_fee
-    assert params.executive == executive
-    params = block.Parameters.decode(param_bytes + urandom(32))
-    assert params.size == len(param_bytes)
+    x = block.Parameters(
+        target = int.from_bytes(urandom(32), 'little'),
+        block_reward = 100_000 * 10 ** 6,
+        exec_fund = 0,
+        utxo_fee = 2**64 // (1000 * 60 * 24 * 365),
+        data_fee = 100_000,
+        executive = urandom(32)
+    )
+    y = block.Parameters.decode(x.encode())
+    assert x == y
+    y = block.Parameters.decode(x.encode() + urandom(32))
+    assert x == y
 
 
 def test_signer_hash_serdes():
-    hash = urandom(32)
-    signer = block.SignerHash(hash)
-    assert signer.hash == hash
-    assert signer.encode() == hash
-    assert block.SignerHash.decode(hash).hash == hash
-    assert block.SignerHash.decode(hash + urandom(32)).hash == hash
+    x = block.SignerHash(urandom(32))
+    y = block.SignerHash.decode(x.encode())
+    assert x == y
+    y = block.SignerHash.decode(x.encode() + urandom(32))
+    assert x == y
 
 def test_signer_key_serdes():
-    key = urandom(32)
-    signer = block.SignerKey(key)
-    assert signer.key == key
-    assert signer.encode() == key
-    assert block.SignerKey.decode(key).key == key
-    assert block.SignerKey.decode(key + urandom(32)).key == key
+    x = block.SignerKey(urandom(32))
+    y = block.SignerKey.decode(x.encode())
+    assert x == y
+    y = block.SignerKey.decode(x.encode() + urandom(32))
+    assert x == y
 
 
 @pytest.mark.asyncio
@@ -55,7 +45,7 @@ async def test_signer_key_hash():
 
 
 def test_signer_list_serdes():
-    s = block.SignerList([
+    x = block.SignerList([
         block.SignerList([
             block.SignerKey(urandom(32)),
             block.SignerHash(urandom(32))
@@ -63,33 +53,80 @@ def test_signer_list_serdes():
         block.SignerHash(urandom(32)),
         block.SignerKey(urandom(32))
     ], 2)
-    ss = block.SignerList.decode(s.encode())
-    assert s.threshold == ss.threshold
-    assert s.keys == ss.keys
-    assert len(s.keys) == 2
-    assert isinstance(ss.signers[0], block.SignerList)
-    assert ss.signers[0].threshold == s.signers[0].threshold
-    assert ss.signers[0].keys == s.signers[0].keys
-    assert len(ss.signers[0].keys) == 1
-    assert isinstance(ss.signers[0].signers[0], block.SignerKey)
-    assert ss.signers[0].signers[0].key == s.signers[0].signers[0].key
-    assert isinstance(ss.signers[0].signers[1], block.SignerHash)
-    assert ss.signers[0].signers[1].hash == s.signers[0].signers[1].hash
-    assert isinstance(ss.signers[1], block.SignerHash)
-    assert ss.signers[1].hash == s.signers[1].hash
-    assert isinstance(ss.signers[2], block.SignerKey)
-    assert ss.signers[2].key == s.signers[2].key
+    y = block.SignerList.decode(x.encode())
+    assert x == y
+    y = block.SignerList.decode(x.encode() + urandom(32))
+    assert x == y
 
 
 @pytest.mark.asyncio
 async def test_signer_list_hash():
-    s = block.SignerList([
-        block.SignerList([
-            block.SignerKey(urandom(32)),
-            block.SignerHash(urandom(32))
-        ], 1),
-        block.SignerHash(urandom(32)),
+    keys = [block.SignerKey(urandom(32)) for i in range(6)]
+    l1 = block.SignerList([
+        keys[0], await keys[1].hash(), keys[2],
+        await keys[3].hash(), keys[4], await keys[5].hash()
+    ], 3),
+    l2 = block.SignerList([
+        l1, await keys[0].hash(), keys[1], await keys[2].hash(),
+        keys[3], await keys[4].hash(), keys[5]
+    ], 4)
+    l3 = block.SignerList([
+        await l1.hash(), keys[0], await keys[1], keys[2],
+        await keys[3].hash(), keys[4], keys[5]
+    ], 4)
+    x = await l2.hash()
+    y = await l3.hash()
+    assert x == y
+    assert isinstance(x, block.SignerHash)
+    assert len(x.hash) == 32
+
+
+def test_utxo_ref_by_index_serdes():
+    x = block.UTXORefByIndex(
+        int.from_bytes(urandom(8), 'little'),
+        int.from_bytes(urandom(4), 'little'),
+        int.from_bytes(urandom(2), 'little')
+    )
+    y = block.UTXORefByIndex.decode(x.encode())
+    assert x == y
+    y = block.UTXORefByIndex.decode(x.encode() + urandom(32))
+    assert x == y
+
+
+def test_utxo_ref_by_hash_serdes():
+    x = block.UTXORefByHash(
+        urandom(32), int.from_bytes(urandom(2), 'little')
+    )
+    y = block.UTXORefByHash.decode(x.encode())
+    assert x == y
+    y = block.UTXORefByHash.decode(x.encode() + urandom(32))
+    assert x == y
+
+
+def test_utxo_unlock_serdes():
+    x = block.UTXOUnlock(
+        block.UTXORefByIndex(
+            int.from_bytes(urandom(8), 'little'),
+            int.from_bytes(urandom(4), 'little'),
+            int.from_bytes(urandom(2), 'little')
+        ),
         block.SignerKey(urandom(32))
-    ], 2)
-    ss = block.SignerList.decode(s.encode())
-    assert (await s.hash()).hash == (await ss.hash()).hash
+    )
+    y = block.UTXOUnlock.decode(x.encode())
+    assert x == y
+    x.utxo = block.UTXORefByHash(
+        urandom(32), int.from_bytes(urandom(2), 'little')
+    )
+    y = block.UTXOUnlock.decode(x.encode())
+    assert x == y
+    x.signer = block.SignerList([
+        block.SignerKey(urandom(32)),
+        block.SignerHash(urandom(32))
+    ], 1)
+    y = block.UTXOUnlock.decode(x.encode())
+    assert x == y
+    x.signer = None
+    y = block.UTXOUnlock.decode(x.encode())
+    assert x == y
+    y = block.UTXOUnlock.decode(x.encode() + urandom(32))
+    assert x == y

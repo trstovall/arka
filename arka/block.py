@@ -25,14 +25,31 @@ class Parameters(object):
         self.data_fee = data_fee
         self.executive = executive
 
+    def __eq__(self, value: Parameters) -> bool:
+        if not isinstance(value, Parameters):
+            return NotImplemented
+        if (
+            self.encode_target() == value.encode_target()
+            and self.block_reward == value.block_reward
+            and self.exec_fund == value.exec_fund
+            and self.utxo_fee == value.utxo_fee
+            and self.data_fee == value.data_fee
+            and self.executive == value.executive
+        ):
+            return True
+        return False
+
     @property
     def size(self) -> int:
         return self.SIZE
 
-    def encode(self) -> bytes:
+    def encode_target(self) -> bytes:
         n = max(0, self.target.bit_length() - 8)
         x = self.target >> n
-        target = bytes([x, n])
+        return bytes([x, n])
+
+    def encode(self) -> bytes:
+        target = self.encode_target()
         ints = pack('<QQQQ', 
             self.block_reward, self.exec_fund, self.utxo_fee, self.data_fee
         )
@@ -58,6 +75,13 @@ class SignerHash(object):
     def __init__(self, hash: bytes):
         self.hash = hash
 
+    def __eq__(self, value: SignerHash) -> bool:
+        if not isinstance(value, SignerHash):
+            return NotImplemented
+        if self.hash == value.hash:
+            return True
+        return False
+
     @property
     def size(self) -> int:
         return self.SIZE
@@ -80,6 +104,13 @@ class SignerKey(object):
 
     def __init__(self, key: bytes):
         self.key = key
+
+    def __eq__(self, value: SignerKey) -> bool:
+        if not isinstance(value, SignerKey):
+            return NotImplemented
+        if self.key == value.key:
+            return True
+        return False
 
     @property
     def size(self) -> int:
@@ -112,12 +143,22 @@ class SignerList(object):
         _encoding: bytes | None = None
     ):
         if len(signers) <= 0 or len(signers) >= 0x8000:
-            raise ValueError('Invalid spender list.')
+            raise ValueError('Invalid signer list.')
         if threshold <= 0 or threshold > len(signers):
             raise ValueError('Invalid threshold.')
         self.signers = signers
         self.threshold = threshold
         self._encoding = _encoding
+
+    def __eq__(self, value: SignerList) -> bool:
+        if not isinstance(value, SignerList):
+            return NotImplemented
+        if (
+            self.signers == value.signers
+            and self.threshold == value.threshold
+        ):
+            return True
+        return False
 
     @property
     def size(self) -> int:
@@ -161,7 +202,7 @@ class SignerList(object):
                 case SignerKey() | SignerList():
                     hashes.append((await s.hash()).hash)
                 case _:
-                    raise ValueError('Invalid spender type.')
+                    raise ValueError('Invalid signer type.')
         preimage = b''.join([prefix] + hashes)
         return SignerHash(await keccak_1600(preimage))
 
@@ -185,7 +226,7 @@ class SignerList(object):
                 case SignerList():
                     t = self.SIGNER_LIST
                 case _:
-                    raise ValueError('Invalid spender type.')
+                    raise ValueError('Invalid signer type.')
             types[i >> 2] |= t << ((i & 3) << 1)
             encodings.append(s.encode())
         self._encoding = b''.join([n, x, types] + encodings)
@@ -220,7 +261,7 @@ class SignerList(object):
                     case cls.SIGNER_LIST:
                         signers.append(SignerList.decode(view[offset:]))
                     case _:
-                        raise ValueError('Invalid spender type.')
+                        raise ValueError('Invalid signer type.')
                 offset += signers[-1].size
         except IndexError as e:
             raise ValueError('Invalid size when decoding.')
@@ -230,46 +271,160 @@ class SignerList(object):
 
 class UTXORefByIndex(object):
 
-    def __init__(self, block: int, payment: int, output: int):
-        self.block, self.payment, self.output = block, payment, output
-    
-    def encode(self) -> bytearray:
-        buffer = bytearray(10)
-        pack_into('<IIH', buffer, 0,
-            self.block, self.payment, self.output
-        )
-        return buffer
+    SIZE = 14
+
+    def __init__(self, block: int, tx: int, output: int):
+        self.block, self.tx, self.output = block, tx, output
+
+    def __eq__(self, value: UTXORefByIndex) -> bool:
+        if not isinstance(value, UTXORefByIndex):
+            return NotImplemented
+        if (
+            self.block == value.block
+            and self.tx == value.tx
+            and self.output == value.output
+        ):
+            return True
+        return False
+
+    @property
+    def size(self) -> int:
+        return self.SIZE
+
+    def encode(self) -> bytes:
+        return pack('<QIH', self.block, self.tx, self.output)
 
     @classmethod
-    def decode(cls, view) -> tuple['UTXORefByIndex', int]:
-        if len(view) < 10:
-            raise ValueError('`view` too short to decode `UTXORefByIndex`.')
-        return cls(*unpack_from('<IIH', view, 0)), 10
+    def decode(cls, view: bytes | bytearray | memoryview) -> UTXORefByIndex:
+        if len(view) < cls.SIZE:
+            raise ValueError('Invalid size when decoding.')
+        return cls(*unpack_from('<QIH', view, 0))
 
 
-class PaymentInput(object):
+class UTXORefByHash(object):
+
+    SIZE = 34
+
+    def __init__(self, tx_hash: bytes, output: int):
+        self.tx_hash = tx_hash
+        self.output = output
+
+    def __eq__(self, value: UTXORefByHash) -> bool:
+        if not isinstance(value, UTXORefByHash):
+            return NotImplemented
+        if (
+            self.tx_hash == value.tx_hash
+            and self.output == value.output
+        ):
+            return True
+        return False
+
+    @property
+    def size(self) -> int:
+        return self.SIZE
+    
+    def encode(self) -> bytes:
+        return self.tx_hash + pack('<H', self.output)
+
+    @classmethod
+    def decode(cls, view: bytes | bytearray | memoryview) -> UTXORefByHash:
+        if len(view) < cls.SIZE:
+            raise ValueError('Invalid size when decoding.')
+        tx_hash = bytes(view if len(view) == 32 else view[:32])
+        return cls(tx_hash, *unpack_from('<H', view, 32))
+
+
+class AbstractTXInput(object):
+
+    @property
+    def signers(self) -> list[bytes]:
+        raise NotImplementedError()
+
+
+class UTXOUnlock(AbstractTXInput):
+
+    UTXO_REF_BY_INDEX = 0
+    UTXO_REF_BY_HASH = 1
+
+    SIGNER_NONE = 0
+    SIGNER_KEY = 1
+    SIGNER_LIST = 2
 
     def __init__(self,
-        utxo: UTXORefByIndex, spender: SignerKey | SignerList
+        utxo: UTXORefByIndex | UTXORefByHash, signer: SignerKey | SignerList | None
     ):
-        self.utxo, self.spender = utxo, spender
+        self.utxo, self.signer = utxo, signer
 
-    def encode(self) -> bytearray:
-        return self.utxo.encode() + self.spender.encode()
+    def __eq__(self, value: UTXOUnlock) -> bool:
+        if not isinstance(value, UTXOUnlock):
+            return NotImplemented
+        if (
+            self.utxo == value.utxo
+            and self.signer == value.signer
+        ):
+            return True
+        return False
+
+    @property
+    def size(self) -> int:
+        return 1 + self.utxo.size + (self.signer.size if self.signer else 0)
+
+    @property
+    def signers(self) -> list[bytes]:
+        match self.signer:
+            case SignerKey():
+                return [self.signer.key]
+            case SignerList():
+                return self.signer.keys
+            case _:
+                raise ValueError('Invalid signer.')
+
+    def encode(self) -> bytes:
+        prefix = 0
+        match self.utxo:
+            case UTXORefByIndex():
+                pass
+            case UTXORefByHash():
+                prefix |= self.UTXO_REF_BY_HASH
+            case _:
+                raise ValueError('Invalid UTXO reference.')
+        match self.signer:
+            case None:
+                pass
+            case SignerKey():
+                prefix |= self.SIGNER_KEY << 1
+            case SignerList():
+                prefix |= self.SIGNER_LIST << 1
+            case _:
+                raise ValueError('Invalid signer.')
+        return b''.join([
+            pack('<B', prefix),
+            self.utxo.encode(),
+            self.signer.encode()
+        ])
 
     @classmethod
-    def decode(cls, view: memoryview) -> tuple['PaymentInput', int]:
-        utxo, i = UTXORefByIndex.decode(view)
-        if len(view) == i:
-            raise ValueError('`view` too short to decode `PaymentInput`.')
-        match view[i]:
-            case SpenderEnum.SIGNER_KEY.value:
-                spender, n = SignerKey.decode(view[i:])
-            case SpenderEnum.SIGNER_LIST.value:
-                spender, n = SignerList.decode(view[i:])
+    def decode(cls, view: bytes | bytearray | memoryview) -> UTXOUnlock:
+        if not view:
+            raise ValueError('Invalid size when decoding.')
+        prefix = view[0]
+        match prefix & 1:
+            case cls.UTXO_REF_BY_INDEX:
+                utxo = UTXORefByIndex.decode(view[1:])
+            case cls.UTXO_REF_BY_HASH:
+                utxo = UTXORefByHash.decode(view[1:])
             case _:
-                raise ValueError('Invalid `Spender*` type encoded in `view`.')
-        return cls(utxo, spender), i + n
+                raise ValueError('Invalid UTXO reference.')
+        match prefix >> 1:
+            case cls.SIGNER_NONE:
+                signer = None
+            case cls.SIGNER_KEY:
+                signer = SignerKey.decode(view[1 + utxo.size:])
+            case cls.SIGNER_LIST:
+                signer = SignerList.decode(view[1 + utxo.size:])
+            case _:
+                raise ValueError('Invalid signer.')
+        return cls(utxo, signer)
 
 
 class Vote(object):
@@ -300,14 +455,14 @@ class Vote(object):
 class PaymentOutput(object):
 
     def __init__(self,
-        spender: SignerHash | None,            # 16-32 bytes digest of receipient's public key
+        signer: SignerHash | None,            # 16-32 bytes digest of receipient's public key
         units: int = 0,                         # 1 coin = 10**9 units
         block_reward_vote: int | None = None,   # adjustment to block_reward
         utxo_fee_vote: int | None = None,       # adjustment to utxo_fee
         data_fee_vote: int | None = None,       # adjustment to data_fee
         memo: bytes | None = None               # raw data to add to blockchain
     ):
-        self.spender = spender
+        self.signer = signer
         self.units = units
         self.block_reward_vote = block_reward_vote
         self.utxo_fee_vote = utxo_fee_vote
@@ -316,10 +471,10 @@ class PaymentOutput(object):
 
     def encode(self) -> bytearray:
         flags, i = 0, 1
-        if self.spender:
+        if self.signer:
             flags += 1
-            spender = self.spender.hash
-            i += len(spender)
+            signer = self.signer.hash
+            i += len(signer)
         if self.units:
             flags += 2
             i += 8
@@ -346,9 +501,9 @@ class PaymentOutput(object):
         view = memoryview(buffer)
         view[0] = flags
         i = 1
-        if self.spender:
-            view[i:i+len(spender)] = spender
-            i += len(spender)
+        if self.signer:
+            view[i:i+len(signer)] = signer
+            i += len(signer)
         if self.units:
             pack_into('<Q', view, i, self.units)
             i += 8
@@ -376,14 +531,14 @@ class PaymentOutput(object):
         if len(view) < 1:
             raise ValueError('`view` too short to decode `PaymentOutput`.')
         flags, i = view[0], 1
-        # unpack spender
+        # unpack signer
         if flags & 1:
             if len(view) < i + 20:
                 raise ValueError('`view` too short to decode `PaymentOutput`.')
-            spender = SignerHash(bytes(view[i:i+20]))
+            signer = SignerHash(bytes(view[i:i+20]))
             i += 20
         else:
-            spender = None
+            signer = None
         # unpack units
         if flags & 2:
             if len(view) < i + 8:
@@ -439,7 +594,7 @@ class PaymentOutput(object):
             i += memo_len
         else:
             memo = None
-        return cls(spender, units, block_reward_vote, utxo_fee_vote, data_fee_vote, memo), i
+        return cls(signer, units, block_reward_vote, utxo_fee_vote, data_fee_vote, memo), i
 
 
 class Payment(object):

@@ -186,7 +186,7 @@ class SignerList(object):
                     t = self.SIGNER_LIST
                 case _:
                     raise ValueError('Invalid spender type.')
-            types[i // 4] |= t << (i & 3)
+            types[i >> 2] |= t << ((i & 3) << 1)
             encodings.append(s.encode())
         self._encoding = b''.join([n, x, types] + encodings)
         return self._encoding
@@ -212,7 +212,7 @@ class SignerList(object):
             types = view[offset:offset + ((n + 3) >> 2)]
             offset += len(types)
             for i in range(n):
-                match (types[i >> 2] >> (i & 3)) & 3:
+                match (types[i >> 2] >> ((i & 3) << 1)) & 3:
                     case cls.SIGNER_HASH:
                         signers.append(SignerHash.decode(view[offset:]))
                     case cls.SIGNER_KEY:

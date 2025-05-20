@@ -1,7 +1,7 @@
 
 from __future__ import annotations
 
-from struct import pack, unpack_from
+from struct import pack, unpack_from, Struct
 from enum import IntEnum
 from arka.crypto import keccak_800, keccak_1600
 
@@ -28,16 +28,14 @@ class Parameters(object):
     def __eq__(self, value: Parameters) -> bool:
         if not isinstance(value, Parameters):
             return NotImplemented
-        if (
+        return (
             self.encode_target() == value.encode_target()
             and self.block_reward == value.block_reward
             and self.exec_fund == value.exec_fund
             and self.utxo_fee == value.utxo_fee
             and self.data_fee == value.data_fee
             and self.executive == value.executive
-        ):
-            return True
-        return False
+        )
 
     @property
     def size(self) -> int:
@@ -78,9 +76,7 @@ class SignerHash(object):
     def __eq__(self, value: SignerHash) -> bool:
         if not isinstance(value, SignerHash):
             return NotImplemented
-        if self.hash == value.hash:
-            return True
-        return False
+        return self.hash == value.hash
 
     @property
     def size(self) -> int:
@@ -108,9 +104,7 @@ class SignerKey(object):
     def __eq__(self, value: SignerKey) -> bool:
         if not isinstance(value, SignerKey):
             return NotImplemented
-        if self.key == value.key:
-            return True
-        return False
+        return self.key == value.key
 
     @property
     def size(self) -> int:
@@ -153,12 +147,10 @@ class SignerList(object):
     def __eq__(self, value: SignerList) -> bool:
         if not isinstance(value, SignerList):
             return NotImplemented
-        if (
+        return (
             self.signers == value.signers
             and self.threshold == value.threshold
-        ):
-            return True
-        return False
+        )
 
     @property
     def size(self) -> int:
@@ -279,13 +271,11 @@ class UTXORefByIndex(object):
     def __eq__(self, value: UTXORefByIndex) -> bool:
         if not isinstance(value, UTXORefByIndex):
             return NotImplemented
-        if (
+        return (
             self.block == value.block
             and self.tx == value.tx
             and self.output == value.output
-        ):
-            return True
-        return False
+        )
 
     @property
     def size(self) -> int:
@@ -312,12 +302,10 @@ class UTXORefByHash(object):
     def __eq__(self, value: UTXORefByHash) -> bool:
         if not isinstance(value, UTXORefByHash):
             return NotImplemented
-        if (
+        return (
             self.tx_hash == value.tx_hash
             and self.output == value.output
-        ):
-            return True
-        return False
+        )
 
     @property
     def size(self) -> int:
@@ -338,10 +326,85 @@ class AbstractTXInput(object):
 
     @property
     def signers(self) -> list[bytes]:
-        raise NotImplementedError()
+        match self.signer:
+            case SignerKey():
+                return [self.signer.key]
+            case SignerList():
+                return self.signer.keys
+            case _:
+                raise ValueError('Invalid signer.')
 
 
-class UTXOUnlock(AbstractTXInput):
+class PublisherSpend(AbstractTXInput):
+
+    SIGNER_NONE = 0
+    SIGNER_KEY = 1
+    SIGNER_LIST = 2
+
+    def __init__(self,
+        block: int,
+        signer: SignerKey | SignerList | None = None
+    ):
+        self.block, self.signer = block, signer
+    
+    def __eq__(self, value: PublisherSpend) -> bool:
+        if not isinstance(value, PublisherSpend):
+            return NotImplemented
+        return self.block == value.block and self.signer == value.signer
+    
+    @property
+    def size(self) -> int:
+        return 8 + (self.signer.size if self.signer else 0)
+    
+    def encode(self) -> bytes:
+        prefix = 0
+        match self.signer:
+            case None:
+                prefix |= self.SIGNER_NONE
+            case SignerKey():
+                prefix |= self.SIGNER_KEY
+            case SignerList():
+                prefix |= self.SIGNER_LIST
+            case _:
+                raise ValueError('Invalid signer.')
+        return b''.join([
+            pack('<BQ', prefix, self.block),
+            self.signer.encode() if self.signer else b''
+        ])
+
+    @classmethod
+    def decode(cls, view: bytes | bytearray | memoryview) -> PublisherSpend:
+        if len(view) < 9:
+            raise ValueError('Invalid size when decoding.')
+        prefix, block = unpack_from('<BQ', view, 0)
+        match prefix:
+            case cls.SIGNER_NONE:
+                signer = None
+            case cls.SIGNER_KEY:
+                signer = SignerKey.decode(view[9:])
+            case cls.SIGNER_LIST:
+                signer = SignerList.decode(view[9:])
+            case _:
+                raise ValueError('Invalid signer.')
+        return cls(block, signer)
+
+
+class ExecutiveSpend(PublisherSpend):
+
+    def __eq__(self, value: ExecutiveSpend) -> bool:
+        if not isinstance(value, ExecutiveSpend):
+            return NotImplemented
+        if self.block == value.block and self.signer == value.signer:
+            return True
+        return False
+    
+    @classmethod
+    def decode(cls, view: bytes | bytearray | memoryview) -> ExecutiveSpend:
+        x = PublisherSpend.decode(view)
+        return cls(x.block, x.signer)
+
+
+class UTXOSpend(AbstractTXInput):
 
     UTXO_REF_BY_INDEX = 0
     UTXO_REF_BY_HASH = 1
@@ -356,42 +419,30 @@ class UTXOUnlock(AbstractTXInput):
     ):
         self.utxo, self.signer = utxo, signer
 
-    def __eq__(self, value: UTXOUnlock) -> bool:
-        if not isinstance(value, UTXOUnlock):
+    def __eq__(self, value: UTXOSpend) -> bool:
+        if not isinstance(value, UTXOSpend):
             return NotImplemented
-        if (
+        return (
             self.utxo == value.utxo
             and self.signer == value.signer
-        ):
-            return True
-        return False
+        )
 
     @property
     def size(self) -> int:
         return 1 + self.utxo.size + (self.signer.size if self.signer else 0)
 
-    @property
-    def signers(self) -> list[bytes]:
-        match self.signer:
-            case SignerKey():
-                return [self.signer.key]
-            case SignerList():
-                return self.signer.keys
-            case _:
-                raise ValueError('Invalid signer.')
-
     def encode(self) -> bytes:
         prefix = 0
         match self.utxo:
             case UTXORefByIndex():
-                pass
+                prefix |= self.UTXO_REF_BY_INDEX
             case UTXORefByHash():
                 prefix |= self.UTXO_REF_BY_HASH
             case _:
                 raise ValueError('Invalid UTXO reference.')
         match self.signer:
             case None:
-                pass
+                prefix |= self.SIGNER_NONE << 1
             case SignerKey():
                 prefix |= self.SIGNER_KEY << 1
             case SignerList():
@@ -405,7 +456,7 @@ class UTXOUnlock(AbstractTXInput):
         ])
 
     @classmethod
-    def decode(cls, view: bytes | bytearray | memoryview) -> UTXOUnlock:
+    def decode(cls, view: bytes | bytearray | memoryview) -> UTXOSpend:
         if not view:
             raise ValueError('Invalid size when decoding.')
         prefix = view[0]
@@ -428,29 +479,107 @@ class UTXOUnlock(AbstractTXInput):
         return cls(utxo, signer)
 
 
+class AssetSpawn(AbstractTXInput):
+
+    SIGNER_KEY = 0
+    SIGNER_LIST = 1
+
+    def __init__(self, signer: SignerKey | SignerList):
+        self.signer = signer
+
+    def __eq__(self, value: AssetSpawn) -> bool:
+        if not isinstance(value, AssetSpawn):
+            return NotImplemented
+        return self.signer == value.signer
+
+    @property
+    def size(self) -> int:
+        return 1 + self.signer.size
+    
+    def encode(self) -> bytes:
+        prefix = 0
+        match self.signer:
+            case SignerKey():
+                prefix |= self.SIGNER_KEY
+            case SignerList():
+                prefix |= self.SIGNER_LIST
+            case _:
+                raise ValueError('Invalid signer.')
+        return b''.join([
+            pack('<B', prefix), self.signer.encode()
+        ])
+
+    @classmethod
+    def decode(cls, view: bytes | bytearray | memoryview) -> AssetSpawn:
+        if not view:
+            raise ValueError('Invalid size when decoding.')
+        prefix = view[0]
+        match prefix:
+            case cls.SIGNER_KEY:
+                signer = SignerKey.decode(view[1:])
+            case cls.SIGNER_LIST:
+                signer = SignerList.decode(view[1:])
+            case _:
+                raise ValueError('Invalid signer.')
+        return cls(signer)
+
+
 class Vote(object):
+
+    SIZE = 32
+    FORMAT = Struct('<QQQQ')
 
     def __init__(self,
         block_reward: int,
+        exec_fund: int,
         utxo_fee: int,
         data_fee: int
     ):
         self.block_reward = block_reward
+        self.exec_fund = exec_fund
         self.utxo_fee = utxo_fee
         self.data_fee = data_fee
-
-    def encode(self) -> bytearray:
-        buffer = bytearray(24)
-        pack_into('<QQQ', buffer, 0,
-            self.block_reward, self.utxo_fee, self.data_fee
+    
+    def __eq__(self, value: Vote) -> bool:
+        if not isinstance(value, Vote):
+            return NotImplemented
+        return (
+            self.block_reward == value.block_reward
+            and self.exec_fund == value.exec_fund
+            and self.utxo_fee == value.utxo_fee
+            and self.data_fee == value.data_fee
         )
-        return buffer
+    
+    @property
+    def size(self) -> int:
+        return self.SIZE
+
+    def encode(self) -> bytes:
+        return self.FORMAT.pack(
+            self.block_reward, self.exec_fund, self.utxo_fee, self.data_fee
+        )
     
     @classmethod
-    def decode(cls, view: memoryview) -> tuple['Vote', int]:
-        if len(view) < 24:
-            raise ValueError('`view` too short to decode `Vote`.')
-        return cls(*unpack_from('<QQQ', view, 0)), 24
+    def decode(cls, view: bytes | bytearray | memoryview) -> Vote:
+        if len(view) < cls.SIZE:
+            raise ValueError('Invalid size when decoding.')
+        return cls(*cls.FORMAT.unpack_from(view, 0))
+
+
+class AbstractTXOutput(object):
+    pass
+
+
+class UTXOSpawn(AbstractTXOutput):
+    pass
+
+
+class ExecutiveVote(AbstractTXOutput):
+    pass
+
+
+class AssetLock(AbstractTXOutput):
+    pass
 
 
 class PaymentOutput(object):

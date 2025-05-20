@@ -104,7 +104,7 @@ def test_utxo_ref_by_hash_serdes():
 
 
 def test_utxo_unlock_serdes():
-    x = block.UTXOUnlock(
+    x = block.UTXOSpend(
         block.UTXORefByIndex(
             int.from_bytes(urandom(8), 'little'),
             int.from_bytes(urandom(4), 'little'),
@@ -112,21 +112,34 @@ def test_utxo_unlock_serdes():
         ),
         block.SignerKey(urandom(32))
     )
-    y = block.UTXOUnlock.decode(x.encode())
+    y = block.UTXOSpend.decode(x.encode())
     assert x == y
     x.utxo = block.UTXORefByHash(
         urandom(32), int.from_bytes(urandom(2), 'little')
     )
-    y = block.UTXOUnlock.decode(x.encode())
+    y = block.UTXOSpend.decode(x.encode())
     assert x == y
     x.signer = block.SignerList([
         block.SignerKey(urandom(32)),
         block.SignerHash(urandom(32))
     ], 1)
-    y = block.UTXOUnlock.decode(x.encode())
+    y = block.UTXOSpend.decode(x.encode())
     assert x == y
     x.signer = None
-    y = block.UTXOUnlock.decode(x.encode())
+    y = block.UTXOSpend.decode(x.encode())
     assert x == y
-    y = block.UTXOUnlock.decode(x.encode() + urandom(32))
+    y = block.UTXOSpend.decode(x.encode() + urandom(32))
     assert x == y
+
+
+def test_utxo_unlock_signers():
+    keys = [block.SignerKey(urandom(32)) for i in range(3)]
+    x = block.UTXOSpend(
+        block.UTXORefByHash(urandom(32), int.from_bytes(urandom(2), 'little')),
+        keys[0]
+    )
+    assert x.signers == [keys[0].key]
+    x.signer = block.SignerList(keys, 3)
+    assert x.signers == [k.key for k in keys]
+
+

@@ -571,7 +571,73 @@ class AbstractTXOutput(object):
 
 
 class UTXOSpawn(AbstractTXOutput):
-    pass
+
+    SIGNER_NONE = 0
+    SIGNER_HASH = 1
+    SIGNER_KEY = 2
+
+    def __init__(self,
+        asset: SignerHash | None = None         # Asset to spawn
+        signer: SignerHash | SignerKey | None = None,
+        units: int = 0,                         # 1 share = 10**6 units
+        block_reward: int | None = None,
+        exec_fund: int | None = None,
+        utxo_fee: int | None = None,
+        data_fee: int | None = None,
+        memo: bytes = b''                       # raw data to add to blockchain
+    ):
+        self.asset = asset
+        self.signer = signer
+        self.units = units
+        self.block_reward = block_reward
+        self.exec_fund = exec_fund
+        self.utxo_fee = utxo_fee
+        self.data_fee = data_fee
+        self.memo = memo
+
+    def __eq__(self, value: UTXOSpawn) -> bool:
+        if not isinstance(value, UTXOSpawn):
+            return NotImplemented
+        return (
+            self.asset == value.asset
+            and self.signer == value.signer
+            and self.units == value.units
+            and self.block_reward == value.block_reward
+            and self.exec_fund == value.exec_fund
+            and self.utxo_fee == value.utxo_fee
+            and self.data_fee == value.data_fee
+            and self.memo == value.memo
+        )
+
+    @property
+    def size(self) -> int:
+        n = 1
+        n += self.asset.size if self.asset else 0
+        match self.signer:
+            case None:
+                pass
+            case SignerHash | SignerKey:
+                n += self.signer.size
+            case _:
+                raise ValueError('Invalid signer.')
+        n += 8 if self.units else 0
+        n += 0 if self.block_reward is None else 8
+        n += 0 if self.exec_fund is None else 8
+        n += 0 if self.utxo_fee is None else 8
+        n += 0 if self.data_fee is None else 8
+        if len(self.memo) < 0x80:
+            n += 1
+        elif len(self.memo) < 0x4000:
+            n += 2
+        elif len(self.memo) < 0x200000:
+            n += 3
+        else:
+            raise ValueError('Invalid memo size.')
+        n += len(self.memo)
+        return n
+
+    def encode(self) -> bytes:
+        pass
 
 
 class ExecutiveVote(AbstractTXOutput):
@@ -584,20 +650,6 @@ class AssetLock(AbstractTXOutput):
 
 class PaymentOutput(object):
 
-    def __init__(self,
-        signer: SignerHash | None,            # 16-32 bytes digest of receipient's public key
-        units: int = 0,                         # 1 coin = 10**9 units
-        block_reward_vote: int | None = None,   # adjustment to block_reward
-        utxo_fee_vote: int | None = None,       # adjustment to utxo_fee
-        data_fee_vote: int | None = None,       # adjustment to data_fee
-        memo: bytes | None = None               # raw data to add to blockchain
-    ):
-        self.signer = signer
-        self.units = units
-        self.block_reward_vote = block_reward_vote
-        self.utxo_fee_vote = utxo_fee_vote
-        self.data_fee_vote = data_fee_vote
-        self.memo = memo
 
     def encode(self) -> bytearray:
         flags, i = 0, 1

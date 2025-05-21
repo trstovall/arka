@@ -636,8 +636,45 @@ class UTXOSpawn(AbstractTXOutput):
         n += len(self.memo)
         return n
 
-    def encode(self) -> bytes:
-        pass
+    def encode(self, view: bytes | bytearray | memoryview) -> bytes:
+        prefix = 0
+        asset = self.asset.encode() if self.asset else b''
+        prefix |= 1 if asset else 0
+        match self.signer:
+            case None:
+                signer = b''
+            case SignerHash():
+                signer = self.signer.encode()
+                prefix |= 2
+            case SignerKey():
+                signer = self.signer.encode()
+                prefix |= 4
+            case _:
+                raise ValueError('Invalid signer.')
+        units = pack('<Q', self.units) if self.units else b''
+        prefix |= 8 if units else 0
+        reward = b'' if self.block_reward is None else pack('<Q', self.block_reward)
+        prefix |= 16 if reward else 0
+        fund = b'' if self.exec_fund is None else pack('<Q', self.exec_fund)
+        prefix |= 32 if fund else 0
+        utxo_fee = b'' if self.utxo_fee is None else pack('<Q', self.utxo_fee)
+        prefix |= 64 if utxo_fee else 0
+        data_fee = b'' if self.data_fee is None else pack('<Q', self.data_fee)
+        prefix |= 128 if data_fee else 0
+        mlen = len(self.memo)
+        if mlen < 0x80:
+            mlen = (mlen << 1).to_bytes(1, 'little')
+        elif mlen < 0x4000:
+            mlen = ((mlen << 2) | 1).to_bytes(2, 'little')
+        elif mlen < 0x200000:
+            mlen = ((mlen << 3) | 3).to_bytes(3, 'little')
+        else:
+            raise ValueError('Invalid memo size.')
+        return b''.join([
+            pack('<B', prefix), asset, signer, units, reward,
+            fund, utxo_fee, data_fee, mlen, self.memo
+        ])
+
 
 
 class ExecutiveVote(AbstractTXOutput):

@@ -1,8 +1,7 @@
 
 from __future__ import annotations
 
-from struct import pack, unpack_from, Struct
-from enum import IntEnum
+from struct import pack, unpack_from, Struct, error as StructError
 from arka.crypto import keccak_800, keccak_1600
 
 
@@ -674,6 +673,60 @@ class UTXOSpawn(AbstractTXOutput):
             pack('<B', prefix), asset, signer, units, reward,
             fund, utxo_fee, data_fee, mlen, self.memo
         ])
+
+    @classmethod
+    def decode(cls, view: bytes | bytearray | memoryview) -> UTXOSpawn:
+        try:
+            prefix, offset = view[0], 1
+            asset = SignerHash.decode(view[offset:]) if prefix & 1 else None
+            prefix >>= 1
+            offset += 0 if asset is None else asset.size
+            match prefix & 3:
+                case cls.SIGNER_NONE:
+                    signer = None
+                case cls.SIGNER_HASH:
+                    signer = SignerHash.decode(view[offset:])
+                case cls.SIGNER_KEY:
+                    signer = SignerKey.decode(view[offset:])
+                case _:
+                    raise ValueError('Invalid signer.')
+            prefix >>= 2
+            offset += 0 if signer is None else signer.size
+            units = unpack_from('<Q', view, offset)[0] if prefix & 1 else 0
+            offset += 8 if prefix & 1 else 0
+            prefix >>= 1
+            reward = unpack_from('<Q', view, offset)[0] if prefix & 1 else 0
+            offset += 8 if prefix & 1 else 0
+            prefix >>= 1
+            fund = unpack_from('<Q', view, offset)[0] if prefix & 1 else 0
+            offset += 8 if prefix & 1 else 0
+            prefix >>= 1
+            utxo_fee = unpack_from('<Q', view, offset)[0] if prefix & 1 else 0
+            offset += 8 if prefix & 1 else 0
+            prefix >>= 1
+            data_fee = unpack_from('<Q', view, offset)[0] if prefix & 1 else 0
+            offset += 8 if prefix & 1 else 0
+            prefix >>= 1
+            if view[offset] & 1:
+                if view[offset] & 2:
+                    if len(view) < offset + 3:
+                        raise IndexError()
+                    mlen = int.from_bytes(view[offset:offset+3], 'little') >> 2
+                    offset += 3
+                else:
+                    if len(view) < offset + 2:
+                        raise IndexError()
+                    mlen = int.from_bytes(view[offset:offset+2], 'little') >> 2
+                    offset += 2
+            else:
+                mlen = view[offset] >> 1
+                offset += 1
+            memo = bytes(view[offset:offset+mlen])
+            return cls(
+                asset, signer, units, reward, fund, utxo_fee, data_fee, memo
+            )
+        except (IndexError, StructError) as e:
+            raise ValueError('Invalid view size.')
 
 
 

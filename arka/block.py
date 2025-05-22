@@ -570,7 +570,44 @@ class Vote(object):
 
 
 class AbstractTXOutput(object):
-    pass
+
+    @staticmethod
+    def _encode_mlen(memo: bytes):
+        prefix = 0
+        mlen = len(self.memo)
+        if mlen == 0:
+            mlen = b''
+        elif mlen < 0x100:
+            mlen = pack('<B', mlen)
+            prefix |= 1
+        elif mlen < 0x10000:
+            mlen = pack('<H', mlen)
+            prefix |= 2
+        else:
+            raise ValueError('Invalid memo size')
+        return prefix, mlen
+
+    @staticmethod
+    def _decode_memo(prefix: int, view: bytes | bytearray | memoryview) -> bytes:
+        try:
+            match prefix:
+                case 0:
+                    return b''
+                case 1:
+                    mlen = view[0]
+                    if len(view) < 1 + mlen:
+                        raise IndexError()
+                    return bytes(view[1:1+mlen])
+                case 2:
+                    mlen = unpack_from('<H', view, 0)[0]
+                    if len(view) < 2 + mlen:
+                        raise IndexError()
+                    return bytes(view[2:2+mlen])
+                case _:
+                    raise IndexError()
+        except (IndexError, StructError) as e:
+            raise ValueError('Invalid memo size')
+
 
 
 class UTXOSpawn(AbstractTXOutput):

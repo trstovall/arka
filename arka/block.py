@@ -1,6 +1,6 @@
 
 from __future__ import annotations
-
+from typing import Literal
 from struct import pack, unpack_from, Struct, error as StructError
 from arka.crypto import keccak_800, keccak_1600
 
@@ -323,6 +323,10 @@ class UTXORefByHash(object):
 
 class AbstractTXInput(object):
 
+    SIGNER_KEY = 0
+    SIGNER_LIST = 1
+    SIGNER_NONE = 2
+
     @property
     def signers(self) -> list[bytes]:
         match self.signer:
@@ -333,248 +337,64 @@ class AbstractTXInput(object):
             case _:
                 raise ValueError('Invalid signer.')
 
-
-class PublisherSpend(AbstractTXInput):
-
-    SIGNER_NONE = 0
-    SIGNER_KEY = 1
-    SIGNER_LIST = 2
-
-    def __init__(self,
-        block: int,
-        signer: SignerKey | SignerList | None = None
-    ):
-        self.block, self.signer = block, signer
-    
-    def __eq__(self, value: PublisherSpend) -> bool:
-        if not isinstance(value, PublisherSpend):
-            return NotImplemented
-        return self.block == value.block and self.signer == value.signer
-    
-    @property
-    def size(self) -> int:
-        return 8 + (self.signer.size if self.signer else 0)
-    
-    def encode(self) -> bytes:
-        prefix = 0
-        match self.signer:
-            case None:
-                prefix |= self.SIGNER_NONE
+    @classmethod
+    def _encode_signer(
+        cls, signer: SignerKey | SignerList
+    ) -> tuple[Literal[0, 1], bytes]:
+        match signer:
             case SignerKey():
-                prefix |= self.SIGNER_KEY
+                prefix = cls.SIGNER_KEY
             case SignerList():
-                prefix |= self.SIGNER_LIST
+                prefix = cls.SIGNER_LIST
             case _:
                 raise ValueError('Invalid signer.')
-        return b''.join([
-            pack('<BQ', prefix, self.block),
-            self.signer.encode() if self.signer else b''
-        ])
+        return prefix, signer.encode()
 
     @classmethod
-    def decode(cls, view: bytes | bytearray | memoryview) -> PublisherSpend:
-        if len(view) < 9:
-            raise ValueError('Invalid size when decoding.')
-        prefix, block = unpack_from('<BQ', view, 0)
-        match prefix:
-            case cls.SIGNER_NONE:
-                signer = None
-            case cls.SIGNER_KEY:
-                signer = SignerKey.decode(view[9:])
-            case cls.SIGNER_LIST:
-                signer = SignerList.decode(view[9:])
-            case _:
-                raise ValueError('Invalid signer.')
-        return cls(block, signer)
-
-
-class ExecutiveSpend(PublisherSpend):
-
-    def __eq__(self, value: ExecutiveSpend) -> bool:
-        if not isinstance(value, ExecutiveSpend):
-            return NotImplemented
-        if self.block == value.block and self.signer == value.signer:
-            return True
-        return False
-    
-    @classmethod
-    def decode(cls, view: bytes | bytearray | memoryview) -> ExecutiveSpend:
-        x = PublisherSpend.decode(view)
-        return cls(x.block, x.signer)
-
-
-class UTXOSpend(AbstractTXInput):
-
-    UTXO_REF_BY_INDEX = 0
-    UTXO_REF_BY_HASH = 1
-
-    SIGNER_NONE = 0
-    SIGNER_KEY = 1
-    SIGNER_LIST = 2
-
-    def __init__(self,
-        utxo: UTXORefByIndex | UTXORefByHash,
-        signer: SignerKey | SignerList | None = None
-    ):
-        self.utxo, self.signer = utxo, signer
-
-    def __eq__(self, value: UTXOSpend) -> bool:
-        if not isinstance(value, UTXOSpend):
-            return NotImplemented
-        return (
-            self.utxo == value.utxo
-            and self.signer == value.signer
-        )
-
-    @property
-    def size(self) -> int:
-        return 1 + self.utxo.size + (self.signer.size if self.signer else 0)
-
-    def encode(self) -> bytes:
-        prefix = 0
-        match self.utxo:
-            case UTXORefByIndex():
-                prefix |= self.UTXO_REF_BY_INDEX
-            case UTXORefByHash():
-                prefix |= self.UTXO_REF_BY_HASH
-            case _:
-                raise ValueError('Invalid UTXO reference.')
-        match self.signer:
-            case None:
-                prefix |= self.SIGNER_NONE << 1
-            case SignerKey():
-                prefix |= self.SIGNER_KEY << 1
-            case SignerList():
-                prefix |= self.SIGNER_LIST << 1
-            case _:
-                raise ValueError('Invalid signer.')
-        return b''.join([
-            pack('<B', prefix),
-            self.utxo.encode(),
-            self.signer.encode() if self.signer else b''
-        ])
-
-    @classmethod
-    def decode(cls, view: bytes | bytearray | memoryview) -> UTXOSpend:
-        if not view:
-            raise ValueError('Invalid size when decoding.')
-        prefix = view[0]
-        match prefix & 1:
-            case cls.UTXO_REF_BY_INDEX:
-                utxo = UTXORefByIndex.decode(view[1:])
-            case cls.UTXO_REF_BY_HASH:
-                utxo = UTXORefByHash.decode(view[1:])
-            case _:
-                raise ValueError('Invalid UTXO reference.')
-        match prefix >> 1:
-            case cls.SIGNER_NONE:
-                signer = None
-            case cls.SIGNER_KEY:
-                signer = SignerKey.decode(view[1 + utxo.size:])
-            case cls.SIGNER_LIST:
-                signer = SignerList.decode(view[1 + utxo.size:])
-            case _:
-                raise ValueError('Invalid signer.')
-        return cls(utxo, signer)
-
-
-class AssetSpawn(AbstractTXInput):
-
-    SIGNER_KEY = 0
-    SIGNER_LIST = 1
-
-    def __init__(self, signer: SignerKey | SignerList):
-        self.signer = signer
-
-    def __eq__(self, value: AssetSpawn) -> bool:
-        if not isinstance(value, AssetSpawn):
-            return NotImplemented
-        return self.signer == value.signer
-
-    @property
-    def size(self) -> int:
-        return 1 + self.signer.size
-    
-    def encode(self) -> bytes:
-        prefix = 0
-        match self.signer:
-            case SignerKey():
-                prefix |= self.SIGNER_KEY
-            case SignerList():
-                prefix |= self.SIGNER_LIST
-            case _:
-                raise ValueError('Invalid signer.')
-        return b''.join([
-            pack('<B', prefix), self.signer.encode()
-        ])
-
-    @classmethod
-    def decode(cls, view: bytes | bytearray | memoryview) -> AssetSpawn:
-        if not view:
-            raise ValueError('Invalid size when decoding.')
-        prefix = view[0]
+    def _decode_signer(
+        cls, prefix: Literal[0, 1], view: bytes | bytearray | memoryview
+    ) -> SignerKey | SignerList:
         match prefix:
             case cls.SIGNER_KEY:
-                signer = SignerKey.decode(view[1:])
+                return SignerKey.decode(view)
             case cls.SIGNER_LIST:
-                signer = SignerList.decode(view[1:])
+                return SignerList.decode(view)
             case _:
                 raise ValueError('Invalid signer.')
-        return cls(signer)
 
-
-class ExecutiveSpawn(AbstractTXInput):
-    pass
-
-
-class Vote(object):
-
-    SIZE = 32
-    FORMAT = Struct('<QQQQ')
-
-    def __init__(self,
-        block_reward: int,
-        exec_fund: int,
-        utxo_fee: int,
-        data_fee: int
-    ):
-        self.block_reward = block_reward
-        self.exec_fund = exec_fund
-        self.utxo_fee = utxo_fee
-        self.data_fee = data_fee
-    
-    def __eq__(self, value: Vote) -> bool:
-        if not isinstance(value, Vote):
-            return NotImplemented
-        return (
-            self.block_reward == value.block_reward
-            and self.exec_fund == value.exec_fund
-            and self.utxo_fee == value.utxo_fee
-            and self.data_fee == value.data_fee
-        )
-    
-    @property
-    def size(self) -> int:
-        return self.SIZE
-
-    def encode(self) -> bytes:
-        return self.FORMAT.pack(
-            self.block_reward, self.exec_fund, self.utxo_fee, self.data_fee
-        )
-    
     @classmethod
-    def decode(cls, view: bytes | bytearray | memoryview) -> Vote:
-        if len(view) < cls.SIZE:
-            raise ValueError('Invalid size when decoding.')
-        return cls(*cls.FORMAT.unpack_from(view, 0))
+    def _encode_optional_signer(
+        cls, signer: SignerKey | SignerList | None
+    ) -> tuple[Literal[0, 1, 2], bytes]:
+        match signer:
+            case SignerKey():
+                prefix = cls.SIGNER_KEY
+            case SignerList():
+                prefix = cls.SIGNER_LIST
+            case None:
+                prefix = cls.SIGNER_NONE
+            case _:
+                raise ValueError('Invalid signer.')
+        return prefix, (signer.encode() if signer else b'')
 
+    @classmethod
+    def _decode_optional_signer(
+        cls, prefix: Literal[0, 1, 2], view: bytes | bytearray | memoryview
+    ) -> SignerKey | SignerList | None:
+        match prefix:
+            case cls.SIGNER_KEY:
+                return SignerKey.decode(view)
+            case cls.SIGNER_LIST:
+                return SignerList.decode(view)
+            case cls.SIGNER_NONE:
+                return
+            case _:
+                raise ValueError('Invalid signer.')
 
-class AbstractTXOutput(object):
-
-    @staticmethod
-    def _encode_mlen(memo: bytes):
+    @classmethod
+    def _encode_mlen(cls, memo: bytes) -> tuple[Literal[0, 1, 2], bytes]:
         prefix = 0
-        mlen = len(self.memo)
+        mlen = len(memo)
         if mlen == 0:
             mlen = b''
         elif mlen < 0x100:
@@ -587,8 +407,10 @@ class AbstractTXOutput(object):
             raise ValueError('Invalid memo size')
         return prefix, mlen
 
-    @staticmethod
-    def _decode_memo(prefix: int, view: bytes | bytearray | memoryview) -> bytes:
+    @classmethod
+    def _decode_memo(
+        cls, prefix: Literal[0, 1, 2], view: bytes | bytearray | memoryview
+    ) -> bytes:
         try:
             match prefix:
                 case 0:
@@ -609,6 +431,268 @@ class AbstractTXOutput(object):
             raise ValueError('Invalid memo size')
 
 
+class BlockSpend(AbstractTXInput):
+
+    def __init__(self,
+        block: int,
+        signer: SignerKey | SignerList | None = None,
+        memo: bytes = b''
+    ):
+        self.block = block
+        self.signer = signer
+        self.memo = memo
+
+    @property
+    def size(self) -> int:
+        n = 9
+        n += (self.signer.size if self.signer else 0)
+        prefix, mlen = self._encode_mlen(self.memo)
+        n += len(mlen) + len(self.memo)
+        return n
+
+    def encode(self) -> bytes:
+        prefix, signer = self._encode_optional_signer(self.signer)
+        _prefix, mlen = self._encode_mlen(self.memo)
+        prefix |= _prefix << 2
+        return b''.join([
+            pack('<BQ', prefix, self.block),
+            signer, mlen, self.memo
+        ])
+
+    @classmethod
+    def decode(cls, view: bytes | bytearray | memoryview) -> BlockSpend:
+        if len(view) < 9:
+            raise ValueError('Invalid size when decoding.')
+        prefix, block = unpack_from('<BQ', view, 0)
+        signer = cls._decode_optional_signer(prefix & 3, view[9:])
+        prefix >>= 2
+        memo = cls._decode_memo(prefix & 3, view[9+signer.size:])
+        return cls(block, signer, memo)
+
+
+class PublisherSpend(BlockSpend):
+
+    def __eq__(self, value: PublisherSpend) -> bool:
+        if not isinstance(value, PublisherSpend):
+            return NotImplemented
+        return (
+            self.block == value.block
+            and self.signer == value.signer
+            and self.memo == value.memo
+        )
+
+    @classmethod
+    def decode(cls, view: bytes | bytearray | memoryview) -> PublisherSpend:
+        x = BlockSpend.decode(view)
+        return cls(x.block, x.signer, x.memo)
+
+
+class ExecutiveSpend(BlockSpend):
+
+    def __eq__(self, value: ExecutiveSpend) -> bool:
+        if not isinstance(value, ExecutiveSpend):
+            return NotImplemented
+        return (
+            self.block == value.block
+            and self.signer == value.signer
+            and self.memo == value.memo
+        )
+    
+    @classmethod
+    def decode(cls, view: bytes | bytearray | memoryview) -> ExecutiveSpend:
+        x = BlockSpend.decode(view)
+        return cls(x.block, x.signer, x.memo)
+
+
+class UTXOSpend(AbstractTXInput):
+
+    UTXO_REF_BY_INDEX = 0
+    UTXO_REF_BY_HASH = 1
+
+    def __init__(self,
+        utxo: UTXORefByIndex | UTXORefByHash,
+        signer: SignerKey | SignerList | None = None,
+        memo: bytes = b''
+    ):
+        self.utxo, self.signer, self.memo = utxo, signer, memo
+
+    def __eq__(self, value: UTXOSpend) -> bool:
+        if not isinstance(value, UTXOSpend):
+            return NotImplemented
+        return (
+            self.utxo == value.utxo
+            and self.signer == value.signer
+            and self.memo == value.memo
+        )
+
+    @property
+    def size(self) -> int:
+        n = 1 + self.utxo.size + (self.signer.size if self.signer else 0)
+        mlen = self._encode_mlen(self.memo)
+        n += len(mlen) + len(self.memo)
+        return n
+
+    def encode(self) -> bytes:
+        match self.utxo:
+            case UTXORefByIndex():
+                prefix = self.UTXO_REF_BY_INDEX
+            case UTXORefByHash():
+                prefix = self.UTXO_REF_BY_HASH
+            case _:
+                raise ValueError('Invalid UTXO reference.')
+        _prefix, signer = self._encode_optional_signer(self.signer)
+        prefix |= _prefix << 1
+        _prefix, mlen = self._encode_mlen(self.memo)
+        prefix |= _prefix << 3
+        return b''.join([
+            pack('<B', prefix), self.utxo.encode(),
+            signer, mlen, self.memo
+        ])
+
+    @classmethod
+    def decode(cls, view: bytes | bytearray | memoryview) -> UTXOSpend:
+        if not view:
+            raise ValueError('Invalid size when decoding.')
+        prefix = view[0]
+        match prefix & 1:
+            case cls.UTXO_REF_BY_INDEX:
+                utxo = UTXORefByIndex.decode(view[1:])
+            case cls.UTXO_REF_BY_HASH:
+                utxo = UTXORefByHash.decode(view[1:])
+            case _:
+                raise ValueError('Invalid UTXO reference.')
+        prefix >>= 1
+        offset = 1 + utxo.size
+        signer = cls._decode_optional_signer(prefix & 3, view[offset:])
+        prefix >>= 2
+        offset += signer.size if signer else 0
+        memo = cls._decode_memo(prefix & 3, view[offset:])
+        return cls(utxo, signer, memo)
+
+
+class ExecutiveSpawn(AbstractTXInput):
+
+    def __init__(self, signer: SignerKey | SignerList, memo: bytes = b''):
+        self.signer, self.memo = signer, memo
+
+    def __eq__(self, value: ExecutiveSpawn) -> bool:
+        if not isinstance(value, ExecutiveSpawn):
+            return NotImplemented
+        return self.signer == value.signer and self.memo == value.memo
+
+    @property
+    def size(self) -> int:
+        n = 1 + self.signer.size
+        prefix, mlen = self._encode_mlen(self.memo)
+        n += len(mlen) + len(self.memo)
+        return n
+    
+    def encode(self) -> bytes:
+        prefix, signer = self._encode_signer(self.signer)
+        _prefix, mlen = self._encode_mlen(self.memo)
+        prefix |= _prefix << 1
+        return b''.join([
+            pack('<B', prefix), signer, mlen, self.memo
+        ])
+
+    @classmethod
+    def decode(cls, view: bytes | bytearray | memoryview) -> ExecutiveSpawn:
+        if not view:
+            raise ValueError('Invalid size when decoding.')
+        prefix = view[0]
+        signer = cls._decode_signer(prefix & 1, view[1:])
+        prefix >>= 1
+        memo = cls._decode_memo(prefix & 3, view[1+signer.size:])
+        return cls(signer, memo)
+
+
+class AssetSpawn(AbstractTXInput):
+
+    def __init__(self, signer: SignerKey | SignerList, memo: bytes = b'', lock: bool = False):
+        self.signer, self.memo, self.lock = signer, memo, lock
+
+    def __eq__(self, value: AssetSpawn) -> bool:
+        if not isinstance(value, AssetSpawn):
+            return NotImplemented
+        return (
+            self.signer == value.signer
+            and self.memo == value.memo
+            and self.lock == value.lock
+        )
+
+    @property
+    def size(self) -> int:
+        n = 1 + self.signer.size
+        prefix, mlen = self._encode_mlen(self.memo)
+        n += len(mlen) + len(self.memo)
+        return n
+    
+    def encode(self) -> bytes:
+        prefix, signer = self._encode_signer(self.signer)
+        _prefix, mlen = self._encode_mlen(self.memo)
+        prefix |= _prefix << 1
+        if isinstance(self.lock, bool):
+            prefix |= int(self.lock) << 3
+        else:
+            raise ValueError('Invalid lock value.')
+        return b''.join([
+            pack('<B', prefix), signer, mlen, self.memo
+        ])
+
+    @classmethod
+    def decode(cls, view: bytes | bytearray | memoryview) -> AssetSpawn:
+        if not view:
+            raise ValueError('Invalid size when decoding.')
+        prefix = view[0]
+        signer = cls._decode_signer(prefix & 1, view[1:])
+        prefix >>= 1
+        memo = cls._decode_memo(prefix & 3, view[1+signer.size:])
+        prefix >>= 2
+        lock = bool(prefix & 1)
+        return cls(signer, memo, lock)
+
+
+class AbstractTXOutput(object):
+
+    @classmethod
+    def _encode_mlen(cls, memo: bytes) -> tuple[Literal[0, 1, 2], bytes]:
+        prefix = 0
+        mlen = len(memo)
+        if mlen == 0:
+            mlen = b''
+        elif mlen < 0x100:
+            mlen = pack('<B', mlen)
+            prefix |= 1
+        elif mlen < 0x10000:
+            mlen = pack('<H', mlen)
+            prefix |= 2
+        else:
+            raise ValueError('Invalid memo size')
+        return prefix, mlen
+
+    @classmethod
+    def _decode_memo(
+        cls, prefix: Literal[0, 1, 2], view: bytes | bytearray | memoryview
+    ) -> bytes:
+        try:
+            match prefix:
+                case 0:
+                    return b''
+                case 1:
+                    mlen = view[0]
+                    if len(view) < 1 + mlen:
+                        raise IndexError()
+                    return bytes(view[1:1+mlen])
+                case 2:
+                    mlen = unpack_from('<H', view, 0)[0]
+                    if len(view) < 2 + mlen:
+                        raise IndexError()
+                    return bytes(view[2:2+mlen])
+                case _:
+                    raise IndexError()
+        except (IndexError, StructError) as e:
+            raise ValueError('Invalid memo size')
+
 
 class UTXOSpawn(AbstractTXOutput):
 
@@ -617,7 +701,7 @@ class UTXOSpawn(AbstractTXOutput):
     SIGNER_KEY = 2
 
     def __init__(self,
-        asset: SignerHash | None = None         # Asset to spawn
+        asset: SignerHash | None = None,         # Asset to spawn
         signer: SignerHash | SignerKey | None = None,
         units: int = 0,                         # 1 share = 10**6 units
         block_reward: int | None = None,
@@ -656,7 +740,7 @@ class UTXOSpawn(AbstractTXOutput):
         match self.signer:
             case None:
                 pass
-            case SignerHash | SignerKey:
+            case SignerHash() | SignerKey():
                 n += self.signer.size
             case _:
                 raise ValueError('Invalid signer.')
@@ -770,7 +854,6 @@ class UTXOSpawn(AbstractTXOutput):
             raise ValueError('Invalid view size.')
 
 
-
 class ExecutiveVote(AbstractTXOutput):
     
     def __init__(self, executive: SignerHash, units: int, memo: bytes):
@@ -783,7 +866,7 @@ class ExecutiveVote(AbstractTXOutput):
         n = 1
         n += self.executive.size
         n += 8 if self.units else 0
-        n ÷= (2 + len(self.memo)) if self.memo else 0
+        n += (2 + len(self.memo)) if self.memo else 0
         return n
 
     def encode(self) -> bytes:
@@ -807,148 +890,13 @@ class ExecutiveVote(AbstractTXOutput):
         ])
 
 
-
-
-class AssetLock(AbstractTXOutput):
-    pass
-
-
-class PaymentOutput(object):
-
-
-    def encode(self) -> bytearray:
-        flags, i = 0, 1
-        if self.signer:
-            flags += 1
-            signer = self.signer.hash
-            i += len(signer)
-        if self.units:
-            flags += 2
-            i += 8
-        if self.block_reward_vote is not None:
-            flags += 4
-            i += 8
-        if self.utxo_fee_vote is not None:
-            flags += 8
-            i += 8
-        if self.data_fee_vote is not None:
-            flags += 16
-            i += 8
-        if self.memo:
-            if len(self.memo) < 256:
-                flags += 32
-                i += 1
-            elif len(self.memo) < 0x10000:
-                flags += 64
-                i += 2
-            else:
-                raise ValueError('`memo` too large to encode.')
-            i += len(self.memo)
-        buffer = bytearray(i)
-        view = memoryview(buffer)
-        view[0] = flags
-        i = 1
-        if self.signer:
-            view[i:i+len(signer)] = signer
-            i += len(signer)
-        if self.units:
-            pack_into('<Q', view, i, self.units)
-            i += 8
-        if self.block_reward_vote is not None:
-            pack_into('<Q', view, i, self.block_reward_vote)
-            i += 8
-        if self.utxo_fee_vote is not None:
-            pack_into('<Q', view, i, self.utxo_fee_vote)
-            i += 8
-        if self.data_fee_vote is not None:
-            pack_into('<Q', view, i, self.data_fee_vote)
-            i += 8
-        if self.memo:
-            if len(self.memo) < 256:
-                view[i] = len(self.memo)
-                i += 1
-            else:
-                pack_into('<H', view, i, len(self.memo))
-                i += 2
-            view[i:i+len(self.memo)] = self.memo
-        return buffer
-
-    @classmethod
-    def decode(cls, view: memoryview) -> tuple['PaymentOutput', int]:
-        if len(view) < 1:
-            raise ValueError('`view` too short to decode `PaymentOutput`.')
-        flags, i = view[0], 1
-        # unpack signer
-        if flags & 1:
-            if len(view) < i + 20:
-                raise ValueError('`view` too short to decode `PaymentOutput`.')
-            signer = SignerHash(bytes(view[i:i+20]))
-            i += 20
-        else:
-            signer = None
-        # unpack units
-        if flags & 2:
-            if len(view) < i + 8:
-                raise ValueError('`view` too short to decode `PaymentOutput`.')
-            units = unpack_from('<Q', view, i)[0]
-            i += 8
-        else:
-            units = None
-        # unpack block_reward_vote
-        if flags & 4:
-            if len(view) < i + 8:
-                raise ValueError('`view` too short to decode `PaymentOutput`.')
-            block_reward_vote = unpack_from('<Q', view, i)[0]
-            i += 8
-        else:
-            block_reward_vote = None
-        # unpack utxo_fee_vote
-        if flags & 8:
-            if len(view) < i + 8:
-                raise ValueError('`view` too short to decode `PaymentOutput`.')
-            utxo_fee_vote = unpack_from('<Q', view, i)[0]
-            i += 8
-        else:
-            utxo_fee_vote = None
-        # unpack data_fee_vote
-        if flags & 16:
-            if len(view) < i + 8:
-                raise ValueError('`view` too short to decode `PaymentOutput`.')
-            data_fee_vote = unpack_from('<Q', view, i)[0]
-            i += 8
-        else:
-            data_fee_vote = None
-        # unpack memo
-        if flags & 96 == 96:
-            raise ValueError('Invalid `memo_len` flag encoded in `PaymentOutput`.')
-        if flags & 32:
-            if len(view) < i + 1:
-                raise ValueError('`view` too short to decode `PaymentOutput`.')
-            memo_len = view[i]
-            i += 1
-            if len(view) < i + memo_len:
-                raise ValueError('`view` too short to decode `PaymentOutput`.')
-            memo = view[i:i+memo_len]
-            i += memo_len
-        elif flags & 64:
-            if len(view) < i + 2:
-                raise ValueError('`view` too short to decode `PaymentOutput`.')
-            memo_len = unpack_from('<H', view, i)
-            i += 2
-            if len(view) < i + memo_len:
-                raise ValueError('`view` too short to decode `PaymentOutput`.')
-            memo = view[i:i+memo_len]
-            i += memo_len
-        else:
-            memo = None
-        return cls(signer, units, block_reward_vote, utxo_fee_vote, data_fee_vote, memo), i
-
-
-class Payment(object):
+class Transaction(object):
 
     def __init__(self,
-        inputs: list[PaymentInput],
-        outputs: list[PaymentOutput],
+        inputs: list[
+            PublisherSpend | ExecutiveSpend | UTXOSpend | AssetSpawn | ExecutiveSpawn
+        ],
+        outputs: list[UTXOSpawn | ExecutiveVote],
         signatures: list[bytes],
         encoded_buffer: bytearray | None = None
     ):

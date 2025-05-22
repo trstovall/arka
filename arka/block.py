@@ -523,6 +523,10 @@ class AssetSpawn(AbstractTXInput):
         return cls(signer)
 
 
+class ExecutiveSpawn(AbstractTXInput):
+    pass
+
+
 class Vote(object):
 
     SIZE = 32
@@ -731,7 +735,41 @@ class UTXOSpawn(AbstractTXOutput):
 
 
 class ExecutiveVote(AbstractTXOutput):
-    pass
+    
+    def __init__(self, executive: SignerHash, units: int, memo: bytes):
+        self.executive = executive
+        self.units = units
+        self.memo = memo
+
+    @property
+    def size(self) -> int:
+        n = 1
+        n += self.executive.size
+        n += 8 if self.units else 0
+        n ÷= (2 + len(self.memo)) if self.memo else 0
+        return n
+
+    def encode(self) -> bytes:
+        prefix = 0
+        executive = self.executive.encode()
+        units = pack('<Q', self.units) if self.units else b''
+        prefix |= 1 if units else 0
+        mlen = len(self.memo)
+        if mlen == 0:
+            mlen = b''
+        elif mlen < 0x100:
+            mlen = pack('<B', mlen)
+            prefix |= 2
+        elif mlen < 0x10000:
+            mlen = pack('<H', mlen)
+            prefix |= 4
+        else:
+            raise ValueError('Invalid memo size')
+        return b''.join([
+            pack('<B', prefix), executive, units, mlen, self.memo
+        ])
+
+
 
 
 class AssetLock(AbstractTXOutput):

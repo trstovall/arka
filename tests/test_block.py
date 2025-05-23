@@ -200,14 +200,14 @@ def test_executive_spawn_serdes():
         signer=block.SignerKey(urandom(32)),
         memo=urandom(32)
     )
-    y = block.ExecutiveSpend.decode(x.encode())
+    y = block.ExecutiveSpawn.decode(x.encode())
     assert x == y
     x.signer = block.SignerList(
         [block.SignerKey(urandom(32)) for i in range(3)], 3
     )
-    y = block.ExecutiveSpend.decode(x.encode())
+    y = block.ExecutiveSpawn.decode(x.encode())
     assert x == y
-    y = block.ExecutiveSpend.decode(x.encode() + urandom(32))
+    y = block.ExecutiveSpawn.decode(x.encode() + urandom(32))
     assert x == y
 
 

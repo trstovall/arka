@@ -803,6 +803,15 @@ class ExecutiveVote(TransactionOutput):
         self.units = units
         self.memo = memo
 
+    def __eq__(self, value: ExecutiveVote) -> bool:
+        if not isinstance(value, ExecutiveVote):
+            return NotImplemented
+        return (
+            self.executive == value.executive
+            and self.units == value.units
+            and self.memo == value.memo
+        )
+
     @property
     def size(self) -> int:
         n = 1

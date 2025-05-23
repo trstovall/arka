@@ -839,7 +839,7 @@ class ExecutiveVote(TransactionOutput):
             offset = 1
             executive = SignerHash.decode(view[offset:])
             offset += executive.size
-            units = unpack_from('<Q', view, offset) if prefix & 1 else 0
+            units = unpack_from('<Q', view, offset)[0] if prefix & 1 else 0
             offset += 8 if prefix & 1 else 0
             prefix >>= 1
             memo = cls._decode_memo(prefix & 3, view[offset:])

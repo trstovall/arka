@@ -991,7 +991,7 @@ class Transaction(object):
                 inputs.append(x)
                 offset += x.size
             # Decode outputs
-            outputs = list[UTXOSpawn | ExecutiveVote] = []
+            outputs: list[UTXOSpawn | ExecutiveVote] = []
             for i in range(noutputs):
                 match (out_types[i >> 3] >> (i & 7)) & 1:
                     case cls.UTXO_SPAWN:

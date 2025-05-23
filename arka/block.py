@@ -929,9 +929,9 @@ class Transaction(object):
         for i, x in enumerate(self.outputs):
             match x:
                 case UTXOSpawn():
-                    out_types[i >> 3] |= self.UTXO_SPAWN << (i & 3)
+                    out_types[i >> 3] |= self.UTXO_SPAWN << (i & 7)
                 case ExecutiveVote():
-                    out_types[i >> 3] |= self.EXECUTIVE_VOTE << (i & 3)
+                    out_types[i >> 3] |= self.EXECUTIVE_VOTE << (i & 7)
                 case _:
                     raise ValueError('Invalid output type.')
         outputs = [x.encode() for x in self.outputs]
@@ -975,7 +975,7 @@ class Transaction(object):
                 PublisherSpend | ExecutiveSpend | UTXOSpend | AssetSpawn | ExecutiveSpawn
             ] = []
             for i in range(ninputs):
-                match in_types[i >> 1] & 7:
+                match (in_types[i >> 1] >> ((i & 1) << 2)) & 7:
                     case cls.PUBLISHER_SPEND:
                         x = PublisherSpend.decode(view[offset:])
                     case cls.EXECUTIVE_SPEND:
@@ -993,7 +993,7 @@ class Transaction(object):
             # Decode outputs
             outputs = list[UTXOSpawn | ExecutiveVote] = []
             for i in range(noutputs):
-                match out_types[i >> 3] & 1:
+                match (out_types[i >> 3] >> (i & 7)) & 1:
                     case cls.UTXO_SPAWN:
                         x = UTXOSpawn.decode(view[offset:])
                     case cls.EXECUTIVE_VOTE:

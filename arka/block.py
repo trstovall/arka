@@ -1,7 +1,7 @@
 
 from __future__ import annotations
 from typing import Literal
-from struct import pack, unpack_from, Struct, error as StructError
+from struct import pack, unpack_from, error as StructError
 from arka.crypto import keccak_800, keccak_1600
 
 
@@ -696,20 +696,22 @@ class AbstractTXOutput(object):
 
 class UTXOSpawn(AbstractTXOutput):
 
-    SIGNER_NONE = 0
+    SIGNER_KEY = 0
     SIGNER_HASH = 1
-    SIGNER_KEY = 2
+    SIGNER_NONE = 2
 
     def __init__(self,
-        asset: SignerHash | None = None,         # Asset to spawn
+        asset: SignerHash | None = None,
         signer: SignerHash | SignerKey | None = None,
-        units: int = 0,                         # 1 share = 10**6 units
+        units: int = 0,
         block_reward: int | None = None,
         exec_fund: int | None = None,
         utxo_fee: int | None = None,
         data_fee: int | None = None,
-        memo: bytes = b''                       # raw data to add to blockchain
+        memo: bytes = b''
     ):
+        if signer is None and not units:
+            raise ValueError('Burn amount must be non-zero.')
         self.asset = asset
         self.signer = signer
         self.units = units
@@ -735,7 +737,7 @@ class UTXOSpawn(AbstractTXOutput):
 
     @property
     def size(self) -> int:
-        n = 1
+        n = 2
         n += self.asset.size if self.asset else 0
         match self.signer:
             case None:
@@ -749,15 +751,8 @@ class UTXOSpawn(AbstractTXOutput):
         n += 0 if self.exec_fund is None else 8
         n += 0 if self.utxo_fee is None else 8
         n += 0 if self.data_fee is None else 8
-        if len(self.memo) < 0x80:
-            n += 1
-        elif len(self.memo) < 0x4000:
-            n += 2
-        elif len(self.memo) < 0x200000:
-            n += 3
-        else:
-            raise ValueError('Invalid memo size.')
-        n += len(self.memo)
+        _, mlen = self._encode_mlen(self.memo)
+        n += len(mlen) + len(self.memo)
         return n
 
     def encode(self, view: bytes | bytearray | memoryview) -> bytes:
@@ -765,14 +760,15 @@ class UTXOSpawn(AbstractTXOutput):
         asset = self.asset.encode() if self.asset else b''
         prefix |= 1 if asset else 0
         match self.signer:
-            case None:
-                signer = b''
-            case SignerHash():
-                signer = self.signer.encode()
-                prefix |= 2
             case SignerKey():
                 signer = self.signer.encode()
-                prefix |= 4
+                prefix |= self.SIGNER_KEY << 1
+            case SignerHash():
+                signer = self.signer.encode()
+                prefix |= self.SIGNER_HASH << 1
+            case None:
+                signer = b''
+                prefix |= self.SIGNER_NONE << 1
             case _:
                 raise ValueError('Invalid signer.')
         units = pack('<Q', self.units) if self.units else b''
@@ -785,27 +781,22 @@ class UTXOSpawn(AbstractTXOutput):
         prefix |= 64 if utxo_fee else 0
         data_fee = b'' if self.data_fee is None else pack('<Q', self.data_fee)
         prefix |= 128 if data_fee else 0
-        mlen = len(self.memo)
-        if mlen < 0x80:
-            mlen = (mlen << 1).to_bytes(1, 'little')
-        elif mlen < 0x4000:
-            mlen = ((mlen << 2) | 1).to_bytes(2, 'little')
-        elif mlen < 0x200000:
-            mlen = ((mlen << 3) | 3).to_bytes(3, 'little')
-        else:
-            raise ValueError('Invalid memo size.')
+        _prefix, mlen = self._encode_mlen(self.memo)
+        prefix |= _prefix << 8
+        n += len(mlen) + len(self.memo)
         return b''.join([
-            pack('<B', prefix), asset, signer, units, reward,
+            pack('<H', prefix), asset, signer, units, reward,
             fund, utxo_fee, data_fee, mlen, self.memo
         ])
 
     @classmethod
     def decode(cls, view: bytes | bytearray | memoryview) -> UTXOSpawn:
         try:
-            prefix, offset = view[0], 1
+            prefix = unpack_from('<H', view, 0)[0]
+            offset = 2
             asset = SignerHash.decode(view[offset:]) if prefix & 1 else None
-            prefix >>= 1
             offset += 0 if asset is None else asset.size
+            prefix >>= 1
             match prefix & 3:
                 case cls.SIGNER_NONE:
                     signer = None
@@ -815,38 +806,24 @@ class UTXOSpawn(AbstractTXOutput):
                     signer = SignerKey.decode(view[offset:])
                 case _:
                     raise ValueError('Invalid signer.')
-            prefix >>= 2
             offset += 0 if signer is None else signer.size
+            prefix >>= 2
             units = unpack_from('<Q', view, offset)[0] if prefix & 1 else 0
             offset += 8 if prefix & 1 else 0
             prefix >>= 1
-            reward = unpack_from('<Q', view, offset)[0] if prefix & 1 else 0
+            reward = unpack_from('<Q', view, offset)[0] if prefix & 1 else None
             offset += 8 if prefix & 1 else 0
             prefix >>= 1
-            fund = unpack_from('<Q', view, offset)[0] if prefix & 1 else 0
+            fund = unpack_from('<Q', view, offset)[0] if prefix & 1 else None
             offset += 8 if prefix & 1 else 0
             prefix >>= 1
-            utxo_fee = unpack_from('<Q', view, offset)[0] if prefix & 1 else 0
+            utxo_fee = unpack_from('<Q', view, offset)[0] if prefix & 1 else None
             offset += 8 if prefix & 1 else 0
             prefix >>= 1
-            data_fee = unpack_from('<Q', view, offset)[0] if prefix & 1 else 0
+            data_fee = unpack_from('<Q', view, offset)[0] if prefix & 1 else None
             offset += 8 if prefix & 1 else 0
             prefix >>= 1
-            if view[offset] & 1:
-                if view[offset] & 2:
-                    if len(view) < offset + 3:
-                        raise IndexError()
-                    mlen = int.from_bytes(view[offset:offset+3], 'little') >> 2
-                    offset += 3
-                else:
-                    if len(view) < offset + 2:
-                        raise IndexError()
-                    mlen = int.from_bytes(view[offset:offset+2], 'little') >> 2
-                    offset += 2
-            else:
-                mlen = view[offset] >> 1
-                offset += 1
-            memo = bytes(view[offset:offset+mlen])
+            memo = cls._decode_memo(prefix & 3, view[offset:])
             return cls(
                 asset, signer, units, reward, fund, utxo_fee, data_fee, memo
             )
@@ -866,7 +843,8 @@ class ExecutiveVote(AbstractTXOutput):
         n = 1
         n += self.executive.size
         n += 8 if self.units else 0
-        n += (2 + len(self.memo)) if self.memo else 0
+        prefix, mlen = self._encode_mlen(self.memo)
+        n += len(mlen) + len(self.memo)
         return n
 
     def encode(self) -> bytes:
@@ -874,108 +852,192 @@ class ExecutiveVote(AbstractTXOutput):
         executive = self.executive.encode()
         units = pack('<Q', self.units) if self.units else b''
         prefix |= 1 if units else 0
-        mlen = len(self.memo)
-        if mlen == 0:
-            mlen = b''
-        elif mlen < 0x100:
-            mlen = pack('<B', mlen)
-            prefix |= 2
-        elif mlen < 0x10000:
-            mlen = pack('<H', mlen)
-            prefix |= 4
-        else:
-            raise ValueError('Invalid memo size')
+        _prefix, mlen = self._encode_mlen(self.memo)
+        prefix |= _prefix << 1
         return b''.join([
             pack('<B', prefix), executive, units, mlen, self.memo
         ])
 
+    @classmethod
+    def decode(cls, view: bytes | bytearray | memoryview) -> ExecutiveVote:
+        try:
+            prefix = view[0]
+            offset = 1
+            executive = SignerHash.decode(view[offset:])
+            offset += executive.size
+            units = unpack_from('<Q', view, offset) if prefix & 1 else 0
+            offset += 8 if prefix & 1 else 0
+            prefix >>= 1
+            memo = cls._decode_memo(prefix & 3, view[offset:])
+            return cls(executive, units, memo)
+        except (IndexError, StructError) as e:
+            raise ValueError('Invalid view size.')
+
 
 class Transaction(object):
+
+    PUBLISHER_SPEND = 0
+    EXECUTIVE_SPEND = 1
+    UTXO_SPEND = 2
+    ASSET_SPAWN = 3
+    EXECUTIVE_SPAWN = 4
+
+    UTXO_SPAWN = 0
+    EXECUTIVE_VOTE = 1
 
     def __init__(self,
         inputs: list[
             PublisherSpend | ExecutiveSpend | UTXOSpend | AssetSpawn | ExecutiveSpawn
         ],
         outputs: list[UTXOSpawn | ExecutiveVote],
-        signatures: list[bytes],
-        encoded_buffer: bytearray | None = None
+        signatures: list[bytes] = [],
+        _encoded: bytes = b''
     ):
         self.inputs = inputs
         self.outputs = outputs
         self.signatures = signatures
-        self.encoded_buffer = encoded_buffer
-        self._digest = None
+        self._encoded = _encoded
+        self._digest: bytes | None = None
 
     @property
-    def digest(self) -> bytes:
+    def signers(self) -> list[bytes]:
+        keys: list[bytes] = [k for x in self.inputs for k in x.signers]
+        output: list[bytes] = []
+        unique: set[bytes] = set()
+        for k in keys:
+            if k not in unique:
+                output.append(k)
+                unique.add(k)
+        return output
+
+    @property
+    def size(self) -> int:
+        if self._encoded:
+            return len(self._encoded)
+        n = 6
+        n += (len(self.inputs) + 1) >> 1
+        n += (len(self.outputs) + 7) >> 3
+        n += sum(x.size for x in self.inputs)
+        n += sum(x.size for x in self.outputs)
+        n += 64 * len(self.signers)
+        return n
+
+    async def hash(self) -> bytes:
         if self._digest is None:
-            if self.encoded_buffer is None:
-                self.encoded_buffer = self.encode()
-            self._digest = keccak_1600(self.encoded_buffer)
+            if self._encoded:
+                preimage = self._encoded[:-64 * len(self.signers)]
+            else:
+                preimage = self.encode(signatures=False)
+            self._digest = await keccak_1600(preimage)
         return self._digest
 
-    @property
-    def digest_no_signatures(self) -> bytes:
-        if self.encoded_buffer is None:
-            self.encoded_buffer = self.encode()
-        return keccak_1600(self.encoded_buffer[:-64*len(self.signatures)])
-
-    def encode(self) -> bytearray:
+    def encode(self, signatures: bool = True) -> bytes:
+        if signatures and self._encoded:
+            return self._encoded
+        prefix = pack('<HHH', len(self.inputs), len(self.outputs), len(self.signers))
+        in_types = bytearray((len(self.inputs) + 1) >> 1)
+        for i, x in enumerate(self.inputs):
+            match x:
+                case PublisherSpend():
+                    in_types[i >> 1] |= self.PUBLISHER_SPEND << ((i & 1) << 2)
+                case ExecutiveSpend():
+                    in_types[i >> 1] |= self.EXECUTIVE_SPEND << ((i & 1) << 2)
+                case UTXOSpend():
+                    in_types[i >> 1] |= self.UTXO_SPEND << ((i & 1) << 2)
+                case AssetSpawn():
+                    in_types[i >> 1] |= self.ASSET_SPAWN << ((i & 1) << 2)
+                case ExecutiveSpawn():
+                    in_types[i >> 1] |= self.EXECUTIVE_SPAWN << ((i & 1) << 2)
+                case _:
+                    raise ValueError('Invalid input type.')
         inputs = [x.encode() for x in self.inputs]
-        inputs_size = sum(len(x) for x in inputs)
+        out_types = bytearray((len(self.outputs) + 7) >> 3)
+        for i, x in enumerate(self.outputs):
+            match x:
+                case UTXOSpawn():
+                    out_types[i >> 3] |= self.UTXO_SPAWN << (i & 3)
+                case ExecutiveVote():
+                    out_types[i >> 3] |= self.EXECUTIVE_VOTE << (i & 3)
+                case _:
+                    raise ValueError('Invalid output type.')
         outputs = [x.encode() for x in self.outputs]
-        outputs_size = sum(len(x) for x in outputs)
-        if any(len(x) != 64 for x in self.signatures):
-            raise ValueError('Invalid signature length for `Payment`.')
-        sigs_size = 64 * len(self.signatures)
-        nbytes = 4 + inputs_size + outputs_size + sigs_size
-        if nbytes >= 0x10000:
-            raise ValueError('`Payment` encoding is too long.')
-        buffer = bytearray(nbytes)
-        view = memoryview(buffer)
-        pack_into('<HH', view, 0, inputs_size, outputs_size)
-        # encode inputs
-        offset = 4
-        for input in inputs:
-            view[offset:offset+len(input)] = input
-            offset += len(input)
-        # encode outputs
-        for output in outputs:
-            view[offset:offset+len(output)] = output
-            offset += len(output)
-        # encode signatures
-        for signature in self.signatures:
-            view[offset:offset+64] = signature
-            offset += 64
-        return buffer
-    
+        if signatures:
+            if (
+                len(self.signatures) != len(self.signers)
+                or any(len(x) != 64 for x in self.signatures)
+            ):
+                raise ValueError('Invalid signatures.')
+            encoded = b''.join(
+                [prefix, in_types, out_types] + inputs + outputs + self.signatures
+            )
+            if len(encoded) >= 0x10000:
+                raise ValueError('Invalid transaction size.')
+            self._encoded = encoded
+        else:
+            encoded = b''.join([prefix, in_types, out_types] + inputs + outputs)
+            if len(encoded) + 64 * len(self.signers) >= 0x10000:
+                raise ValueError('Invalid transaction size.')
+        return encoded
+
     @classmethod
-    def decode(cls, view: memoryview) -> tuple['Payment', int]:
-        if len(view) < 4:
-            raise ValueError('`view` is too short to decode `Payment`.')
-        inputs_size, outputs_size = unpack_from('<HH', view, 0)
-        sigs_size = len(view) - 4 - inputs_size - outputs_size
-        if sigs_size < 0 or sigs_size & 63:
-            raise ValueError('Malformed signature block for `Payment`.')
-        # decode inputs
-        inputs: list[PaymentInput] = []
-        offset = 4
-        while offset < 4 + inputs_size:
-            x, nbytes = PaymentInput.decode(view[offset:])
-            inputs.append(x)
-            offset += nbytes
-        # decode outputs
-        outputs: list[PaymentOutput] = []
-        while offset < 4 + inputs_size + outputs_size:
-            x, nbytes = PaymentOutput.decode(view[offset:])
-            outputs.append(x)
-            offset += nbytes
-        # decode signatures
-        signatures: list[bytes] = []
-        while offset < len(view):
-            signatures.append(bytes(view[offset:offset+64]))
-            offset += 64
-        return cls(inputs, outputs, signatures, bytearray(view[:offset])), offset
+    def decode(cls, view: bytes | bytearray | memoryview) -> Transaction:
+        try:
+            ninputs, noutputs, nsigners = unpack_from('<HHH', view, 0)
+            offset = 6
+            # Input types
+            in_types_len = (ninputs + 1) >> 1
+            if len(view) < offset + in_types_len:
+                raise IndexError()
+            in_types = view[offset:offset + in_types_len]
+            offset += in_types_len
+            # Output types
+            out_types_len = (noutputs + 7) >> 3
+            if len(view) < offset + out_types_len:
+                raise IndexError()
+            out_types = view[offset:offset + out_types_len]
+            offset += out_types_len
+            # Decode inputs
+            inputs: list[
+                PublisherSpend | ExecutiveSpend | UTXOSpend | AssetSpawn | ExecutiveSpawn
+            ] = []
+            for i in range(ninputs):
+                match in_types[i >> 1] & 7:
+                    case cls.PUBLISHER_SPEND:
+                        x = PublisherSpend.decode(view[offset:])
+                    case cls.EXECUTIVE_SPEND:
+                        x = ExecutiveSpend.decode(view[offset:])
+                    case cls.UTXO_SPEND:
+                        x = UTXOSpend.decode(view[offset:])
+                    case cls.ASSET_SPAWN:
+                        x = AssetSpawn.decode(view[offset:])
+                    case cls.EXECUTIVE_SPAWN:
+                        x = ExecutiveSpawn.decode(view[offset:])
+                    case _:
+                        raise ValueError('Invalid input type.')
+                inputs.append(x)
+                offset += x.size
+            # Decode outputs
+            outputs = list[UTXOSpawn | ExecutiveVote] = []
+            for i in range(noutputs):
+                match out_types[i >> 3] & 1:
+                    case cls.UTXO_SPAWN:
+                        x = UTXOSpawn.decode(view[offset:])
+                    case cls.EXECUTIVE_VOTE:
+                        x = ExecutiveVote.decode(view[offset:])
+                outputs.append(x)
+                offset += x.size
+            # Decode signatures
+            signatures: list[bytes] = []
+            for i in range(nsigners):
+                if len(view) < offset + 64:
+                    raise IndexError()
+                signatures.append(bytes(view[offset:offset+64]))
+                offset += 64
+            # Return Transaction
+            encoded = bytes(view if len(view) == offset else view[:offset])
+            return cls(inputs, outputs, signatures, encoded)
+        except (IndexError, StructError) as e:
+            raise ValueError('Invalid view size.')
 
 
 class BlockHeader(object):

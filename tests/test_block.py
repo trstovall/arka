@@ -103,7 +103,7 @@ def test_utxo_ref_by_hash_serdes():
     assert x == y
 
 
-def test_utxo_unlock_serdes():
+def test_utxo_spend_serdes():
     x = block.UTXOSpend(
         block.UTXORefByIndex(
             int.from_bytes(urandom(8), 'little'),

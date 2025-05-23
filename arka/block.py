@@ -321,7 +321,49 @@ class UTXORefByHash(object):
         return cls(tx_hash, *unpack_from('<H', view, 32))
 
 
-class AbstractTXInput(object):
+class TransactionElement(object):
+
+    @classmethod
+    def _encode_mlen(cls, memo: bytes) -> tuple[Literal[0, 1, 2], bytes]:
+        prefix = 0
+        mlen = len(memo)
+        if mlen == 0:
+            mlen = b''
+        elif mlen < 0x100:
+            mlen = pack('<B', mlen)
+            prefix |= 1
+        elif mlen < 0x10000:
+            mlen = pack('<H', mlen)
+            prefix |= 2
+        else:
+            raise ValueError('Invalid memo size')
+        return prefix, mlen
+
+    @classmethod
+    def _decode_memo(
+        cls, prefix: Literal[0, 1, 2], view: bytes | bytearray | memoryview
+    ) -> bytes:
+        try:
+            match prefix:
+                case 0:
+                    return b''
+                case 1:
+                    mlen = view[0]
+                    if len(view) < 1 + mlen:
+                        raise IndexError()
+                    return bytes(view[1:1+mlen])
+                case 2:
+                    mlen = unpack_from('<H', view, 0)[0]
+                    if len(view) < 2 + mlen:
+                        raise IndexError()
+                    return bytes(view[2:2+mlen])
+                case _:
+                    raise IndexError()
+        except (IndexError, StructError) as e:
+            raise ValueError('Invalid memo size')
+
+
+class TransactionInput(TransactionElement):
 
     SIGNER_KEY = 0
     SIGNER_LIST = 1
@@ -391,47 +433,74 @@ class AbstractTXInput(object):
             case _:
                 raise ValueError('Invalid signer.')
 
-    @classmethod
-    def _encode_mlen(cls, memo: bytes) -> tuple[Literal[0, 1, 2], bytes]:
-        prefix = 0
-        mlen = len(memo)
-        if mlen == 0:
-            mlen = b''
-        elif mlen < 0x100:
-            mlen = pack('<B', mlen)
-            prefix |= 1
-        elif mlen < 0x10000:
-            mlen = pack('<H', mlen)
-            prefix |= 2
-        else:
-            raise ValueError('Invalid memo size')
-        return prefix, mlen
+
+class UTXOSpend(TransactionInput):
+
+    UTXO_REF_BY_INDEX = 0
+    UTXO_REF_BY_HASH = 1
+
+    def __init__(self,
+        utxo: UTXORefByIndex | UTXORefByHash,
+        signer: SignerKey | SignerList | None = None,
+        memo: bytes = b''
+    ):
+        self.utxo, self.signer, self.memo = utxo, signer, memo
+
+    def __eq__(self, value: UTXOSpend) -> bool:
+        if not isinstance(value, UTXOSpend):
+            return NotImplemented
+        return (
+            self.utxo == value.utxo
+            and self.signer == value.signer
+            and self.memo == value.memo
+        )
+
+    @property
+    def size(self) -> int:
+        n = 1 + self.utxo.size + (self.signer.size if self.signer else 0)
+        mlen = self._encode_mlen(self.memo)
+        n += len(mlen) + len(self.memo)
+        return n
+
+    def encode(self) -> bytes:
+        match self.utxo:
+            case UTXORefByIndex():
+                prefix = self.UTXO_REF_BY_INDEX
+            case UTXORefByHash():
+                prefix = self.UTXO_REF_BY_HASH
+            case _:
+                raise ValueError('Invalid UTXO reference.')
+        _prefix, signer = self._encode_optional_signer(self.signer)
+        prefix |= _prefix << 1
+        _prefix, mlen = self._encode_mlen(self.memo)
+        prefix |= _prefix << 3
+        return b''.join([
+            pack('<B', prefix), self.utxo.encode(),
+            signer, mlen, self.memo
+        ])
 
     @classmethod
-    def _decode_memo(
-        cls, prefix: Literal[0, 1, 2], view: bytes | bytearray | memoryview
-    ) -> bytes:
-        try:
-            match prefix:
-                case 0:
-                    return b''
-                case 1:
-                    mlen = view[0]
-                    if len(view) < 1 + mlen:
-                        raise IndexError()
-                    return bytes(view[1:1+mlen])
-                case 2:
-                    mlen = unpack_from('<H', view, 0)[0]
-                    if len(view) < 2 + mlen:
-                        raise IndexError()
-                    return bytes(view[2:2+mlen])
-                case _:
-                    raise IndexError()
-        except (IndexError, StructError) as e:
-            raise ValueError('Invalid memo size')
+    def decode(cls, view: bytes | bytearray | memoryview) -> UTXOSpend:
+        if not view:
+            raise ValueError('Invalid size when decoding.')
+        prefix = view[0]
+        match prefix & 1:
+            case cls.UTXO_REF_BY_INDEX:
+                utxo = UTXORefByIndex.decode(view[1:])
+            case cls.UTXO_REF_BY_HASH:
+                utxo = UTXORefByHash.decode(view[1:])
+            case _:
+                raise ValueError('Invalid UTXO reference.')
+        prefix >>= 1
+        offset = 1 + utxo.size
+        signer = cls._decode_optional_signer(prefix & 3, view[offset:])
+        prefix >>= 2
+        offset += signer.size if signer else 0
+        memo = cls._decode_memo(prefix & 3, view[offset:])
+        return cls(utxo, signer, memo)
 
 
-class BlockSpend(AbstractTXInput):
+class BlockSpend(TransactionInput):
 
     def __init__(self,
         block: int,
@@ -504,73 +573,7 @@ class ExecutiveSpend(BlockSpend):
         return cls(x.block, x.signer, x.memo)
 
 
-class UTXOSpend(AbstractTXInput):
-
-    UTXO_REF_BY_INDEX = 0
-    UTXO_REF_BY_HASH = 1
-
-    def __init__(self,
-        utxo: UTXORefByIndex | UTXORefByHash,
-        signer: SignerKey | SignerList | None = None,
-        memo: bytes = b''
-    ):
-        self.utxo, self.signer, self.memo = utxo, signer, memo
-
-    def __eq__(self, value: UTXOSpend) -> bool:
-        if not isinstance(value, UTXOSpend):
-            return NotImplemented
-        return (
-            self.utxo == value.utxo
-            and self.signer == value.signer
-            and self.memo == value.memo
-        )
-
-    @property
-    def size(self) -> int:
-        n = 1 + self.utxo.size + (self.signer.size if self.signer else 0)
-        mlen = self._encode_mlen(self.memo)
-        n += len(mlen) + len(self.memo)
-        return n
-
-    def encode(self) -> bytes:
-        match self.utxo:
-            case UTXORefByIndex():
-                prefix = self.UTXO_REF_BY_INDEX
-            case UTXORefByHash():
-                prefix = self.UTXO_REF_BY_HASH
-            case _:
-                raise ValueError('Invalid UTXO reference.')
-        _prefix, signer = self._encode_optional_signer(self.signer)
-        prefix |= _prefix << 1
-        _prefix, mlen = self._encode_mlen(self.memo)
-        prefix |= _prefix << 3
-        return b''.join([
-            pack('<B', prefix), self.utxo.encode(),
-            signer, mlen, self.memo
-        ])
-
-    @classmethod
-    def decode(cls, view: bytes | bytearray | memoryview) -> UTXOSpend:
-        if not view:
-            raise ValueError('Invalid size when decoding.')
-        prefix = view[0]
-        match prefix & 1:
-            case cls.UTXO_REF_BY_INDEX:
-                utxo = UTXORefByIndex.decode(view[1:])
-            case cls.UTXO_REF_BY_HASH:
-                utxo = UTXORefByHash.decode(view[1:])
-            case _:
-                raise ValueError('Invalid UTXO reference.')
-        prefix >>= 1
-        offset = 1 + utxo.size
-        signer = cls._decode_optional_signer(prefix & 3, view[offset:])
-        prefix >>= 2
-        offset += signer.size if signer else 0
-        memo = cls._decode_memo(prefix & 3, view[offset:])
-        return cls(utxo, signer, memo)
-
-
-class ExecutiveSpawn(AbstractTXInput):
+class ExecutiveSpawn(TransactionInput):
 
     def __init__(self, signer: SignerKey | SignerList, memo: bytes = b''):
         self.signer, self.memo = signer, memo
@@ -606,7 +609,7 @@ class ExecutiveSpawn(AbstractTXInput):
         return cls(signer, memo)
 
 
-class AssetSpawn(AbstractTXInput):
+class AssetSpawn(TransactionInput):
 
     def __init__(self, signer: SignerKey | SignerList, memo: bytes = b'', lock: bool = False):
         self.signer, self.memo, self.lock = signer, memo, lock
@@ -652,49 +655,11 @@ class AssetSpawn(AbstractTXInput):
         return cls(signer, memo, lock)
 
 
-class AbstractTXOutput(object):
-
-    @classmethod
-    def _encode_mlen(cls, memo: bytes) -> tuple[Literal[0, 1, 2], bytes]:
-        prefix = 0
-        mlen = len(memo)
-        if mlen == 0:
-            mlen = b''
-        elif mlen < 0x100:
-            mlen = pack('<B', mlen)
-            prefix |= 1
-        elif mlen < 0x10000:
-            mlen = pack('<H', mlen)
-            prefix |= 2
-        else:
-            raise ValueError('Invalid memo size')
-        return prefix, mlen
-
-    @classmethod
-    def _decode_memo(
-        cls, prefix: Literal[0, 1, 2], view: bytes | bytearray | memoryview
-    ) -> bytes:
-        try:
-            match prefix:
-                case 0:
-                    return b''
-                case 1:
-                    mlen = view[0]
-                    if len(view) < 1 + mlen:
-                        raise IndexError()
-                    return bytes(view[1:1+mlen])
-                case 2:
-                    mlen = unpack_from('<H', view, 0)[0]
-                    if len(view) < 2 + mlen:
-                        raise IndexError()
-                    return bytes(view[2:2+mlen])
-                case _:
-                    raise IndexError()
-        except (IndexError, StructError) as e:
-            raise ValueError('Invalid memo size')
+class TransactionOutput(TransactionElement):
+    pass
 
 
-class UTXOSpawn(AbstractTXOutput):
+class UTXOSpawn(TransactionOutput):
 
     SIGNER_KEY = 0
     SIGNER_HASH = 1
@@ -831,9 +796,9 @@ class UTXOSpawn(AbstractTXOutput):
             raise ValueError('Invalid view size.')
 
 
-class ExecutiveVote(AbstractTXOutput):
+class ExecutiveVote(TransactionOutput):
     
-    def __init__(self, executive: SignerHash, units: int, memo: bytes):
+    def __init__(self, executive: SignerHash, units: int = 0, memo: bytes = b''):
         self.executive = executive
         self.units = units
         self.memo = memo

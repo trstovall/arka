@@ -749,7 +749,6 @@ class UTXOSpawn(TransactionOutput):
         prefix |= 128 if data_fee else 0
         _prefix, mlen = self._encode_mlen(self.memo)
         prefix |= _prefix << 8
-        n += len(mlen) + len(self.memo)
         return b''.join([
             pack('<H', prefix), asset, signer, units, reward,
             fund, utxo_fee, data_fee, mlen, self.memo

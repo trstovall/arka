@@ -873,6 +873,15 @@ class Transaction(object):
         self._encoded = _encoded
         self._digest: bytes | None = None
 
+    def __eq__(self, value: Transaction) -> bool:
+        if not isinstance(value, Transaction):
+            return NotImplemented
+        return (
+            self.inputs == value.inputs
+            and self.outputs == value.outputs
+            and self.signatures == value.signatures
+        )
+
     @property
     def signers(self) -> list[bytes]:
         keys: list[bytes] = [k for x in self.inputs for k in x.signers]

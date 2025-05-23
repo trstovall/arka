@@ -281,3 +281,53 @@ def test_executive_vote_serdes():
     assert x == y
     assert len(x.encode()) == x.size
 
+
+def test_transaction_serdes():
+    x = block.Transaction(
+        inputs=[
+            block.PublisherSpend(
+                block=int.from_bytes(urandom(8), 'little'),
+                signer=block.SignerKey(urandom(32)),
+                memo=urandom(0x100)
+            ),
+            block.ExecutiveSpend(
+                block=int.from_bytes(urandom(8), 'little'),
+                signer=block.SignerKey(urandom(32)),
+                memo=urandom(0x100)
+            ),
+            block.UTXOSpend(
+                utxo=block.UTXORefByHash(
+                    tx_hash=urandom(32),
+                    output=int.from_bytes(urandom(2), 'little')
+                ),
+                signer=block.SignerKey(urandom(32)),
+                memo=urandom(0x100)
+            ),
+            block.AssetSpawn(
+                signer=block.SignerKey(urandom(32)),
+                memo=urandom(0x100)
+            ),
+            block.ExecutiveSpawn(
+                signer=block.SignerKey(urandom(32)),
+                memo=urandom(0x100)
+            )
+        ],
+        outputs=[
+            block.UTXOSpawn(
+                asset=block.SignerHash(urandom(32)),
+                signer=block.SignerHash(urandom(32)),
+                units=int.from_bytes(urandom(8), 'little')
+            ),
+            block.ExecutiveVote(
+                executive=block.SignerHash(urandom(32)),
+                units=int.from_bytes(urandom(8), 'little'),
+                memo=b'hello'
+            )
+        ],
+        signatures=[urandom(64) for i in range(5)]
+    )
+    y = block.Transaction.decode(x.encode())
+    assert x == y
+    y = block.Transaction.decode(x.encode() + urandom(32))
+    assert x == y
+    assert len(x.encode()) == x.size

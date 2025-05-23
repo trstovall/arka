@@ -535,7 +535,8 @@ class BlockSpend(TransactionInput):
         prefix, block = unpack_from('<BQ', view, 0)
         signer = cls._decode_optional_signer(prefix & 3, view[9:])
         prefix >>= 2
-        memo = cls._decode_memo(prefix & 3, view[9+signer.size:])
+        offset = 9 + (signer.size if signer else 0)
+        memo = cls._decode_memo(prefix & 3, view[offset:])
         return cls(block, signer, memo)
 
 
@@ -720,7 +721,7 @@ class UTXOSpawn(TransactionOutput):
         n += len(mlen) + len(self.memo)
         return n
 
-    def encode(self, view: bytes | bytearray | memoryview) -> bytes:
+    def encode(self) -> bytes:
         prefix = 0
         asset = self.asset.encode() if self.asset else b''
         prefix |= 1 if asset else 0

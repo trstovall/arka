@@ -279,18 +279,36 @@ class UTXORefByHash(AbstractElement):
 
 class TransactionElement(AbstractElement):
 
-    @classmethod
-    def _encode_mlen(cls, memo: bytes) -> tuple[Literal[0, 1, 2], bytes]:
-        prefix = 0
+    def __init__(self,
+        memo: bytes | bytearray | memoryview | None = None,
+        _validate: bool = True
+    ):
+        if _validate:
+            if memo is not None:
+                if (
+                    not isinstance(memo, (bytes, bytearray, memoryview))
+                    or len(memo) == 0
+                    or len(memo) >= 0x1_0000
+                ):
+                    raise ValueError('Invalid memo.')
+        self.memo = memo
+
+
+    @staticmethod
+    def _encode_mlen(
+        memo: bytes | bytearray | memoryview | None
+    ) -> tuple[Literal[0, 1, 2], bytes]:
+        if memo is None:
+            return 0, b''
         mlen = len(memo)
         if mlen == 0:
-            mlen = b''
+            raise ValueError('Invalid memo size')
         elif mlen < 0x100:
             mlen = pack('<B', mlen)
-            prefix |= 1
+            prefix = 1
         elif mlen < 0x1_0000:
             mlen = pack('<H', mlen)
-            prefix |= 2
+            prefix = 2
         else:
             raise ValueError('Invalid memo size')
         return prefix, mlen
@@ -298,19 +316,19 @@ class TransactionElement(AbstractElement):
     @classmethod
     def _decode_memo(
         cls, prefix: Literal[0, 1, 2], view: bytes | bytearray | memoryview
-    ) -> bytes:
+    ) -> bytes | None:
         try:
             match prefix:
                 case 0:
-                    return b''
+                    return None
                 case 1:
                     mlen = view[0]
-                    if len(view) < 1 + mlen:
+                    if not mlen or len(view) < 1 + mlen:
                         raise IndexError()
                     return bytes(view[1:1+mlen])
                 case 2:
                     mlen = unpack_from('<H', view, 0)[0]
-                    if len(view) < 2 + mlen:
+                    if mlen < 0x100 or len(view) < 2 + mlen:
                         raise IndexError()
                     return bytes(view[2:2+mlen])
                 case _:
@@ -327,7 +345,8 @@ class TransactionInput(TransactionElement):
 
     def __init__(self,
         signer: SignerKey | SignerList | None = None,
-        memo: bytes = b'', _validate: bool = True
+        memo: bytes | bytearray | memoryview | None = None,
+        _validate: bool = True
     ):
         if _validate:
             if (
@@ -335,12 +354,8 @@ class TransactionInput(TransactionElement):
                 and not isinstance(signer, (SignerKey, SignerList))
             ):
                 raise ValueError('Invalid signer.')
-            if (
-                not isinstance(memo, (bytes, bytearray, memoryview))
-                or len(memo) >= 0x1_0000
-            ):
-                raise ValueError('Invalid memo.')
-        self.signer, self.memo = signer, memo
+        super().__init__(memo)
+        self.signer = signer
 
     @property
     def signers(self) -> list[SignerKey]:

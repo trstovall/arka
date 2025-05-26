@@ -40,8 +40,8 @@ async def test_signer_key_hash():
     signer = block.SignerKey(key)
     hash = await signer.hash()
     assert isinstance(hash, block.SignerHash)
-    assert isinstance(hash.hash, bytes)
-    assert len(hash.hash) == 32
+    assert isinstance(hash.value, bytes)
+    assert len(hash.value) == 32
 
 
 def test_signer_list_serdes():
@@ -78,7 +78,7 @@ async def test_signer_list_hash():
     y = await l3.hash()
     assert x == y
     assert isinstance(x, block.SignerHash)
-    assert len(x.hash) == 32
+    assert len(x.value) == 32
 
 
 def test_utxo_ref_by_index_serdes():
@@ -145,9 +145,9 @@ def test_utxo_spend_signers():
         block.UTXORefByHash(urandom(32), int.from_bytes(urandom(2), 'little')),
         keys[0]
     )
-    assert x.signers == [keys[0].key]
+    assert x.signers == [keys[0].value]
     x.signer = block.SignerList(keys, 3)
-    assert x.signers == [k.key for k in keys]
+    assert x.signers == [k.value for k in keys]
     x.signer = None
     with pytest.raises(ValueError):
         y = x.signers
@@ -352,7 +352,7 @@ def test_transaction_signers():
         ],
         outputs=[]
     )
-    assert x.signers == [k.key for k in keys]
+    assert x.signers == keys
 
 
 @pytest.mark.asyncio

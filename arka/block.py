@@ -1,130 +1,70 @@
 
 from __future__ import annotations
 from typing import Literal
-from struct import pack, unpack_from, error as StructError
+from struct import pack, pack_into, unpack_from, error as StructError
 from arka.crypto import keccak_800, keccak_1600
+from asyncio import gather
 
 
-class Parameters(object):
+class AbstractElement(object):
 
-    SIZE = 66
+    def __eq__(self, value: AbstractElement) -> bool:
+        raise NotImplementedError()
+    
+    @property
+    def size(self) -> int:
+        raise NotImplementedError()
+    
+    def encode(self) -> bytes:
+        raise NotImplementedError()
+    
+    @classmethod
+    def decode(self) -> AbstractElement:
+        raise NotImplementedError()
 
-    def __init__(self,
-        target: int,            # mint difficulty x * 2 ** y
-        block_reward: int,      # units generated each block for publishers
-        exec_fund: int,         # units generated per epoch for executive spends
-        utxo_fee: int,          # decay of UTXOs per block as a fraction z / 2**64
-        data_fee: int,          # units to destroy per byte in payment
-        executive: bytes        # account address of elected executive
-    ):
-        self.target = target
-        self.block_reward = block_reward
-        self.exec_fund = exec_fund
-        self.utxo_fee = utxo_fee
-        self.data_fee = data_fee
-        self.executive = executive
 
-    def __eq__(self, value: Parameters) -> bool:
-        if not isinstance(value, Parameters):
+class Bytes(AbstractElement):
+
+    def __init__(self, value: bytes):
+        if len(value) != self.SIZE:
+            raise ValueError('Invalid value size.')
+        self.value = value if isinstance(value, bytes) else bytes(value)
+
+    def __eq__(self, value) -> bool:
+        if not isinstance(value, type(self)):
             return NotImplemented
-        return (
-            self.encode_target() == value.encode_target()
-            and self.block_reward == value.block_reward
-            and self.exec_fund == value.exec_fund
-            and self.utxo_fee == value.utxo_fee
-            and self.data_fee == value.data_fee
-            and self.executive == value.executive
-        )
+        return self.value == value.value
 
     @property
     def size(self) -> int:
         return self.SIZE
 
-    def encode_target(self) -> bytes:
-        n = max(0, self.target.bit_length() - 8)
-        x = self.target >> n
-        return bytes([x, n])
-
     def encode(self) -> bytes:
-        target = self.encode_target()
-        ints = pack('<QQQQ', 
-            self.block_reward, self.exec_fund, self.utxo_fee, self.data_fee
-        )
-        encoding = b''.join([target, ints, self.executive])
-        if len(encoding) != self.SIZE:
-            raise ValueError('Invalid size when encoding.')
-        return encoding
-
+        return self.value
+       
     @classmethod
-    def decode(cls, view: bytes | bytearray | memoryview) -> Parameters:
+    def decode(cls, view: bytes | bytearray | memoryview) -> Bytes:
         if len(view) < cls.SIZE:
             raise ValueError('Invalid size when decoding.')
-        target = view[0] * (1 << view[1])
-        reward, fund, utxo_fee, data_fee = unpack_from('<QQQQ', view, 2)
-        exec = bytes(view[34:66])
-        return cls(target, reward, fund, utxo_fee, data_fee, exec)
+        value = view if len(view) == cls.SIZE else view[:cls.SIZE]
+        value = value if isinstance(value, bytes) else bytes(value)
+        return cls(value)
 
 
-class SignerHash(object):
+class SignerHash(Bytes):
 
     SIZE = 32
 
-    def __init__(self, hash: bytes):
-        self.hash = hash
 
-    def __eq__(self, value: SignerHash) -> bool:
-        if not isinstance(value, SignerHash):
-            return NotImplemented
-        return self.hash == value.hash
-
-    @property
-    def size(self) -> int:
-        return self.SIZE
-
-    def encode(self) -> bytes:
-        return self.hash
-       
-    @classmethod
-    def decode(cls, view: bytes | bytearray | memoryview) -> SignerHash:
-        if len(view) < cls.SIZE:
-            raise ValueError('Invalid size when decoding.')
-        hash = view if len(view) == cls.SIZE else view[:cls.SIZE]
-        hash = hash if isinstance(hash, bytes) else bytes(hash)
-        return cls(hash)
-
-
-class SignerKey(object):
+class SignerKey(Bytes):
 
     SIZE = 32
-
-    def __init__(self, key: bytes):
-        self.key = key
-
-    def __eq__(self, value: SignerKey) -> bool:
-        if not isinstance(value, SignerKey):
-            return NotImplemented
-        return self.key == value.key
-
-    @property
-    def size(self) -> int:
-        return self.SIZE
-
-    def encode(self) -> bytes:
-        return self.key
-       
-    @classmethod
-    def decode(cls, view: bytes | bytearray | memoryview) -> SignerKey:
-        if len(view) < cls.SIZE:
-            raise ValueError('Invalid size when decoding.')
-        key = view if len(view) == cls.SIZE else view[:cls.SIZE]
-        key = key if isinstance(key, bytes) else bytes(key)
-        return cls(key)
 
     async def hash(self) -> SignerHash:
-        return SignerHash(await keccak_800(self.key))    
+        return SignerHash(await keccak_800(self.value))
 
 
-class SignerList(object):
+class SignerList(AbstractElement):
 
     SIGNER_HASH = 0
     SIGNER_KEY = 1
@@ -133,15 +73,15 @@ class SignerList(object):
     def __init__(self,
         signers: list[SignerList | SignerHash | SignerKey],
         threshold: int,
-        _encoding: bytes | None = None
+        _size: int | None = None
     ):
-        if len(signers) <= 0 or len(signers) >= 0x8000:
+        if len(signers) == 0 or len(signers) >= 0x8000:
             raise ValueError('Invalid signer list.')
         if threshold <= 0 or threshold > len(signers):
             raise ValueError('Invalid threshold.')
         self.signers = signers
         self.threshold = threshold
-        self._encoding = _encoding
+        self._size = _size
 
     def __eq__(self, value: SignerList) -> bool:
         if not isinstance(value, SignerList):
@@ -153,34 +93,34 @@ class SignerList(object):
 
     @property
     def size(self) -> int:
-        if self._encoding:
-            return len(self._encoding)
-        n = 1 if len(self.signers) < 0x80 else 2
-        n += 1 if self.threshold < 0x80 else 2
-        n += (len(self.signers) + 3) // 4
-        n += sum(s.size for s in self.signers)
-        return n
+        if self._size is None:
+            n = 1 if len(self.signers) < 0x80 else 2
+            n += 1 if self.threshold < 0x80 else 2
+            n += (len(self.signers) + 3) // 4
+            n += sum(s.size for s in self.signers)
+            self._size = n
+        return self._size
 
     @property
-    def keys(self) -> list[bytes]:
+    def keys(self) -> list[SignerKey]:
         key_count = 0
         values: list[bytes] = []
-        output: list[bytes] = []
         unique: set[bytes] = set()
+        output: list[SignerKey] = []
         for s in self.signers:
             match s:
                 case SignerList():
-                    values.extend(s.keys)
+                    values.extend([k.value for k in s.keys])
                     key_count += 1
                 case SignerKey():
-                    values.append(s.key)
+                    values.append(s.value)
                     key_count += 1
         if key_count < self.threshold:
             raise ValueError("SignerList keys does not meet threshold.")
         for k in values:
             if k not in unique:
                 unique.add(k)
-                output.append(k)
+                output.append(SignerKey(k))
         return output
 
     async def hash(self) -> SignerHash:
@@ -189,23 +129,21 @@ class SignerList(object):
         for i, s in enumerate(self.signers):
             match s:
                 case SignerHash():
-                    hashes.append(s.hash)
+                    hashes.append(s.value)
                 case SignerKey() | SignerList():
-                    hashes.append((await s.hash()).hash)
+                    hashes.append((await s.hash()).value)
                 case _:
                     raise ValueError('Invalid signer type.')
         preimage = b''.join([prefix] + hashes)
         return SignerHash(await keccak_1600(preimage))
 
     def encode(self) -> bytes:
-        if self._encoding:
-            return self._encoding
         n = len(self.signers)
         n = (n << 1) | (0 if n < 0x80 else 1)
-        n = n.to_bytes(2 if n & 1 else 1, 'little')
+        n = n.to_bytes((2 if n & 1 else 1), 'little')
         x = self.threshold
         x = (x << 1) | (0 if x < 0x80 else 1)
-        x = x.to_bytes(2 if x & 1 else 1, 'little')
+        x = x.to_bytes((2 if x & 1 else 1), 'little')
         types = bytearray((len(self.signers) + 3) // 4)
         encodings: list[bytes] = []
         for i, s in enumerate(self.signers):
@@ -220,8 +158,7 @@ class SignerList(object):
                     raise ValueError('Invalid signer type.')
             types[i >> 2] |= t << ((i & 3) << 1)
             encodings.append(s.encode())
-        self._encoding = b''.join([n, x, types] + encodings)
-        return self._encoding
+        return b''.join([n, x, types] + encodings)
 
     @classmethod
     def decode(cls, view: bytes | bytearray | memoryview) -> SignerList:
@@ -239,8 +176,6 @@ class SignerList(object):
                 x += view[offset] << 8
                 offset += 1
             x >>= 1
-            if not n or not x:
-                raise ValueError('Decoded `SignerList` must not be empty.')
             types = view[offset:offset + ((n + 3) >> 2)]
             offset += len(types)
             for i in range(n):
@@ -256,15 +191,21 @@ class SignerList(object):
                 offset += signers[-1].size
         except IndexError as e:
             raise ValueError('Invalid size when decoding.')
-        encoding = bytes(view if len(view) == offset else view[:offset])
-        return SignerList(signers, x, encoding)
+        return SignerList(signers, x, offset)
 
 
-class UTXORefByIndex(object):
+class UTXORefByIndex(AbstractElement):
 
     SIZE = 14
 
-    def __init__(self, block: int, tx: int, output: int):
+    def __init__(self, block: int, tx: int, output: int, _validate=True):
+        if _validate:
+            if block < 0 or block >= 0x10000000000000000:
+                raise ValueError('Invalid block number.')
+            if tx < 0 or tx >= 0x100000000:
+                raise ValueError('Invalid tx number.')
+            if output < 0 or output >= 0x10000:
+                raise ValueError('Invalid output number.')
         self.block, self.tx, self.output = block, tx, output
 
     def __eq__(self, value: UTXORefByIndex) -> bool:
@@ -286,16 +227,24 @@ class UTXORefByIndex(object):
     @classmethod
     def decode(cls, view: bytes | bytearray | memoryview) -> UTXORefByIndex:
         if len(view) < cls.SIZE:
-            raise ValueError('Invalid size when decoding.')
-        return cls(*unpack_from('<QIH', view, 0))
+            raise ValueError('Invalid view size.')
+        return cls(*unpack_from('<QIH', view, 0), _validate=False)
 
 
-class UTXORefByHash(object):
+class TransactionHash(Bytes):
 
-    SIZE = 34
+    SIZE = 32
 
-    def __init__(self, tx_hash: bytes, output: int):
-        self.tx_hash = tx_hash
+
+class UTXORefByHash(AbstractElement):
+
+    def __init__(self, tx_hash: TransactionHash, output: int, _validate: bool = True):
+        if _validate:
+            if not isinstance(tx_hash, TransactionHash):
+                raise ValueError('Invalid tx_hash.')
+            if output < 0 or output >= 0x10000:
+                raise ValueError('Invalid output number.')
+        self.tx_hash = tx_hash if isinstance(tx_hash, bytes) else bytes(tx_hash)
         self.output = output
 
     def __eq__(self, value: UTXORefByHash) -> bool:
@@ -308,20 +257,21 @@ class UTXORefByHash(object):
 
     @property
     def size(self) -> int:
-        return self.SIZE
+        return self.tx_hash.size + 2
     
     def encode(self) -> bytes:
-        return self.tx_hash + pack('<H', self.output)
+        return self.tx_hash.encode() + pack('<H', self.output)
 
     @classmethod
     def decode(cls, view: bytes | bytearray | memoryview) -> UTXORefByHash:
-        if len(view) < cls.SIZE:
+        if len(view) < TransactionHash.SIZE + 2:
             raise ValueError('Invalid size when decoding.')
-        tx_hash = bytes(view if len(view) == 32 else view[:32])
-        return cls(tx_hash, *unpack_from('<H', view, 32))
+        tx_hash = TransactionHash.decode(view)
+        output = unpack_from('<H', view, tx_hash.size)
+        return cls(tx_hash, output, _validate=False)
 
 
-class TransactionElement(object):
+class TransactionElement(AbstractElement):
 
     @classmethod
     def _encode_mlen(cls, memo: bytes) -> tuple[Literal[0, 1, 2], bytes]:
@@ -370,10 +320,10 @@ class TransactionInput(TransactionElement):
     SIGNER_NONE = 2
 
     @property
-    def signers(self) -> list[bytes]:
+    def signers(self) -> list[SignerKey]:
         match self.signer:
             case SignerKey():
-                return [self.signer.key]
+                return [self.signer]
             case SignerList():
                 return self.signer.keys
             case _:
@@ -848,7 +798,38 @@ class ExecutiveVote(TransactionOutput):
             raise ValueError('Invalid view size.')
 
 
-class Transaction(object):
+class Signature(AbstractElement):
+
+    SIZE = 64
+
+    def __init__(self, value: bytes):
+        if len(value) != self.SIZE:
+            raise ValueError('Invalid value.')
+        if not isinstance(value, bytes):
+            value = bytes(value)
+        self.value = value
+
+    def __eq__(self, value: Signature) -> bool:
+        if not isinstance(value, Signature):
+            return NotImplemented
+        return self.value == value.value
+
+    @property
+    def size(self) -> int:
+        return self.SIZE
+
+    def encode(self) -> bytes:
+        return self.value
+    
+    @classmethod
+    def decode(cls, view: bytes | bytearray | memoryview) -> Signature:
+        if len(view) < cls.SIZE:
+            raise ValueError('Invalid view size.')
+        value = view if len(view) == cls.SIZE else view[:cls.SIZE]
+        return cls(value)
+
+
+class Transaction(AbstractElement):
 
     PUBLISHER_SPEND = 0
     EXECUTIVE_SPEND = 1
@@ -864,14 +845,14 @@ class Transaction(object):
             PublisherSpend | ExecutiveSpend | UTXOSpend | AssetSpawn | ExecutiveSpawn
         ],
         outputs: list[UTXOSpawn | ExecutiveVote],
-        signatures: list[bytes] = [],
-        _encoded: bytes = b''
+        signatures: list[Signature] = [],
+        _encoded: bytes | None = None
     ):
         self.inputs = inputs
         self.outputs = outputs
         self.signatures = signatures
         self._encoded = _encoded
-        self._digest: bytes | None = None
+        self._digest: TransactionHash | None = None
 
     def __eq__(self, value: Transaction) -> bool:
         if not isinstance(value, Transaction):
@@ -883,14 +864,14 @@ class Transaction(object):
         )
 
     @property
-    def signers(self) -> list[bytes]:
-        keys: list[bytes] = [k for x in self.inputs for k in x.signers]
-        output: list[bytes] = []
+    def signers(self) -> list[SignerKey]:
+        keys: list[bytes] = [k.value for x in self.inputs for k in x.signers]
         unique: set[bytes] = set()
+        output: list[SignerKey] = []
         for k in keys:
             if k not in unique:
                 output.append(k)
-                unique.add(k)
+                unique.add(SignerKey(k))
         return output
 
     @property
@@ -905,13 +886,13 @@ class Transaction(object):
         n += 64 * len(self.signers)
         return n
 
-    async def hash(self) -> bytes:
+    async def hash(self) -> TransactionHash:
         if self._digest is None:
             if self._encoded:
                 preimage = self._encoded[:-64 * len(self.signers)]
             else:
                 preimage = self.encode(signatures=False)
-            self._digest = await keccak_1600(preimage)
+            self._digest = TransactionHash(await keccak_1600(preimage))
         return self._digest
 
     def encode(self, signatures: bool = True) -> bytes:
@@ -945,20 +926,16 @@ class Transaction(object):
                     raise ValueError('Invalid output type.')
         outputs = [x.encode() for x in self.outputs]
         if signatures:
-            if (
-                len(self.signatures) != len(self.signers)
-                or any(len(x) != 64 for x in self.signatures)
-            ):
-                raise ValueError('Invalid signatures.')
+            signatures = [s.encode() for s in self.signatures]
             encoded = b''.join(
-                [prefix, in_types, out_types] + inputs + outputs + self.signatures
+                [prefix, in_types, out_types] + inputs + outputs + signatures
             )
             if len(encoded) >= 0x10000:
                 raise ValueError('Invalid transaction size.')
             self._encoded = encoded
         else:
             encoded = b''.join([prefix, in_types, out_types] + inputs + outputs)
-            if len(encoded) + 64 * len(self.signers) >= 0x10000:
+            if len(encoded) + Signature.SIZE * len(self.signers) >= 0x10000:
                 raise ValueError('Invalid transaction size.')
         return encoded
 
@@ -1010,12 +987,13 @@ class Transaction(object):
                 outputs.append(x)
                 offset += x.size
             # Decode signatures
-            signatures: list[bytes] = []
+            signatures: list[Signature] = []
             for i in range(nsigners):
                 if len(view) < offset + 64:
                     raise IndexError()
-                signatures.append(bytes(view[offset:offset+64]))
-                offset += 64
+                x = Signature.decode(view[offset:])
+                signatures.append(x)
+                offset += x.size
             # Return Transaction
             encoded = bytes(view if len(view) == offset else view[:offset])
             return cls(inputs, outputs, signatures, encoded)
@@ -1023,107 +1001,356 @@ class Transaction(object):
             raise ValueError('Invalid view size.')
 
 
-class BlockHeader(object):
+class BlockHeaderHash(Bytes):
 
-    def __init__(self, id: int, timestamp: int, prev_hash: bytes,
-        uid: SignerHash, payments_digest: bytes,
-        nonce: bytes, parameters: Parameters | None = None
-    ):
-        self.id = id
-        self.timestamp = timestamp
-        self.prev_hash = prev_hash
-        self.uid = uid
-        self.payments_digest = payments_digest
-        self.nonce = nonce
-        self.parameters = parameters
-
-    @property
-    def prehash(self) -> bytes:
-        return keccak_1600(self.encode()[:-32])
-
-    @property
-    def digest(self) -> bytes:
-        return keccak_800(self.prehash + self.nonce)
-
-    def encode(self) -> bytearray:
-        size = 128
-        uid = self.uid.hash
-        if self.parameters:
-            parameters = self.parameters.encode()
-            size += len(parameters)
-        buffer = bytearray(size)
-        view = memoryview(buffer)
-        pack_into('<IQ', view, 0, self.id, self.timestamp)
-        view[12:44] = self.prev_hash
-        offset = 44
-        view[offset:offset+len(uid)] = uid
-        offset += len(uid)
-        if self.parameters:
-            view[offset:offset+len(parameters)] = parameters
-            offset += len(parameters)
-        view[offset:offset+32] = self.payments_digest
-        offset += 32
-        view[offset:offset+32] = self.nonce
-        return buffer
-
-    @classmethod
-    def decode(cls, view: memoryview) -> tuple['BlockHeader', int]:
-        if len(view) < 44:
-            raise ValueError('`view` is too short to decode `BlockHeader`.')
-        id, timestamp = unpack_from('<IQ', view, 0)
-        prev_hash = bytes(view[12:44])
-        offset = 44
-        if len(view) < offset + 1:
-            raise ValueError('`view` is too short to decode `BlockHeader`.')
-        match view[offset] & 3:
-            case SpenderEnum.SIGNER_HASH.value:
-                uid, n = SignerHash.decode(view[offset:])
-            case SpenderEnum.SIGNER_KEY.value:
-                uid, n = SignerKey.decode(view[offset:])
-                if uid.truncate:
-                    raise ValueError('`BlockHeader` `SignerKey` must not be truncated.')
-        offset += n
-        if id % 10000 == 0:
-            parameters, n = Parameters.decode(view[offset:])
-            offset += n
-        else:
-            parameters = None
-        if len(view) < offset + 64:
-            raise ValueError('`view` is too short to decode `BlockHeader`.')
-        payments_hash = bytes(view[offset:offset+32])
-        nonce = bytes(view[offset+32:offset+64])
-        offset += 64
-        return cls(
-            id, timestamp, prev_hash, uid, payments_hash, nonce, parameters
-        ), offset
+    SIZE = 32
 
 
-class Block(object):
+class BlockHash(Bytes):
+
+    SIZE = 32
+
+
+class TransactionListHash(Bytes):
+
+    SIZE = 32
+
+
+class Nonce(Bytes):
+
+    SIZE = 32
+
+
+class Parameters(AbstractElement):
+
+    SIZE = 67
+
+    SIGNER_KEY = 0
+    SIGNER_HASH = 1
 
     def __init__(self,
-        id: int,                                # block number
-        timestamp: int,                         # microseconds since UNIX epoch
-        prev_hash: bytes,                       # hash digest of most recent block
-        nonce: bytes,                           # nonce required to hash block to target difficulty
-        uid: SignerHash | SignerKey,          # uid of block worker
-        parameters: Parameters | None = None,   # epoch blocks publish network parameters
-        payments: list[Payment] = []            # payment transactions to commit by this block
+        target: int,            # mint difficulty x * 2 ** y
+        block_reward: int,      # units generated each block for publishers
+        exec_fund: int,         # units generated each epoch for executives
+        utxo_fee: int,          # decay of UTXOs per block as a fraction z / 2**64
+        data_fee: int,          # units to destroy per byte in payment
+        executive: SignerKey | SignerHash   # identifier of elected executive
     ):
-        self.id = id
-        if id % 10000 and parameters is not None:
-            raise ValueError('non-epoch blocks should not hold parameters.')
-        self.timestamp = timestamp
-        self.prev_hash = prev_hash
-        self.uid = uid
-        self.nonce = nonce
-        self.parameters = parameters
-        self.payments = payments
-        self.payment_hashes = [x.digest for x in payments]
+        self.target = target
+        self.block_reward = block_reward
+        self.exec_fund = exec_fund
+        self.utxo_fee = utxo_fee
+        self.data_fee = data_fee
+        self.executive = executive
+
+    def __eq__(self, value: Parameters) -> bool:
+        if not isinstance(value, Parameters):
+            return NotImplemented
+        return (
+            self.encode_target() == value.encode_target()
+            and self.block_reward == value.block_reward
+            and self.exec_fund == value.exec_fund
+            and self.utxo_fee == value.utxo_fee
+            and self.data_fee == value.data_fee
+            and self.executive == value.executive
+        )
 
     @property
-    def header(self) -> BlockHeader:
-        payments_digest = keccak_1600(b''.join(self.payment_hashes))
-        return BlockHeader(
-            self.id, self.timestamp, self.prev_hash, self.uid,
-            payments_digest, self.nonce, self.parameters
+    def size(self) -> int:
+        return self.SIZE
+
+    def encode_target(self) -> bytes:
+        n = max(0, self.target.bit_length() - 8)
+        x = self.target >> n
+        return bytes([x, n])
+
+    def encode(self) -> bytes:
+        prefix = 0
+        target = self.encode_target()
+        ints = pack('<QQQQ', 
+            self.block_reward, self.exec_fund, self.utxo_fee, self.data_fee
+        )
+        match self.executive:
+            case SignerKey():
+                prefix |= self.SIGNER_KEY
+            case SignerHash():
+                prefix |= self.SIGNER_HASH
+        prefix = prefix.to_bytes(1, 'little')
+        encoding = b''.join([prefix, target, ints, self.executive.encode()])
+        return encoding
+
+    @classmethod
+    def decode(cls, view: bytes | bytearray | memoryview) -> Parameters:
+        if len(view) < cls.SIZE:
+            raise ValueError('Invalid view size.')
+        prefix = view[0]
+        target = view[1] * (1 << view[2])
+        reward, fund, utxo_fee, data_fee = unpack_from('<QQQQ', view, 3)
+        match prefix & 1:
+            case cls.SIGNER_KEY:
+                x = SignerKey.decode(view[35:])
+            case cls.SIGNER_HASH:
+                x = SignerHash.decode(view[35:])
+        return cls(target, reward, fund, utxo_fee, data_fee, x)
+
+
+class BlockHeader(AbstractElement):
+
+    SIGNER_KEY = 0
+    SIGNER_HASH = 1
+
+    def __init__(self, id: int, timestamp: int, prev_block: BlockHash,
+        publisher: SignerKey | SignerHash, root_hash: TransactionListHash | None = None,
+        parameters: Parameters | None = None, nonce: Nonce | None = None,
+        _validate: bool = True
+    ):
+        if _validate:
+            if (
+                not isinstance(id, int)
+                or id < 0
+                or id >= 0x1_0000_0000_0000_0000
+            ):
+                raise ValueError('Invalid block id.')
+            if (
+                not isinstance(timestamp, int)
+                or timestamp < 0
+                or timestamp >= 0x1_0000_0000_0000_0000
+            ):
+                raise ValueError('Invalid timestamp.')
+            if not isinstance(prev_block, BlockHash):
+                raise ValueError('Invalid prev_block.')
+            if not isinstance(publisher, (SignerKey, SignerHash)):
+                raise ValueError('Invalid publisher.')
+            if root_hash is not None and not isinstance(root_hash, TransactionListHash):
+                raise ValueError('Invalid root_hash.')
+            if parameters is not None and not isinstance(parameters, Parameters):
+                raise ValueError('Invalid parameters.')
+            if nonce is not None and not isinstance(nonce, Nonce):
+                raise ValueError('Invalid nonce.')
+        self.id = id
+        self.timestamp = timestamp
+        self.prev_block = prev_block
+        self.publisher = publisher
+        self.root_hash = root_hash
+        self.parameters = parameters
+        self.nonce = nonce
+
+    def __eq__(self, value: BlockHeader) -> bool:
+        if not isinstance(value, BlockHeader):
+            return NotImplemented
+        return (
+            self.id == value.id
+            and self.timestamp == value.timestamp
+            and self.prev_block == value.prev_block
+            and self.publisher == value.publisher
+            and self.root_hash == value.root_hash
+            and self.parameters == value.parameters
+            and self.nonce == value.nonce
+        )
+
+    @property
+    def size(self) -> int:
+        n = 17      # prefix[1] | id[8] | timestamp[8]
+        n += self.prev_block.size
+        n += self.publisher.size
+        n += 0 if self.root_hash is None else self.root_hash.size
+        n += 0 if self.parameters is None else self.parameters.size
+        n += 0 if self.nonce is None else self.nonce.size
+        return n
+
+    async def hash(self) -> BlockHeaderHash:
+        return BlockHeaderHash(
+            await keccak_1600(self.encode(include_nonce=False))
+        )
+
+    async def hash_nonce(self) -> BlockHash:
+        if self.nonce is None:
+            raise ValueError('Invalid nonce.')
+        return BlockHash(
+            await keccak_800(
+                (await self.hash()).value + self.nonce.value
+            )
+        )
+
+    def encode(self, include_nonce=True) -> bytes:
+        prefix = 0
+        id = pack('<Q', self.id)
+        timestamp = pack('<Q', self.timestamp)
+        prev_block = self.prev_block.encode()
+        match self.publisher:
+            case SignerKey():
+                prefix |= self.SIGNER_KEY
+            case SignerHash():
+                prefix |= self.SIGNER_HASH
+            case _:
+                raise ValueError('Invalid publisher.')
+        publisher = self.publisher.encode()
+        root_hash = self.root_hash.encode()
+        parameters = b'' if self.parameters is None else self.parameters.encode()
+        prefix |= 2 if parameters else 0
+        if not include_nonce or self.nonce is None:
+            nonce = b''
+        else:
+            nonce = self.nonce.encode()
+            prefix |= 4
+        prefix = pack('<B', prefix)
+        return b''.join([
+            prefix, id, timestamp, prev_block, publisher,
+            root_hash, parameters, nonce
+        ])
+
+    @classmethod
+    def decode(cls, view: bytes | bytearray | memoryview) -> BlockHeader:
+        try:
+            prefix = view[0]
+            id, timestamp = unpack_from('<QQ', view, 1)
+            prev_block = BlockHash(view[13:45])
+            match prefix & 1:
+                case cls.SIGNER_KEY:
+                    publisher = SignerKey.decode(view[45:])
+                case cls.SIGNER_HASH:
+                    publisher = SignerHash.decode(view[45:])
+            offset = 45 + publisher.size
+            root_hash = TransactionListHash(view[offset:])
+            offset += root_hash.size
+            parameters = Parameters.decode(view[offset:]) if prefix & 2 else None
+            offset += parameters.size if parameters else 0
+            nonce = Nonce.decode(view[offset:]) if prefix & 4 else None
+        except (IndexError, StructError) as e:
+            raise ValueError('Invalid view size.')
+        return cls(
+            id, timestamp, prev_block, publisher,
+            root_hash, parameters, nonce, _validate=False
+        )
+
+
+class Block(AbstractElement):
+    SIGNER_KEY = 0
+    SIGNER_HASH = 1
+
+    def __init__(self,
+        header: BlockHeader | None,
+        transactions: list[Transaction] = [],
+        _validate: bool = True
+    ):
+        if _validate:
+            if header is not None and not isinstance(header, BlockHeader):
+                raise ValueError('Invalid block header.')
+            if not all(isinstance(tx, Transaction) for tx in transactions):
+                raise ValueError('Invalid transaction.')
+        self._header = header
+        self.transactions = transactions
+
+    def __eq__(self, value: Block) -> bool:
+        if not isinstance(value, Block):
+            return NotImplemented
+        return (
+            self._header == value._header
+            and self.transactions == value.transactions
+        )
+
+    @property
+    def size(self) -> int:
+        n = 1       # prefix[1]
+        n += 0 if self._header is None else self._header.size
+        if self.transactions:
+            n += 4 + 2 * len(self.transactions)
+            n += sum(tx.size for tx in self.transactions)
+        return n
+
+    async def hash_transactions(self) -> TransactionListHash:
+        hashes = await gather(*[
+            tx.hash() for tx in self.transactions
+        ])
+        return TransactionListHash(await keccak_1600(
+            b''.join(h.value for h in hashes)
+        ))
+
+    async def header(self,
+        hash_transactions: bool = True, cache: bool = True
+    ) -> BlockHeader | None:
+        if self._header is None:
+            return
+        if hash_transactions:
+            root_hash = await self.hash_transactions()
+        else:
+            root_hash = self._header.root_hash
+        header = BlockHeader(
+            self._header.id, self._header.timestamp,
+            self._header.prev_block, self._header.publisher,
+            root_hash, self._header.parameters,
+            self._header.nonce, _validate=False
+        )
+        if cache:
+            self._header = header
+
+
+    async def hash(self, hash_transactions: bool = True) -> BlockHash:
+        if self._header is None:
+            raise ValueError('Invalid header.')
+        header = await self.header(hash_transactions, cache=False)
+        return await header.hash_nonce()
+
+    def encode(self) -> bytes:
+        prefix = 0
+        if self._header is None:
+            header = b''
+        else:
+            prefix |= 1
+            header = self._header.encode()
+        transactions: list[bytes] = []
+        n = len(self.transactions)
+        if n == 0:
+            n = b''
+            tx_lens = b''
+        elif n < 0x1_0000_0000:
+            prefix |= 2
+            tx_lens = bytearray(2 * n)
+            for i, tx in enumerate(self.transactions):
+                tx = tx.encode()
+                m = len(tx)
+                if m >= 0x1_0000:
+                    raise ValueError('Invalid transaction size.')
+                pack_into('<H', tx_lens, 2 * i, m)
+                transactions.append(tx)
+            n = pack('<I', n)
+        else:
+            raise ValueError('Invalid transactions list size.')
+        prefix = pack('<B', prefix)
+        return b''.join(
+            [prefix, header, n, tx_lens] + transactions
+        )
+
+    @classmethod
+    def decode(cls, view: bytes | bytearray | memoryview) -> Block:
+        try:
+            prefix = view[0]
+            header = BlockHeader.decode(view[1:]) if prefix & 1 else None
+            transactions: list[Transaction] = []
+            offset = 1 + (0 if header is None else header.size)
+            if prefix & 2:
+                n = unpack_from('<I', view, offset)[0]
+                if n == 0:
+                    raise ValueError('Invalid transactions list size.')
+                offset += 4
+                end = offset + 2 * n
+                if len(view) < end:
+                    raise ValueError('Invalid view size.')
+                tx_lens = [unpack_from('<H', view, i)[0] for i in range(offset, end, 2)]
+                offsets = [end]
+                for m in tx_lens:
+                    offsets.append(offsets[-1] + m)
+                if len(view) < offsets[-1]:
+                    raise ValueError('Invalid view size.')
+                for i in range(n):
+                    m = tx_lens[i]
+                    s, e = offsets[i], offsets[i + 1]
+                    tx = Transaction.decode(view[s:e])
+                    if tx.size != m:
+                        raise ValueError('Invalid transaction size.')
+                    transactions.append(tx)
+        except (IndexError, StructError) as e:
+            raise ValueError('Invalid view size.')
+        return cls(
+            header, transactions, _validate=False
         )

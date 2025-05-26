@@ -798,35 +798,9 @@ class ExecutiveVote(TransactionOutput):
             raise ValueError('Invalid view size.')
 
 
-class Signature(AbstractElement):
+class Signature(Bytes):
 
     SIZE = 64
-
-    def __init__(self, value: bytes):
-        if len(value) != self.SIZE:
-            raise ValueError('Invalid value.')
-        if not isinstance(value, bytes):
-            value = bytes(value)
-        self.value = value
-
-    def __eq__(self, value: Signature) -> bool:
-        if not isinstance(value, Signature):
-            return NotImplemented
-        return self.value == value.value
-
-    @property
-    def size(self) -> int:
-        return self.SIZE
-
-    def encode(self) -> bytes:
-        return self.value
-    
-    @classmethod
-    def decode(cls, view: bytes | bytearray | memoryview) -> Signature:
-        if len(view) < cls.SIZE:
-            raise ValueError('Invalid view size.')
-        value = view if len(view) == cls.SIZE else view[:cls.SIZE]
-        return cls(value)
 
 
 class Transaction(AbstractElement):
@@ -1099,8 +1073,10 @@ class BlockHeader(AbstractElement):
     SIGNER_KEY = 0
     SIGNER_HASH = 1
 
-    def __init__(self, id: int, timestamp: int, prev_block: BlockHash,
-        publisher: SignerKey | SignerHash, root_hash: TransactionListHash | None = None,
+    def __init__(self,
+        id: int, timestamp: int, prev_block: BlockHash,
+        publisher: SignerKey | SignerHash, ntxs: int | None,
+        root_hash: TransactionListHash | None = None,
         parameters: Parameters | None = None, nonce: Nonce | None = None,
         _validate: bool = True
     ):
@@ -1121,7 +1097,19 @@ class BlockHeader(AbstractElement):
                 raise ValueError('Invalid prev_block.')
             if not isinstance(publisher, (SignerKey, SignerHash)):
                 raise ValueError('Invalid publisher.')
-            if root_hash is not None and not isinstance(root_hash, TransactionListHash):
+            if ntxs is None:
+                if root_hash is not None:
+                    raise ValueError('Invalid root_hash.')
+            elif (
+                not isinstance(ntxs, int)
+                or ntxs <= 0
+                or ntxs >= 0x1_0000_0000_0000_0000
+            ):
+                raise ValueError('Invalid transaction count.')
+            if root_hash is None:
+                if ntxs is not None:
+                    raise ValueError('Invalid root_hash.')
+            elif not isinstance(root_hash, TransactionListHash):
                 raise ValueError('Invalid root_hash.')
             if parameters is not None and not isinstance(parameters, Parameters):
                 raise ValueError('Invalid parameters.')
@@ -1131,6 +1119,7 @@ class BlockHeader(AbstractElement):
         self.timestamp = timestamp
         self.prev_block = prev_block
         self.publisher = publisher
+        self.ntxs = ntxs
         self.root_hash = root_hash
         self.parameters = parameters
         self.nonce = nonce
@@ -1143,6 +1132,7 @@ class BlockHeader(AbstractElement):
             and self.timestamp == value.timestamp
             and self.prev_block == value.prev_block
             and self.publisher == value.publisher
+            and self.ntxs == value.ntxs
             and self.root_hash == value.root_hash
             and self.parameters == value.parameters
             and self.nonce == value.nonce
@@ -1153,7 +1143,7 @@ class BlockHeader(AbstractElement):
         n = 17      # prefix[1] | id[8] | timestamp[8]
         n += self.prev_block.size
         n += self.publisher.size
-        n += 0 if self.root_hash is None else self.root_hash.size
+        n += 0 if self.root_hash is None else (4 + self.root_hash.size)
         n += 0 if self.parameters is None else self.parameters.size
         n += 0 if self.nonce is None else self.nonce.size
         return n
@@ -1185,18 +1175,24 @@ class BlockHeader(AbstractElement):
             case _:
                 raise ValueError('Invalid publisher.')
         publisher = self.publisher.encode()
-        root_hash = self.root_hash.encode()
+        if self.ntxs:
+            prefix |= 2
+            ntxs = pack('<I', self.ntxs)
+            root_hash = self.root_hash.encode()
+        else:
+            ntxs = b''
+            root_hash = b''
         parameters = b'' if self.parameters is None else self.parameters.encode()
-        prefix |= 2 if parameters else 0
+        prefix |= 4 if parameters else 0
         if not include_nonce or self.nonce is None:
             nonce = b''
         else:
             nonce = self.nonce.encode()
-            prefix |= 4
+            prefix |= 8
         prefix = pack('<B', prefix)
         return b''.join([
             prefix, id, timestamp, prev_block, publisher,
-            root_hash, parameters, nonce
+            ntxs, root_hash, parameters, nonce
         ])
 
     @classmethod
@@ -1204,23 +1200,31 @@ class BlockHeader(AbstractElement):
         try:
             prefix = view[0]
             id, timestamp = unpack_from('<QQ', view, 1)
-            prev_block = BlockHash(view[13:45])
+            prev_block = BlockHash.decode(view[13:45])
             match prefix & 1:
                 case cls.SIGNER_KEY:
                     publisher = SignerKey.decode(view[45:])
                 case cls.SIGNER_HASH:
                     publisher = SignerHash.decode(view[45:])
             offset = 45 + publisher.size
-            root_hash = TransactionListHash(view[offset:])
-            offset += root_hash.size
-            parameters = Parameters.decode(view[offset:]) if prefix & 2 else None
+            if prefix & 2:
+                ntxs = unpack_from('<I', view, offset)
+                if not ntxs:
+                    raise ValueError('Invalid ntxs.')
+                offset += 4
+                root_hash = TransactionListHash.decode(view[offset:])
+                offset += root_hash.size
+            else:
+                ntxs = None
+                root_hash = None
+            parameters = Parameters.decode(view[offset:]) if prefix & 4 else None
             offset += parameters.size if parameters else 0
-            nonce = Nonce.decode(view[offset:]) if prefix & 4 else None
+            nonce = Nonce.decode(view[offset:]) if prefix & 8 else None
         except (IndexError, StructError) as e:
             raise ValueError('Invalid view size.')
         return cls(
             id, timestamp, prev_block, publisher,
-            root_hash, parameters, nonce, _validate=False
+            ntxs, root_hash, parameters, nonce, _validate=False
         )
 
 
@@ -1229,83 +1233,70 @@ class Block(AbstractElement):
     SIGNER_HASH = 1
 
     def __init__(self,
-        header: BlockHeader | None,
+        header: BlockHeader,
         transactions: list[Transaction] = [],
         _validate: bool = True
     ):
         if _validate:
-            if header is not None and not isinstance(header, BlockHeader):
+            if not isinstance(header, BlockHeader):
                 raise ValueError('Invalid block header.')
             if not all(isinstance(tx, Transaction) for tx in transactions):
                 raise ValueError('Invalid transaction.')
-        self._header = header
+        self.header = header
         self.transactions = transactions
 
     def __eq__(self, value: Block) -> bool:
         if not isinstance(value, Block):
             return NotImplemented
         return (
-            self._header == value._header
+            self.header == value.header
             and self.transactions == value.transactions
         )
 
     @property
     def size(self) -> int:
-        n = 1       # prefix[1]
-        n += 0 if self._header is None else self._header.size
-        if self.transactions:
-            n += 4 + 2 * len(self.transactions)
-            n += sum(tx.size for tx in self.transactions)
+        n = self.header.size
+        n += sum(2 + tx.size for tx in self.transactions)
         return n
 
-    async def hash_transactions(self) -> TransactionListHash:
+    async def hash_transactions(self) -> TransactionListHash | None:
+        if not self.transactions:
+            return
         hashes = await gather(*[
             tx.hash() for tx in self.transactions
         ])
-        return TransactionListHash(await keccak_1600(
-            b''.join(h.value for h in hashes)
-        ))
+        while len(hashes) > 1:
+            if len(hashes) & 1:
+                hashes.append(hashes[-1])
+            hashes = await gather(*[
+                keccak_1600(hashes[i] + hashes[i + 1])
+                for i in range(0, len(hashes), 2)
+            ])
+        return TransactionListHash(hashes[0])
 
-    async def header(self,
-        hash_transactions: bool = True, cache: bool = True
-    ) -> BlockHeader | None:
-        if self._header is None:
-            return
-        if hash_transactions:
-            root_hash = await self.hash_transactions()
-        else:
-            root_hash = self._header.root_hash
-        header = BlockHeader(
-            self._header.id, self._header.timestamp,
-            self._header.prev_block, self._header.publisher,
-            root_hash, self._header.parameters,
-            self._header.nonce, _validate=False
-        )
-        if cache:
-            self._header = header
-
-
-    async def hash(self, hash_transactions: bool = True) -> BlockHash:
-        if self._header is None:
+    async def hash(self) -> BlockHash:
+        if self.header is None:
             raise ValueError('Invalid header.')
-        header = await self.header(hash_transactions, cache=False)
-        return await header.hash_nonce()
+        return await self.header.hash_nonce()
 
     def encode(self) -> bytes:
-        prefix = 0
-        if self._header is None:
-            header = b''
+        if len(self.transactions):
+            if self.header.ntxs != len(self.transactions):
+                raise ValueError('Invalid header.ntxs')
+            if self.header.root_hash is None:
+                raise ValueError('Invalid header.root_hash')
         else:
-            prefix |= 1
-            header = self._header.encode()
+            if self.header.ntxs is not None:
+                raise ValueError('Invalid header.ntxs')
+            if self.header.root_hash is not None:
+                raise ValueError('Invalid header.root_hash')
+        header = self.header.encode()
         transactions: list[bytes] = []
         n = len(self.transactions)
+        tx_lens = bytearray(2 * n)
         if n == 0:
-            n = b''
-            tx_lens = b''
+            pass
         elif n < 0x1_0000_0000:
-            prefix |= 2
-            tx_lens = bytearray(2 * n)
             for i, tx in enumerate(self.transactions):
                 tx = tx.encode()
                 m = len(tx)
@@ -1313,40 +1304,32 @@ class Block(AbstractElement):
                     raise ValueError('Invalid transaction size.')
                 pack_into('<H', tx_lens, 2 * i, m)
                 transactions.append(tx)
-            n = pack('<I', n)
         else:
             raise ValueError('Invalid transactions list size.')
-        prefix = pack('<B', prefix)
         return b''.join(
-            [prefix, header, n, tx_lens] + transactions
+            [header, tx_lens] + transactions
         )
 
     @classmethod
     def decode(cls, view: bytes | bytearray | memoryview) -> Block:
         try:
-            prefix = view[0]
-            header = BlockHeader.decode(view[1:]) if prefix & 1 else None
+            header = BlockHeader.decode(view)
             transactions: list[Transaction] = []
-            offset = 1 + (0 if header is None else header.size)
-            if prefix & 2:
-                n = unpack_from('<I', view, offset)[0]
-                if n == 0:
-                    raise ValueError('Invalid transactions list size.')
-                offset += 4
-                end = offset + 2 * n
+            if header.ntxs:
+                offset = header.size
+                end = offset + 2 * header.ntxs
                 if len(view) < end:
-                    raise ValueError('Invalid view size.')
-                tx_lens = [unpack_from('<H', view, i)[0] for i in range(offset, end, 2)]
+                    raise IndexError()
                 offsets = [end]
-                for m in tx_lens:
-                    offsets.append(offsets[-1] + m)
+                for i in range(offset, end, 2):
+                    end += unpack_from('<H', view, i)[0]
+                    offsets.append(end)
                 if len(view) < offsets[-1]:
-                    raise ValueError('Invalid view size.')
-                for i in range(n):
-                    m = tx_lens[i]
+                    raise IndexError()
+                for i in range(header.ntxs):
                     s, e = offsets[i], offsets[i + 1]
                     tx = Transaction.decode(view[s:e])
-                    if tx.size != m:
+                    if tx.size != (e - s):
                         raise ValueError('Invalid transaction size.')
                     transactions.append(tx)
         except (IndexError, StructError) as e:

@@ -1387,8 +1387,8 @@ class BlockHeader(AbstractElement):
         try:
             prefix = view[0]
             id, timestamp = unpack_from('<QQ', view, 1)
-            prev_block = BlockHash.decode(view[13:])
-            offset = 13 + prev_block.size
+            prev_block = BlockHash.decode(view[17:])
+            offset = 17 + prev_block.size
             match prefix & 1:
                 case cls.SIGNER_KEY:
                     publisher = SignerKey.decode(view[offset:])

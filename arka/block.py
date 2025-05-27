@@ -79,7 +79,6 @@ class SignerList(AbstractElement):
     def __init__(self,
         signers: list[SignerList | SignerHash | SignerKey],
         threshold: int,
-        _size: int | None = None,
         _validate: bool = True
     ):
         if _validate:
@@ -89,7 +88,6 @@ class SignerList(AbstractElement):
                 raise ValueError('Invalid threshold.')
         self.signers = signers
         self.threshold = threshold
-        self._size = _size
 
     def __eq__(self, value: SignerList) -> bool:
         if not isinstance(value, SignerList):
@@ -101,13 +99,11 @@ class SignerList(AbstractElement):
 
     @property
     def size(self) -> int:
-        if self._size is None:
-            n = 1 if len(self.signers) < 0x80 else 2
-            n += 1 if self.threshold < 0x80 else 2
-            n += (len(self.signers) + 3) // 4
-            n += sum(s.size for s in self.signers)
-            self._size = n
-        return self._size
+        n = 1 if len(self.signers) < 0x80 else 2
+        n += 1 if self.threshold < 0x80 else 2
+        n += (len(self.signers) + 3) // 4
+        n += sum(s.size for s in self.signers)
+        return n
 
     @property
     def keys(self) -> list[SignerKey]:
@@ -210,7 +206,7 @@ class SignerList(AbstractElement):
                 offset += signers[-1].size
         except IndexError as e:
             raise ValueError('Invalid size when decoding.')
-        return SignerList(signers, x, offset, _validate=False)
+        return SignerList(signers, x, _validate=False)
 
 
 class UTXORefByIndex(AbstractElement):
@@ -961,9 +957,8 @@ class Transaction(AbstractElement):
             PublisherSpend | ExecutiveSpend | UTXOSpend
             | AssetSpawn | ExecutiveSpawn
         ],
-        outputs: list[UTXOSpawn | ExecutiveVote],
+        outputs: list[UTXOSpawn | ExecutiveVote] = [],
         signatures: list[Signature] = [],
-        _encoded: bytes | None = None,
         _validate: bool = True
     ):
         if _validate:
@@ -988,8 +983,6 @@ class Transaction(AbstractElement):
         self.inputs = inputs
         self.outputs = outputs
         self.signatures = signatures
-        self._encoded = _encoded
-        self._digest: TransactionHash | None = None
 
     def __eq__(self, value: Transaction) -> bool:
         if not isinstance(value, Transaction):
@@ -1013,29 +1006,26 @@ class Transaction(AbstractElement):
 
     @property
     def size(self) -> int:
-        if self._encoded:
-            return len(self._encoded)
         n = 6
         n += (len(self.inputs) + 1) >> 1
         n += (len(self.outputs) + 7) >> 3
         n += sum(x.size for x in self.inputs)
         n += sum(x.size for x in self.outputs)
-        n += 64 * len(self.signers)
+        n += 64 * len(self.signatures)
         return n
 
     async def hash(self) -> TransactionHash:
-        if self._digest is None:
-            if self._encoded:
-                preimage = self._encoded[:-64 * len(self.signers)]
-            else:
-                preimage = self.encode(signatures=False)
-            self._digest = TransactionHash(await keccak_1600(preimage))
-        return self._digest
+        preimage = self.encode(include_signatures=False)
+        return TransactionHash(await keccak_1600(preimage))
 
-    def encode(self, signatures: bool = True) -> bytes:
-        if signatures and self._encoded:
-            return self._encoded
-        prefix = pack('<HHH', len(self.inputs), len(self.outputs), len(self.signers))
+    def encode(self, include_signatures: bool = True) -> bytes:
+        if include_signatures:
+            if self._encoded:
+                return self._encoded
+            signatures = [x.encode() for x in self.signatures]
+        else:
+            signatures = []
+        prefix = pack('<HHH', len(self.inputs), len(self.outputs), len(signatures))
         in_types = bytearray((len(self.inputs) + 1) >> 1)
         for i, x in enumerate(self.inputs):
             match x:
@@ -1062,24 +1052,14 @@ class Transaction(AbstractElement):
                 case _:
                     raise ValueError('Invalid output type.')
         outputs = [x.encode() for x in self.outputs]
-        if signatures:
-            signatures = [s.encode() for s in self.signatures]
-            encoded = b''.join(
-                [prefix, in_types, out_types] + inputs + outputs + signatures
-            )
-            if len(encoded) >= 0x10000:
-                raise ValueError('Invalid transaction size.')
-            self._encoded = encoded
-        else:
-            encoded = b''.join([prefix, in_types, out_types] + inputs + outputs)
-            if len(encoded) + Signature.SIZE * len(self.signers) >= 0x10000:
-                raise ValueError('Invalid transaction size.')
-        return encoded
+        return b''.join(
+            [prefix, in_types, out_types] + inputs + outputs + signatures
+        )
 
     @classmethod
     def decode(cls, view: bytes | bytearray | memoryview) -> Transaction:
         try:
-            ninputs, noutputs, nsigners = unpack_from('<HHH', view, 0)
+            ninputs, noutputs, nsignatures = unpack_from('<HHH', view, 0)
             offset = 6
             # Input types
             in_types_len = (ninputs + 1) >> 1
@@ -1125,15 +1105,14 @@ class Transaction(AbstractElement):
                 offset += x.size
             # Decode signatures
             signatures: list[Signature] = []
-            for i in range(nsigners):
+            for i in range(nsignatures):
                 if len(view) < offset + 64:
                     raise IndexError()
                 x = Signature.decode(view[offset:])
                 signatures.append(x)
                 offset += x.size
             # Return Transaction
-            encoded = bytes(view if len(view) == offset else view[:offset])
-            return cls(inputs, outputs, signatures, encoded, _validate=False)
+            return cls(inputs, outputs, signatures, _validate=False)
         except (IndexError, StructError) as e:
             raise ValueError('Invalid view size.')
 

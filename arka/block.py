@@ -1458,12 +1458,12 @@ class Block(AbstractElement):
                 if len(hashes) & 1:
                     hashes.append(hashes[-1])
                 hashes = await gather(*[
-                    keccak_1600(hashes[i] + hashes[i + 1])
+                    keccak_1600(hashes[i].value + hashes[i + 1].value)
                     for i in range(0, len(hashes), 2)
                 ])
-            hash = hashes[0]
+            hash = hashes[0].value
         else:
-            hash = await keccak_1600(b''.join(hashes))
+            hash = await keccak_1600(b''.join(h.value for h in hashes))
         return TransactionListHash(hash)
 
     async def hash(self, update_header=False) -> BlockHash:

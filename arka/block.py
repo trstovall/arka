@@ -1020,8 +1020,6 @@ class Transaction(AbstractElement):
 
     def encode(self, include_signatures: bool = True) -> bytes:
         if include_signatures:
-            if self._encoded:
-                return self._encoded
             signatures = [x.encode() for x in self.signatures]
         else:
             signatures = []

@@ -19,15 +19,21 @@ class AbstractElement(object):
         raise NotImplementedError()
     
     @classmethod
-    def decode(self) -> AbstractElement:
+    def decode(self, view: bytes | bytearray | memoryview) -> AbstractElement:
         raise NotImplementedError()
 
 
 class Bytes(AbstractElement):
 
-    def __init__(self, value: bytes, _validate: bool = True):
-        if _validate and len(value) != self.SIZE:
-            raise ValueError('Invalid value size.')
+    def __init__(self,
+        value: bytes | bytearray | memoryview,
+        _validate: bool = True
+    ):
+        if _validate:
+            if not isinstance(value, (bytes, bytearray, memoryview)):
+                raise ValueError('invalid value type.')
+            if len(value) != self.SIZE:
+                raise ValueError('Invalid value size.')
         self.value = value if isinstance(value, bytes) else bytes(value)
 
     def __eq__(self, value) -> bool:
@@ -128,15 +134,16 @@ class SignerList(AbstractElement):
     async def hash(self) -> SignerHash:
         prefix = pack('<HH', len(self.signers), self.threshold)
         hashes: list[bytes] = []
-        for i, s in enumerate(self.signers):
-            match s:
-                case SignerHash():
-                    hashes.append(s.value)
-                case SignerKey() | SignerList():
-                    hashes.append((await s.hash()).value)
-                case _:
-                    raise ValueError('Invalid signer type.')
-        preimage = b''.join([prefix] + hashes)
+        if not all(
+            isinstance(x, (SignerHash, SignerKey, SignerList))
+            for x in self.signers
+        ):
+            raise ValueError('Invalid signer type.')
+        hashes: list[SignerHash] = await gather(*[
+            s.hash() if isinstance(s, (SignerKey, SignerList)) else s
+            for s in self.signers
+        ])
+        preimage = b''.join([prefix] + [h.value for h in hashes])
         return SignerHash(await keccak_1600(preimage))
 
     def encode(self) -> bytes:
@@ -250,7 +257,7 @@ class UTXORefByHash(AbstractElement):
                 raise ValueError('Invalid tx_hash.')
             if output < 0 or output >= 0x1_0000:
                 raise ValueError('Invalid output number.')
-        self.tx_hash = tx_hash if isinstance(tx_hash, bytes) else bytes(tx_hash)
+        self.tx_hash = tx_hash
         self.output = output
 
     def __eq__(self, value: UTXORefByHash) -> bool:
@@ -452,7 +459,8 @@ class UTXOSpend(TransactionInput):
     def size(self) -> int:
         n = 1 + self.utxo.size + (self.signer.size if self.signer else 0)
         mlen = self._encode_mlen(self.memo)
-        n += len(mlen) + len(self.memo)
+        if mlen:
+            n += len(mlen) + len(self.memo)
         return n
 
     def encode(self) -> bytes:
@@ -960,7 +968,7 @@ class Transaction(AbstractElement):
             ):
                 raise ValueError('Invalid inputs list.')
             if not all(
-                isinstance(x, (UTXOSpawn, ExecutiveSpawn))
+                isinstance(x, (UTXOSpawn, ExecutiveVote))
                 for x in outputs
             ):
                 raise ValueError('Invalid outputs list.')
@@ -986,13 +994,13 @@ class Transaction(AbstractElement):
 
     @property
     def signers(self) -> list[SignerKey]:
-        keys: list[bytes] = [k.value for x in self.inputs for k in x.signers]
+        keys: list[SignerKey] = [k for x in self.inputs for k in x.signers]
         unique: set[bytes] = set()
         output: list[SignerKey] = []
         for k in keys:
-            if k not in unique:
+            if k.value not in unique:
+                unique.add(k.value)
                 output.append(k)
-                unique.add(SignerKey(k))
         return output
 
     @property
@@ -1371,13 +1379,14 @@ class BlockHeader(AbstractElement):
         try:
             prefix = view[0]
             id, timestamp = unpack_from('<QQ', view, 1)
-            prev_block = BlockHash.decode(view[13:45])
+            prev_block = BlockHash.decode(view[13:])
+            offset = 13 + prev_block.size
             match prefix & 1:
                 case cls.SIGNER_KEY:
-                    publisher = SignerKey.decode(view[45:])
+                    publisher = SignerKey.decode(view[offset:])
                 case cls.SIGNER_HASH:
-                    publisher = SignerHash.decode(view[45:])
-            offset = 45 + publisher.size
+                    publisher = SignerHash.decode(view[offset:])
+            offset += publisher.size
             if prefix & 2:
                 ntxs = unpack_from('<I', view, offset)[0]
                 if not ntxs:

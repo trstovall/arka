@@ -131,6 +131,10 @@ class SignerList(AbstractElement):
                 output.append(SignerKey(k))
         return output
 
+    @staticmethod
+    async def _identity(x):
+        return x
+
     async def hash(self) -> SignerHash:
         prefix = pack('<HH', len(self.signers), self.threshold)
         hashes: list[bytes] = []
@@ -140,7 +144,9 @@ class SignerList(AbstractElement):
         ):
             raise ValueError('Invalid signer type.')
         hashes: list[SignerHash] = await gather(*[
-            s.hash() if isinstance(s, (SignerKey, SignerList)) else s
+            s.hash()
+            if isinstance(s, (SignerKey, SignerList))
+            else self._identity(s)
             for s in self.signers
         ])
         preimage = b''.join([prefix] + [h.value for h in hashes])
@@ -474,7 +480,7 @@ class UTXOSpend(TransactionInput):
         prefix |= len(mlen) << 3
         return b''.join([
             pack('<B', prefix), self.utxo.encode(),
-            signer, mlen, self.memo
+            signer, mlen, (self.memo or b'')
         ])
 
     @classmethod
@@ -600,7 +606,7 @@ class ExecutiveSpawn(TransactionInput):
         mlen = self._encode_mlen(self.memo)
         prefix |= len(mlen) << 1
         return b''.join([
-            pack('<B', prefix), signer, mlen, self.memo
+            pack('<B', prefix), signer, mlen, (self.memo or b'')
         ])
 
     @classmethod
@@ -653,7 +659,7 @@ class AssetSpawn(TransactionInput):
         else:
             raise ValueError('Invalid lock value.')
         return b''.join([
-            pack('<B', prefix), signer, mlen, self.memo
+            pack('<B', prefix), signer, mlen, (self.memo or b'')
         ])
 
     @classmethod
@@ -824,7 +830,7 @@ class UTXOSpawn(TransactionOutput):
         prefix |= len(mlen) << 8
         return b''.join([
             pack('<H', prefix), asset, signer, units, reward,
-            fund, utxo_fee, data_fee, mlen, self.memo
+            fund, utxo_fee, data_fee, mlen, (self.memo or b'')
         ])
 
     @classmethod
@@ -913,7 +919,7 @@ class ExecutiveVote(TransactionOutput):
         mlen = self._encode_mlen(self.memo)
         prefix |= len(mlen) << 1
         return b''.join([
-            pack('<B', prefix), executive, units, mlen, self.memo
+            pack('<B', prefix), executive, units, mlen, (self.memo or b'')
         ])
 
     @classmethod
@@ -1253,7 +1259,7 @@ class BlockHeader(AbstractElement):
 
     def __init__(self,
         id: int, timestamp: int, prev_block: BlockHash,
-        publisher: SignerKey | SignerHash, ntxs: int | None,
+        publisher: SignerKey | SignerHash, ntxs: int | None = None,
         root_hash: TransactionListHash | None = None,
         parameters: Parameters | None = None, nonce: Nonce | None = None,
         _validate: bool = True

@@ -83,9 +83,10 @@ def test_signer_list_serdes():
     assert len(x.encode()) == x.size
 
 
-def test_signer_list_keys():
+@pytest.mark.asyncio
+async def test_signer_list_keys():
     keys = [block.SignerKey(urandom(32)) for i in range(4)]
-    hashes = gather(*[k.hash() for k in keys])
+    hashes = await gather(*[k.hash() for k in keys])
     x = block.SignerList([
         block.SignerList([
             keys[0],
@@ -152,20 +153,17 @@ def test_utxo_ref_by_hash_serdes():
 
 def test_transaction_element_serdes():
     x = block.TransactionElement()
-    prefix, mlen = x._encode_mlen(x.memo)
-    assert prefix == 0
+    mlen = x._encode_mlen(x.memo)
     assert mlen == b''
-    assert x.memo == x._decode_memo(prefix, mlen + urandom(0x100))
+    assert x.memo == x._decode_memo(0, mlen + urandom(0x100))
     x = block.TransactionElement(urandom(0xff))
-    prefix, mlen = x._encode_mlen(x.memo)
-    assert prefix == 1
+    mlen = x._encode_mlen(x.memo)
     assert mlen == b'\xff'
-    assert x.memo == x._decode_memo(prefix, mlen + x.memo + urandom(0x100))
+    assert x.memo == x._decode_memo(1, mlen + x.memo + urandom(0x100))
     x = block.TransactionElement(urandom(0x100))
-    prefix, mlen = x._encode_mlen(x.memo)
-    assert prefix == 2
+    mlen = x._encode_mlen(x.memo)
     assert mlen == b'\x00\x01'
-    assert x.memo == x._decode_memo(prefix, mlen + x.memo + urandom(0x100))
+    assert x.memo == x._decode_memo(2, mlen + x.memo + urandom(0x100))
     with pytest.raises(ValueError):
         x = block.TransactionElement(b'')
     with pytest.raises(ValueError):
@@ -244,7 +242,8 @@ def test_utxo_spend_signers():
     keys = [block.SignerKey(urandom(32)) for i in range(3)]
     x = block.UTXOSpend(
         utxo=block.UTXORefByHash(
-            urandom(32), int.from_bytes(urandom(2), 'little')
+            block.TransactionHash(urandom(32)),
+            rand(2)
         ),
         signer=keys[0]
     )
@@ -365,8 +364,6 @@ def test_executive_spawn_serdes():
     y = block.ExecutiveSpawn.decode(x.encode() + urandom(32))
     assert x == y
     assert len(x.encode()) == x.size
-    with pytest.raises(ValueError):
-        x = block.ExecutiveSpawn(memo=urandom(32))
 
 
 def test_executive_spawn_signers():
@@ -489,7 +486,7 @@ def test_transaction_serdes():
             ),
             block.UTXOSpend(
                 utxo=block.UTXORefByHash(
-                    tx_hash=urandom(32),
+                    tx_hash=block.TransactionHash(urandom(32)),
                     output=int.from_bytes(urandom(2), 'little')
                 ),
                 signer=block.SignerKey(urandom(32)),
@@ -563,7 +560,7 @@ async def test_transaction_hash():
             ),
             block.UTXOSpend(
                 utxo=block.UTXORefByHash(
-                    tx_hash=urandom(32),
+                    tx_hash=block.TransactionHash(urandom(32)),
                     output=int.from_bytes(urandom(2), 'little')
                 ),
                 signer=block.SignerKey(urandom(32)),

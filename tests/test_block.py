@@ -620,8 +620,15 @@ def test_block_header_serdes():
         publisher=block.SignerKey(urandom(32))
     )
     y = block.BlockHeader.decode(x.encode())
-    print(f'x.size: {x.size}')
-    print(f'y.size: {y.size}')
+    print(f'id: {x.id}, {y.id}')
+    print(f'timestamp: {x.timestamp} {y.timestamp}')
+    print(f'prev_block: {x.prev_block} {y.prev_block}')
+    print(f'publisher: {x.publisher} {y.publisher}')
+    print(f'ntxs: {x.ntxs} {y.ntxs}')
+    print(f'root_hash: {x.root_hash} {y.root_hash}')
+    print(f'parameters: {x.parameters} {y.parameters}')
+    print(f'nonce: {x.nonce} {y.nonce}')
+
     return
     assert x == y
     y = block.BlockHeader.decode(x.encode() + urandom(32))

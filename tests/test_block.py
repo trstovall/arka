@@ -127,9 +127,9 @@ async def test_signer_list_hash():
 
 def test_utxo_ref_by_index_serdes():
     x = block.UTXORefByIndex(
-        int.from_bytes(urandom(8), 'little'),
-        int.from_bytes(urandom(4), 'little'),
-        int.from_bytes(urandom(2), 'little')
+        rand(8),
+        rand(4),
+        rand(2)
     )
     y = block.UTXORefByIndex.decode(x.encode())
     assert x == y
@@ -141,7 +141,7 @@ def test_utxo_ref_by_index_serdes():
 def test_utxo_ref_by_hash_serdes():
     x = block.UTXORefByHash(
         block.TransactionHash(urandom(32)),
-        int.from_bytes(urandom(2), 'little')
+        rand(2)
     )
     y = block.UTXORefByHash.decode(x.encode())
     assert x == y
@@ -202,9 +202,9 @@ def test_transaction_input_signers():
 def test_utxo_spend_serdes():
     x = block.UTXOSpend(
         block.UTXORefByIndex(
-            int.from_bytes(urandom(8), 'little'),
-            int.from_bytes(urandom(4), 'little'),
-            int.from_bytes(urandom(2), 'little')
+            rand(8),
+            rand(4),
+            rand(2)
         )
     )
     y = block.UTXOSpend.decode(x.encode())
@@ -214,7 +214,7 @@ def test_utxo_spend_serdes():
     x = block.UTXOSpend(
         block.UTXORefByHash(
             block.TransactionHash(urandom(32)),
-            int.from_bytes(urandom(2), 'little')
+            rand(2)
         )
     )
     y = block.UTXOSpend.decode(x.encode())
@@ -223,9 +223,9 @@ def test_utxo_spend_serdes():
     assert x == y
     x = block.UTXOSpend(
         block.UTXORefByIndex(
-            int.from_bytes(urandom(8), 'little'),
-            int.from_bytes(urandom(4), 'little'),
-            int.from_bytes(urandom(2), 'little')
+            rand(8),
+            rand(4),
+            rand(2)
         ),
         block.SignerList([block.SignerKey(urandom(32)) for i in range(2)], 2),
         urandom(0x100)
@@ -256,7 +256,7 @@ def test_utxo_spend_signers():
 
 def test_publisher_spend_serdes():
     x = block.PublisherSpend(
-        block=int.from_bytes(urandom(8), 'little'),
+        block=rand(8),
         signer=block.SignerKey(urandom(32)),
         memo=urandom(32)
     )
@@ -268,7 +268,7 @@ def test_publisher_spend_serdes():
     y = block.PublisherSpend.decode(x.encode())
     assert x == y
     x = block.PublisherSpend(
-        block=int.from_bytes(urandom(8), 'little'),
+        block=rand(8),
         memo=urandom(32)
     )
     y = block.PublisherSpend.decode(x.encode())
@@ -281,19 +281,19 @@ def test_publisher_spend_serdes():
 def test_publisher_spend_signers():
     keys = [block.SignerKey(urandom(32)) for i in range(3)]
     x = block.PublisherSpend(
-        block=int.from_bytes(urandom(8), 'little'),
+        block=rand(8),
         signer=keys[0],
         memo=urandom(32)
     )
     assert x.signers == [keys[0]]
     x = block.PublisherSpend(
-        block=int.from_bytes(urandom(8), 'little'),
+        block=rand(8),
         signer=block.SignerList(keys, 3),
         memo=urandom(32)
     )
     assert x.signers == keys
     x = block.PublisherSpend(
-        block=int.from_bytes(urandom(8), 'little'),
+        block=rand(8),
         memo=urandom(32)
     )
     with pytest.raises(ValueError):
@@ -302,7 +302,7 @@ def test_publisher_spend_signers():
 
 def test_executive_spend_serdes():
     x = block.ExecutiveSpend(
-        block=int.from_bytes(urandom(8), 'little'),
+        block=rand(8),
         signer=block.SignerKey(urandom(32)),
         memo=urandom(32)
     )
@@ -314,7 +314,7 @@ def test_executive_spend_serdes():
     y = block.ExecutiveSpend.decode(x.encode())
     assert x == y
     x = block.ExecutiveSpend(
-        block=int.from_bytes(urandom(8), 'little'),
+        block=rand(8),
         memo=urandom(32)
     )
     y = block.ExecutiveSpend.decode(x.encode())
@@ -327,19 +327,19 @@ def test_executive_spend_serdes():
 def test_executive_spend_signers():
     keys = [block.SignerKey(urandom(32)) for i in range(3)]
     x = block.ExecutiveSpend(
-        block=int.from_bytes(urandom(8), 'little'),
+        block=rand(8),
         signer=keys[0],
         memo=urandom(32)
     )
     assert x.signers == [keys[0]]
     x = block.ExecutiveSpend(
-        block=int.from_bytes(urandom(8), 'little'),
+        block=rand(8),
         signer=block.SignerList(keys, 3),
         memo=urandom(32)
     )
     assert x.signers == keys
     x = block.ExecutiveSpend(
-        block=int.from_bytes(urandom(8), 'little'),
+        block=rand(8),
         memo=urandom(32)
     )
     with pytest.raises(ValueError):
@@ -422,7 +422,7 @@ def test_asset_spawn_signers():
 def test_utxo_spawn_serdes():
     x = block.UTXOSpawn(
         signer=block.SignerHash(urandom(32)),
-        units=int.from_bytes(urandom(8), 'little'),
+        units=rand(8),
         memo=urandom(32)
     )
     y = block.UTXOSpawn.decode(x.encode())
@@ -433,19 +433,19 @@ def test_utxo_spawn_serdes():
     x.signer = block.SignerKey(urandom(32))
     y = block.UTXOSpawn.decode(x.encode())
     assert x == y
-    x.units = 0
+    x.units = rand(8)
     y = block.UTXOSpawn.decode(x.encode())
     assert x == y
-    x.block_reward = int.from_bytes(urandom(8), 'little')
+    x.block_reward = rand(8)
     y = block.UTXOSpawn.decode(x.encode())
     assert x == y
-    x.exec_fund = int.from_bytes(urandom(8), 'little')
+    x.exec_fund = rand(8)
     y = block.UTXOSpawn.decode(x.encode())
     assert x == y
-    x.utxo_fee = int.from_bytes(urandom(8), 'little')
+    x.utxo_fee = rand(8)
     y = block.UTXOSpawn.decode(x.encode())
     assert x == y
-    x.data_fee = int.from_bytes(urandom(8), 'little')
+    x.data_fee = rand(8)
     y = block.UTXOSpawn.decode(x.encode())
     assert x == y
     y = block.UTXOSpawn.decode(x.encode() + urandom(32))
@@ -459,7 +459,7 @@ def test_executive_vote_serdes():
     )
     y = block.ExecutiveVote.decode(x.encode())
     assert x == y
-    x.units = int.from_bytes(urandom(8), 'little')
+    x.units = rand(8)
     y = block.ExecutiveVote.decode(x.encode())
     assert x == y
     x.memo = urandom(32)
@@ -474,19 +474,19 @@ def test_transaction_serdes():
     x = block.Transaction(
         inputs=[
             block.PublisherSpend(
-                block=int.from_bytes(urandom(8), 'little'),
+                block=rand(8),
                 signer=block.SignerKey(urandom(32)),
                 memo=urandom(0x100)
             ),
             block.ExecutiveSpend(
-                block=int.from_bytes(urandom(8), 'little'),
+                block=rand(8),
                 signer=block.SignerKey(urandom(32)),
                 memo=urandom(0x100)
             ),
             block.UTXOSpend(
                 utxo=block.UTXORefByHash(
                     tx_hash=block.TransactionHash(urandom(32)),
-                    output=int.from_bytes(urandom(2), 'little')
+                    output=rand(2)
                 ),
                 signer=block.SignerKey(urandom(32)),
                 memo=urandom(0x100)
@@ -504,11 +504,11 @@ def test_transaction_serdes():
             block.UTXOSpawn(
                 asset=block.SignerHash(urandom(32)),
                 signer=block.SignerHash(urandom(32)),
-                units=int.from_bytes(urandom(8), 'little')
+                units=rand(8)
             ),
             block.ExecutiveVote(
                 executive=block.SignerHash(urandom(32)),
-                units=int.from_bytes(urandom(8), 'little'),
+                units=rand(8),
                 memo=b'hello'
             )
         ],
@@ -526,13 +526,13 @@ def test_transaction_signers():
     x = block.Transaction(
         inputs=[
             block.PublisherSpend(
-                block=int.from_bytes(urandom(8), 'little'),
+                block=rand(8),
                 signer=block.SignerList(
                     signers=keys, threshold=3
                 )
             ),
             block.PublisherSpend(
-                block=int.from_bytes(urandom(8), 'little'),
+                block=rand(8),
                 signer=block.SignerList(
                     signers=keys, threshold=3
                 )
@@ -548,19 +548,19 @@ async def test_transaction_hash():
     x = block.Transaction(
         inputs=[
             block.PublisherSpend(
-                block=int.from_bytes(urandom(8), 'little'),
+                block=rand(8),
                 signer=block.SignerKey(urandom(32)),
                 memo=urandom(0x100)
             ),
             block.ExecutiveSpend(
-                block=int.from_bytes(urandom(8), 'little'),
+                block=rand(8),
                 signer=block.SignerKey(urandom(32)),
                 memo=urandom(0x100)
             ),
             block.UTXOSpend(
                 utxo=block.UTXORefByHash(
                     tx_hash=block.TransactionHash(urandom(32)),
-                    output=int.from_bytes(urandom(2), 'little')
+                    output=rand(2)
                 ),
                 signer=block.SignerKey(urandom(32)),
                 memo=urandom(0x100)
@@ -578,11 +578,11 @@ async def test_transaction_hash():
             block.UTXOSpawn(
                 asset=block.SignerHash(urandom(32)),
                 signer=block.SignerHash(urandom(32)),
-                units=int.from_bytes(urandom(8), 'little')
+                units=rand(8)
             ),
             block.ExecutiveVote(
                 executive=block.SignerHash(urandom(32)),
-                units=int.from_bytes(urandom(8), 'little'),
+                units=rand(8),
                 memo=b'hello'
             )
         ],

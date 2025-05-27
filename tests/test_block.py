@@ -95,8 +95,7 @@ async def test_signer_list_keys():
         block.SignerList([
             keys[1],
             hashes[3],
-            keys[2],
-            hashes[4]
+            keys[2]
         ], 2),
         hashes[0],
         keys[3]
@@ -247,9 +246,9 @@ def test_utxo_spend_signers():
         ),
         signer=keys[0]
     )
-    assert x.signers == [keys[0].value]
+    assert x.signers == keys[:1]
     x.signer = block.SignerList(keys, 3)
-    assert x.signers == [k.value for k in keys]
+    assert x.signers == keys
     x.signer = None
     with pytest.raises(ValueError):
         y = x.signers
@@ -513,7 +512,7 @@ def test_transaction_serdes():
                 memo=b'hello'
             )
         ],
-        signatures=[urandom(64) for i in range(5)]
+        signatures=[block.Signature(urandom(64)) for i in range(5)]
     )
     y = block.Transaction.decode(x.encode())
     assert x == y
@@ -587,7 +586,7 @@ async def test_transaction_hash():
                 memo=b'hello'
             )
         ],
-        signatures=[urandom(64) for i in range(5)]
+        signatures=[block.Signature(urandom(64)) for i in range(5)]
     )
     y = block.Transaction.decode(x.encode())
     h = await x.hash()

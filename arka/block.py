@@ -354,7 +354,7 @@ class TransactionInput(TransactionElement):
                 and not isinstance(signer, (SignerKey, SignerList))
             ):
                 raise ValueError('Invalid signer.')
-        super().__init__(memo)
+        super().__init__(memo, _validate=_validate)
         self.signer = signer
 
     @property
@@ -430,7 +430,8 @@ class UTXOSpend(TransactionInput):
     def __init__(self,
         utxo: UTXORefByIndex | UTXORefByHash,
         signer: SignerKey | SignerList | None = None,
-        memo: bytes = b'', _validate: bool = True
+        memo: bytes | bytearray | memoryview | None = None,
+        _validate: bool = True
     ):
         if _validate:
             if not isinstance(utxo, (UTXORefByIndex, UTXORefByHash)):
@@ -497,7 +498,7 @@ class BlockSpend(TransactionInput):
     def __init__(self,
         block: int,
         signer: SignerKey | SignerList | None = None,
-        memo: bytes = b'',
+        memo: bytes | bytearray | memoryview | None = None,
         _validate: bool = True
     ):
         if _validate:
@@ -566,6 +567,15 @@ class ExecutiveSpend(BlockSpend):
 
 class ExecutiveSpawn(TransactionInput):
 
+    def __init__(self,
+        signer: SignerKey | SignerList,
+        memo: bytes | bytearray | memoryview | None = None,
+        _validate: bool = True
+    ):
+        if _validate and signer is None:
+            raise ValueError('Invalid signer.')
+        super().__init__(signer, memo, _validate=_validate)
+
     def __eq__(self, value: ExecutiveSpawn) -> bool:
         if not isinstance(value, ExecutiveSpawn):
             return NotImplemented
@@ -601,8 +611,8 @@ class AssetSpawn(TransactionInput):
 
     def __init__(self,
         signer: SignerKey | SignerList,
-        memo: bytes = b'',
-        lock: bool = False
+        memo: bytes | bytearray | memoryview | None = None,
+        lock: bool = False,
         _validate: bool = True
     ):
         if _validate and not isinstance(lock, bool):
@@ -652,7 +662,24 @@ class AssetSpawn(TransactionInput):
 
 
 class TransactionOutput(TransactionElement):
-    pass
+    
+    def __init__(self,
+        units: int | None = None,
+        memo: bytes | bytearray | memoryview | None = None,
+        _validate: bool = True
+    ):
+        if _validate:
+            if (
+                units is not None
+                and (
+                    not isinstance(units, int)
+                    or units <= 0
+                    or units >= 0x1_0000_0000_0000_0000
+                )
+            ):
+                raise ValueError('Invalid units.')
+        super().__init__(memo, _validate)
+        self.units = units
 
 
 class UTXOSpawn(TransactionOutput):
@@ -664,22 +691,65 @@ class UTXOSpawn(TransactionOutput):
     def __init__(self,
         asset: SignerHash | None = None,
         signer: SignerHash | SignerKey | None = None,
-        units: int = 0,
+        units: int | None = None,
         block_reward: int | None = None,
         exec_fund: int | None = None,
         utxo_fee: int | None = None,
         data_fee: int | None = None,
-        memo: bytes = b'',
+        memo: bytes | bytearray | memoryview | None = None,
         _validate: bool = True
     ):
+        if _validate:
+            if asset is not None and not isinstance(asset, SignerHash):
+                raise ValueError('Invalid asset identifier.')
+            if (
+                signer is not None
+                and not isinstance(signer, (SignerKey, SignerHash))
+            ):
+                raise ValueError('Invalid signer.')
+            if (
+                block_reward is not None
+                and (
+                    not isinstance(block_reward, int)
+                    or block_reward < 0
+                    or block_reward >= 0x1_0000_0000_0000_0000
+                )
+            ):
+                raise ValueError('Invalid block_reward.')
+            if (
+                exec_fund is not None
+                and (
+                    not isinstance(exec_fund, int)
+                    or exec_fund < 0
+                    or exec_fund >= 0x1_0000_0000_0000_0000
+                )
+            ):
+                raise ValueError('Invalid exec_fund.')
+            if (
+                utxo_fee is not None
+                and (
+                    not isinstance(utxo_fee, int)
+                    or utxo_fee < 0
+                    or utxo_fee >= 0x1_0000_0000_0000_0000
+                )
+            ):
+                raise ValueError('Invalid utxo_fee.')
+            if (
+                data_fee is not None
+                and (
+                    not isinstance(data_fee, int)
+                    or data_fee < 0
+                    or data_fee >= 0x1_0000_0000_0000_0000
+                )
+            ):
+                raise ValueError('Invalid data_fee.')
+        super().__init__(units, memo, _validate=_validate)
         self.asset = asset
         self.signer = signer
-        self.units = units
         self.block_reward = block_reward
         self.exec_fund = exec_fund
         self.utxo_fee = utxo_fee
         self.data_fee = data_fee
-        self.memo = memo
 
     def __eq__(self, value: UTXOSpawn) -> bool:
         if not isinstance(value, UTXOSpawn):
@@ -767,7 +837,9 @@ class UTXOSpawn(TransactionOutput):
                     raise ValueError('Invalid signer.')
             offset += 0 if signer is None else signer.size
             prefix >>= 2
-            units = unpack_from('<Q', view, offset)[0] if prefix & 1 else 0
+            units = unpack_from('<Q', view, offset)[0] if prefix & 1 else None
+            if units == 0:
+                raise ValueError('Invalid units.')
             offset += 8 if prefix & 1 else 0
             prefix >>= 1
             reward = unpack_from('<Q', view, offset)[0] if prefix & 1 else None
@@ -784,7 +856,8 @@ class UTXOSpawn(TransactionOutput):
             prefix >>= 1
             memo = cls._decode_memo(prefix & 3, view[offset:])
             return cls(
-                asset, signer, units, reward, fund, utxo_fee, data_fee, memo
+                asset, signer, units, reward, fund,
+                utxo_fee, data_fee, memo, _validate=False
             )
         except (IndexError, StructError) as e:
             raise ValueError('Invalid view size.')
@@ -792,10 +865,17 @@ class UTXOSpawn(TransactionOutput):
 
 class ExecutiveVote(TransactionOutput):
     
-    def __init__(self, executive: SignerHash, units: int = 0, memo: bytes = b''):
+    def __init__(self,
+        executive: SignerHash,
+        units: int | None = None,
+        memo: bytes | bytearray | memoryview | None = None,
+        _validate: bool = True
+    ):
+        if _validate:
+            if not isinstance(executive, SignerHash):
+                raise ValueError('Invalid executive identifier.')
+        super().__init__(units, memo, _validate=_validate)
         self.executive = executive
-        self.units = units
-        self.memo = memo
 
     def __eq__(self, value: ExecutiveVote) -> bool:
         if not isinstance(value, ExecutiveVote):
@@ -833,11 +913,13 @@ class ExecutiveVote(TransactionOutput):
             offset = 1
             executive = SignerHash.decode(view[offset:])
             offset += executive.size
-            units = unpack_from('<Q', view, offset)[0] if prefix & 1 else 0
+            units = unpack_from('<Q', view, offset)[0] if prefix & 1 else None
+            if units == 0:
+                raise ValueError('Invalid units.')
             offset += 8 if prefix & 1 else 0
             prefix >>= 1
             memo = cls._decode_memo(prefix & 3, view[offset:])
-            return cls(executive, units, memo)
+            return cls(executive, units, memo, _validate=False)
         except (IndexError, StructError) as e:
             raise ValueError('Invalid view size.')
 
@@ -860,12 +942,33 @@ class Transaction(AbstractElement):
 
     def __init__(self,
         inputs: list[
-            PublisherSpend | ExecutiveSpend | UTXOSpend | AssetSpawn | ExecutiveSpawn
+            PublisherSpend | ExecutiveSpend | UTXOSpend
+            | AssetSpawn | ExecutiveSpawn
         ],
         outputs: list[UTXOSpawn | ExecutiveVote],
         signatures: list[Signature] = [],
-        _encoded: bytes | None = None
+        _encoded: bytes | None = None,
+        _validate: bool = True
     ):
+        if _validate:
+            if not all(
+                isinstance(x, (
+                    PublisherSpend, ExecutiveSpend, UTXOSpend,
+                    AssetSpawn, ExecutiveSpawn
+                ))
+                for x in inputs
+            ):
+                raise ValueError('Invalid inputs list.')
+            if not all(
+                isinstance(x, (UTXOSpawn, ExecutiveSpawn))
+                for x in outputs
+            ):
+                raise ValueError('Invalid outputs list.')
+            if not all(
+                isinstance(x, Signature)
+                for x in signatures
+            ):
+                raise ValueError('Invalid signatures list.')
         self.inputs = inputs
         self.outputs = outputs
         self.signatures = signatures
@@ -1014,7 +1117,7 @@ class Transaction(AbstractElement):
                 offset += x.size
             # Return Transaction
             encoded = bytes(view if len(view) == offset else view[:offset])
-            return cls(inputs, outputs, signatures, encoded)
+            return cls(inputs, outputs, signatures, encoded, _validate=False)
         except (IndexError, StructError) as e:
             raise ValueError('Invalid view size.')
 
@@ -1041,10 +1144,9 @@ class Nonce(Bytes):
 
 class Parameters(AbstractElement):
 
-    SIZE = 67
+    SIZE = 66
 
-    SIGNER_KEY = 0
-    SIGNER_HASH = 1
+    TARGET_MAX = 255 * 2 ** 255
 
     def __init__(self,
         target: int,            # mint difficulty x * 2 ** y
@@ -1052,8 +1154,42 @@ class Parameters(AbstractElement):
         exec_fund: int,         # units generated each epoch for executives
         utxo_fee: int,          # decay of UTXOs per block as a fraction z / 2**64
         data_fee: int,          # units to destroy per byte in payment
-        executive: SignerKey | SignerHash   # identifier of elected executive
+        executive: SignerHash,  # identifier of elected executive
+        _validate: bool = True
     ):
+        if _validate:
+            if (
+                not isinstance(target, int)
+                or target < 0
+                or target > self.TARGET_MAX
+            ):
+                raise ValueError('Invalid target.')
+            if (
+                not isinstance(block_reward, int)
+                or block_reward < 0
+                or block_reward >= 0x1_0000_0000_0000_0000
+            ):
+                raise ValueError('Invalid block_reward.')
+            if (
+                not isinstance(exec_fund, int)
+                or exec_fund < 0
+                or exec_fund >= 0x1_0000_0000_0000_0000
+            ):
+                raise ValueError('Invalid exec_fund.')
+            if (
+                not isinstance(utxo_fee, int)
+                or utxo_fee < 0
+                or utxo_fee >= 0x1_0000_0000_0000_0000
+            ):
+                raise ValueError('Invalid utxo_fee.')
+            if (
+                not isinstance(data_fee, int)
+                or data_fee < 0
+                or data_fee >= 0x1_0000_0000_0000_0000
+            ):
+                raise ValueError('Invalid data_fee.')
+            if not isinstance(executive, SignerHash):
+                raise ValueError('Invalid executive identifier.')
         self.target = target
         self.block_reward = block_reward
         self.exec_fund = exec_fund
@@ -1083,33 +1219,21 @@ class Parameters(AbstractElement):
         return bytes([x, n])
 
     def encode(self) -> bytes:
-        prefix = 0
         target = self.encode_target()
         ints = pack('<QQQQ', 
             self.block_reward, self.exec_fund, self.utxo_fee, self.data_fee
         )
-        match self.executive:
-            case SignerKey():
-                prefix |= self.SIGNER_KEY
-            case SignerHash():
-                prefix |= self.SIGNER_HASH
-        prefix = prefix.to_bytes(1, 'little')
-        encoding = b''.join([prefix, target, ints, self.executive.encode()])
-        return encoding
+        executive = self.executive.encode()
+        return b''.join([target, ints, executive])
 
     @classmethod
     def decode(cls, view: bytes | bytearray | memoryview) -> Parameters:
         if len(view) < cls.SIZE:
             raise ValueError('Invalid view size.')
-        prefix = view[0]
-        target = view[1] * (1 << view[2])
-        reward, fund, utxo_fee, data_fee = unpack_from('<QQQQ', view, 3)
-        match prefix & 1:
-            case cls.SIGNER_KEY:
-                x = SignerKey.decode(view[35:])
-            case cls.SIGNER_HASH:
-                x = SignerHash.decode(view[35:])
-        return cls(target, reward, fund, utxo_fee, data_fee, x)
+        target = view[0] * (1 << view[1])
+        reward, fund, utxo_fee, data_fee = unpack_from('<QQQQ', view, 2)
+        executive = SignerHash.decode(view[34:])
+        return cls(target, reward, fund, utxo_fee, data_fee, executive, _validate=False)
 
 
 class BlockHeader(AbstractElement):
@@ -1149,7 +1273,7 @@ class BlockHeader(AbstractElement):
                 or ntxs <= 0
                 or ntxs >= 0x1_0000_0000_0000_0000
             ):
-                raise ValueError('Invalid transaction count.')
+                raise ValueError('Invalid ntxs.')
             if root_hash is None:
                 if ntxs is not None:
                     raise ValueError('Invalid root_hash.')

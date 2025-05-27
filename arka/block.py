@@ -280,7 +280,7 @@ class UTXORefByHash(AbstractElement):
         if len(view) < TransactionHash.SIZE + 2:
             raise ValueError('Invalid size when decoding.')
         tx_hash = TransactionHash.decode(view)
-        output = unpack_from('<H', view, tx_hash.size)
+        output = unpack_from('<H', view, tx_hash.size)[0]
         return cls(tx_hash, output, _validate=False)
 
 
@@ -304,21 +304,18 @@ class TransactionElement(AbstractElement):
     @staticmethod
     def _encode_mlen(
         memo: bytes | bytearray | memoryview | None
-    ) -> tuple[Literal[0, 1, 2], bytes]:
+    ) -> bytes:
         if memo is None:
-            return 0, b''
+            return b''
         mlen = len(memo)
         if mlen == 0:
             raise ValueError('Invalid memo size')
         elif mlen < 0x100:
-            mlen = pack('<B', mlen)
-            prefix = 1
+            return pack('<B', mlen)
         elif mlen < 0x1_0000:
-            mlen = pack('<H', mlen)
-            prefix = 2
+            return pack('<H', mlen)
         else:
             raise ValueError('Invalid memo size')
-        return prefix, mlen
 
     @classmethod
     def _decode_memo(
@@ -473,8 +470,8 @@ class UTXOSpend(TransactionInput):
                 raise ValueError('Invalid UTXO reference.')
         _prefix, signer = self._encode_optional_signer(self.signer)
         prefix |= _prefix << 1
-        _prefix, mlen = self._encode_mlen(self.memo)
-        prefix |= _prefix << 3
+        mlen = self._encode_mlen(self.memo)
+        prefix |= len(mlen) << 3
         return b''.join([
             pack('<B', prefix), self.utxo.encode(),
             signer, mlen, self.memo
@@ -532,14 +529,15 @@ class BlockSpend(TransactionInput):
     def size(self) -> int:
         n = 9
         n += (self.signer.size if self.signer else 0)
-        prefix, mlen = self._encode_mlen(self.memo)
-        n += len(mlen) + len(self.memo)
+        mlen = self._encode_mlen(self.memo)
+        if mlen:
+            n += len(mlen) + len(self.memo)
         return n
 
     def encode(self) -> bytes:
         prefix, signer = self._encode_optional_signer(self.signer)
-        _prefix, mlen = self._encode_mlen(self.memo)
-        prefix |= _prefix << 2
+        mlen = self._encode_mlen(self.memo)
+        prefix |= len(mlen) << 2
         return b''.join([
             pack('<BQ', prefix, self.block),
             signer, mlen, self.memo
@@ -592,14 +590,15 @@ class ExecutiveSpawn(TransactionInput):
     @property
     def size(self) -> int:
         n = 1 + self.signer.size
-        prefix, mlen = self._encode_mlen(self.memo)
-        n += len(mlen) + len(self.memo)
+        mlen = self._encode_mlen(self.memo)
+        if mlen:
+            n += len(mlen) + len(self.memo)
         return n
     
     def encode(self) -> bytes:
         prefix, signer = self._encode_signer(self.signer)
-        _prefix, mlen = self._encode_mlen(self.memo)
-        prefix |= _prefix << 1
+        mlen = self._encode_mlen(self.memo)
+        prefix |= len(mlen) << 1
         return b''.join([
             pack('<B', prefix), signer, mlen, self.memo
         ])
@@ -640,14 +639,15 @@ class AssetSpawn(TransactionInput):
     @property
     def size(self) -> int:
         n = 1 + self.signer.size
-        prefix, mlen = self._encode_mlen(self.memo)
-        n += len(mlen) + len(self.memo)
+        mlen = self._encode_mlen(self.memo)
+        if mlen:
+            n += len(mlen) + len(self.memo)
         return n
     
     def encode(self) -> bytes:
         prefix, signer = self._encode_signer(self.signer)
-        _prefix, mlen = self._encode_mlen(self.memo)
-        prefix |= _prefix << 1
+        mlen = self._encode_mlen(self.memo)
+        prefix |= len(mlen) << 1
         if isinstance(self.lock, bool):
             prefix |= int(self.lock) << 3
         else:
@@ -789,8 +789,9 @@ class UTXOSpawn(TransactionOutput):
         n += 0 if self.exec_fund is None else 8
         n += 0 if self.utxo_fee is None else 8
         n += 0 if self.data_fee is None else 8
-        _, mlen = self._encode_mlen(self.memo)
-        n += len(mlen) + len(self.memo)
+        mlen = self._encode_mlen(self.memo)
+        if mlen:
+            n += len(mlen) + len(self.memo)
         return n
 
     def encode(self) -> bytes:
@@ -819,8 +820,8 @@ class UTXOSpawn(TransactionOutput):
         prefix |= 64 if utxo_fee else 0
         data_fee = b'' if self.data_fee is None else pack('<Q', self.data_fee)
         prefix |= 128 if data_fee else 0
-        _prefix, mlen = self._encode_mlen(self.memo)
-        prefix |= _prefix << 8
+        mlen = self._encode_mlen(self.memo)
+        prefix |= len(mlen) << 8
         return b''.join([
             pack('<H', prefix), asset, signer, units, reward,
             fund, utxo_fee, data_fee, mlen, self.memo
@@ -899,8 +900,9 @@ class ExecutiveVote(TransactionOutput):
         n = 1
         n += self.executive.size
         n += 8 if self.units else 0
-        prefix, mlen = self._encode_mlen(self.memo)
-        n += len(mlen) + len(self.memo)
+        mlen = self._encode_mlen(self.memo)
+        if mlen:
+            n += len(mlen) + len(self.memo)
         return n
 
     def encode(self) -> bytes:
@@ -908,8 +910,8 @@ class ExecutiveVote(TransactionOutput):
         executive = self.executive.encode()
         units = pack('<Q', self.units) if self.units else b''
         prefix |= 1 if units else 0
-        _prefix, mlen = self._encode_mlen(self.memo)
-        prefix |= _prefix << 1
+        mlen = self._encode_mlen(self.memo)
+        prefix |= len(mlen) << 1
         return b''.join([
             pack('<B', prefix), executive, units, mlen, self.memo
         ])
@@ -1458,7 +1460,15 @@ class Block(AbstractElement):
             hash = await keccak_1600(b''.join(hashes))
         return TransactionListHash(hash)
 
-    async def hash(self) -> BlockHash:
+    async def hash(self, update_header=False) -> BlockHash:
+        h = await self.hash_transactions()
+        if update_header:
+            self.header.ntxs = len(self.transactions) or None
+            self.header.root_hash = h
+        elif self.header.ntxs != (len(self.transactions) or None):
+            raise ValueError('Invalid header.ntxs.')
+        elif self.header.root_hash != h:
+            raise ValueError('Invalid header.root_hash.')
         return await self.header.hash_nonce()
 
     def encode(self) -> bytes:

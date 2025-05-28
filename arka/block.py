@@ -6,6 +6,10 @@ from arka.crypto import keccak_800, keccak_1600
 from asyncio import gather
 
 
+async def identity(x):
+    return x
+
+
 class AbstractElement(object):
 
     def __eq__(self, value: AbstractElement) -> bool:
@@ -127,10 +131,6 @@ class SignerList(AbstractElement):
                 output.append(SignerKey(k))
         return output
 
-    @staticmethod
-    async def _identity(x):
-        return x
-
     async def hash(self) -> SignerHash:
         prefix = pack('<HH', len(self.signers), self.threshold)
         hashes: list[bytes] = []
@@ -140,9 +140,11 @@ class SignerList(AbstractElement):
         ):
             raise ValueError('Invalid signer type.')
         hashes: list[SignerHash] = await gather(*[
-            s.hash()
-            if isinstance(s, (SignerKey, SignerList))
-            else self._identity(s)
+            (
+                s.hash()
+                if isinstance(s, (SignerKey, SignerList))
+                else identity(s)
+            )
             for s in self.signers
         ])
         preimage = b''.join([prefix] + [h.value for h in hashes])
@@ -624,8 +626,9 @@ class AssetSpawn(TransactionInput):
         lock: bool = False,
         _validate: bool = True
     ):
-        if _validate and not isinstance(lock, bool):
-            raise ValueError('Invalid lock.')
+        if _validate:
+            if not isinstance(lock, bool):
+                raise ValueError('Invalid lock.')
         super().__init__(signer, memo, _validate=_validate)
         self.lock = lock
 

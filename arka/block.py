@@ -878,6 +878,7 @@ class ExecutiveVote(TransactionOutput):
     
     def __init__(self,
         executive: SignerHash,
+        promote: bool = True,
         units: int | None = None,
         memo: bytes | bytearray | memoryview | None = None,
         _validate: bool = True
@@ -885,21 +886,25 @@ class ExecutiveVote(TransactionOutput):
         if _validate:
             if not isinstance(executive, SignerHash):
                 raise ValueError('Invalid executive identifier.')
+            if not isinstance(promote, bool):
+                raise ValueError('Invalid promote flag.')
         super().__init__(units, memo, _validate=_validate)
         self.executive = executive
+        self.promote = promote
 
     def __eq__(self, value: ExecutiveVote) -> bool:
         if not isinstance(value, ExecutiveVote):
             return NotImplemented
         return (
             self.executive == value.executive
+            and self.promote == value.promote
             and self.units == value.units
             and self.memo == value.memo
         )
 
     @property
     def size(self) -> int:
-        n = 1
+        n = 1       # prefix[1]
         n += self.executive.size
         n += 8 if self.units else 0
         mlen = self._encode_mlen(self.memo)
@@ -910,10 +915,11 @@ class ExecutiveVote(TransactionOutput):
     def encode(self) -> bytes:
         prefix = 0
         executive = self.executive.encode()
+        prefix |= 1 if self.promote else 0
         units = pack('<Q', self.units) if self.units else b''
-        prefix |= 1 if units else 0
+        prefix |= 2 if units else 0
         mlen = self._encode_mlen(self.memo)
-        prefix |= len(mlen) << 1
+        prefix |= len(mlen) << 2
         return b''.join([
             pack('<B', prefix), executive, units, mlen, (self.memo or b'')
         ])
@@ -925,13 +931,14 @@ class ExecutiveVote(TransactionOutput):
             offset = 1
             executive = SignerHash.decode(view[offset:])
             offset += executive.size
-            units = unpack_from('<Q', view, offset)[0] if prefix & 1 else None
+            promote = bool(prefix & 1)
+            units = unpack_from('<Q', view, offset)[0] if prefix & 2 else None
             if units == 0:
                 raise ValueError('Invalid units.')
-            offset += 8 if prefix & 1 else 0
-            prefix >>= 1
+            offset += 8 if prefix & 2 else 0
+            prefix >>= 2
             memo = cls._decode_memo(prefix & 3, view[offset:])
-            return cls(executive, units, memo, _validate=False)
+            return cls(executive, promote, units, memo, _validate=False)
         except (IndexError, StructError) as e:
             raise ValueError('Invalid view size.')
 

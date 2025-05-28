@@ -1,20 +1,26 @@
 """
 ``` python
 import asyncio
-from arka.broker import Broker, PeerConnected, Address
-
+from arka.broker import (
+    Broker, PeerConnected, PeerDisconnected, Address
+)
 async def subscriber(name: str, broker: Broker):
     queue = asyncio.Queue(maxsize=5)
     broker.sub(PeerConnected, queue)
+    broker.sub(PeerDisconnected, queue)
     while True:
         event = await queue.get()
-        print(f"Subscriber {name} received: {event.addr}")
+        match event:
+            case PeerConnected() | PeerDisconnected():
+                print(f"Subscriber {name} received event:  {type(event)} {event.addr}")
+            case None:
+                break
 
 async def publisher(broker: Broker):
     await asyncio.sleep(1)
     await broker.pub(PeerConnected(("127.0.0.1", 8080)))
     await asyncio.sleep(1)
-    await broker.pub(PeerConnected(("192.168.1.1", 9999)))
+    await broker.pub(PeerDisconnected(("192.168.1.1", 9999)))
 
 async def main():
     broker = Broker()
@@ -28,6 +34,8 @@ if __name__ == "__main__":
     asyncio.run(main())
 
 ```
+"""
+
 
 import asyncio
 

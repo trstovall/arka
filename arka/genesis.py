@@ -127,6 +127,7 @@ GENESIS = block.Block(
     transactions=[
         block.Transaction(
             inputs=[
+                # Spawn ARKATEKT
                 block.ExecutiveSpawn(
                     signer=ARKATEKT,
                     memo=b'dict:' + json.dumps({
@@ -137,6 +138,7 @@ GENESIS = block.Block(
                         'msg': 'An ARKA treasury.',
                     }, indent=None, sort_keys=True).encode()
                 ),
+                # Spawn AKT
                 block.AssetSpawn(
                     signer=ARKATEKT_SHARES,
                     memo=b'dict:' + json.dumps({
@@ -148,6 +150,7 @@ GENESIS = block.Block(
                     }, indent=None, sort_keys=True).encode(),
                     lock=True
                 ),
+                # Spawn AUSD
                 block.AssetSpawn(
                     signer=ARKATEKT_CASH,
                     memo=b'dict:' + json.dumps({
@@ -159,6 +162,7 @@ GENESIS = block.Block(
                     }, indent=None, sort_keys=True).encode(),
                     lock=False
                 ),
+                # Claim Executive Fund for creating the network
                 block.ExecutiveSpend(
                     block=0,
                     signer=ARKATEKT,
@@ -166,6 +170,7 @@ GENESIS = block.Block(
                         'msg': 'Claiming 10_000_000_000 ARKA shares.'
                     }, indent=None, sort_keys=True).encode()
                 ),
+                # Claim Block Reward for GENESIS block
                 block.PublisherSpend(
                     block=0,
                     signer=TRSTOVALL,
@@ -175,7 +180,7 @@ GENESIS = block.Block(
                 ),
             ],
             outputs=[
-                # ARKATEKT
+                # ARKA shares to ARKATEKT
                 block.UTXOSpawn(
                     signer=ARKATEKT_HASH,
                     units=5_000_000_000 * 10 ** 6,
@@ -183,6 +188,7 @@ GENESIS = block.Block(
                         'msg': 'ARKA shares reserved by ARKATEKT.'
                     }, indent=None, sort_keys=True).encode(),
                 ),
+                # ARKATEKT shares to ARKATEKT
                 block.UTXOSpawn(
                     asset=ARKATEKT_HASH,
                     signer=ARKATEKT_HASH,
@@ -191,7 +197,7 @@ GENESIS = block.Block(
                         'msg': 'Arkatekt, Inc. treasury shares reserved by ARKATEKT.'
                     }, indent=None, sort_keys=True).encode(),
                 ),
-                # TRSTOVALL
+                # ARKA shares to TRSTOVALL
                 block.UTXOSpawn(
                     signer=TRSTOVALL_HASH,
                     units=1_000_000_000 * 10 ** 6,
@@ -204,6 +210,7 @@ GENESIS = block.Block(
                         'msg': 'ARKA shares paid to TRSTOVALL.'
                     }, indent=None, sort_keys=True).encode(),
                 ),
+                # ARKA shares to TRSTOVALL
                 block.UTXOSpawn(
                     signer=TRSTOVALL_HASH,
                     units=4_000_000_000 * 10 ** 6,
@@ -211,6 +218,7 @@ GENESIS = block.Block(
                         'msg': 'ARKA shares paid to TRSTOVALL.'
                     }, indent=None, sort_keys=True).encode(),
                 ),
+                # ARKATEKT shares to TRSTOVALL
                 block.UTXOSpawn(
                     asset=ARKATEKT_HASH,
                     signer=TRSTOVALL_HASH,

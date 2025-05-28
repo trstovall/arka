@@ -266,3 +266,9 @@ GENESIS = block.Block(
         )
     ]
 )
+
+
+GENESIS_HASH = block.BlockHash(bytes.fromhex((
+    '0000_0000_0000_0000_0000_0000_0000_0000'
+    '0000_0000_0000_0000_0000_0000_0000_0000'
+).replace('_', '')))

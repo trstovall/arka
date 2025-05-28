@@ -24,7 +24,7 @@ class PeerDisconnected(AbstractBrokerEvent):
 class Broker(object):
 
     def __init__(self):
-        self.subs: dict[AbstractBrokerEvent, set[asyncio.Queue]] = {}
+        self.subs: dict[type[AbstractBrokerEvent], set[asyncio.Queue]] = {}
         self._empty = set()
     
     def sub(self, event: type[AbstractBrokerEvent], queue: asyncio.Queue):
@@ -34,5 +34,7 @@ class Broker(object):
         self.subs.setdefault(event, set()).discard(queue)
     
     async def pub(self, event: AbstractBrokerEvent):
-        for q in self.subs.get(type(event), self._empty):
-            await q.put(event)
+        x: list[asyncio.Queue] = list(self.subs.get(type(event), self._empty)):
+        if not x:
+            return
+        await asyncio.gather(*[q.put(event) for q in x])

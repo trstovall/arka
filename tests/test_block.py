@@ -419,36 +419,36 @@ def test_asset_spawn_signers():
     assert x.signers == keys
 
 
-def test_utxo_spawn_serdes():
-    x = block.UTXOSpawn(
+def test_arka_utxo_serdes():
+    x = block.ArkaUTXO(
         signer=block.SignerHash(urandom(32)),
         units=rand(8),
         memo=urandom(32)
     )
-    y = block.UTXOSpawn.decode(x.encode())
+    y = block.ArkaUTXO.decode(x.encode())
     assert x == y
     x.asset = block.SignerHash(urandom(32))
-    y = block.UTXOSpawn.decode(x.encode())
+    y = block.ArkaUTXO.decode(x.encode())
     assert x == y
     x.signer = block.SignerKey(urandom(32))
-    y = block.UTXOSpawn.decode(x.encode())
+    y = block.ArkaUTXO.decode(x.encode())
     assert x == y
     x.units = rand(8)
-    y = block.UTXOSpawn.decode(x.encode())
+    y = block.ArkaUTXO.decode(x.encode())
     assert x == y
     x.block_reward = rand(8)
-    y = block.UTXOSpawn.decode(x.encode())
+    y = block.ArkaUTXO.decode(x.encode())
     assert x == y
     x.exec_fund = rand(8)
-    y = block.UTXOSpawn.decode(x.encode())
+    y = block.ArkaUTXO.decode(x.encode())
     assert x == y
     x.utxo_fee = rand(8)
-    y = block.UTXOSpawn.decode(x.encode())
+    y = block.ArkaUTXO.decode(x.encode())
     assert x == y
     x.data_fee = rand(8)
-    y = block.UTXOSpawn.decode(x.encode())
+    y = block.ArkaUTXO.decode(x.encode())
     assert x == y
-    y = block.UTXOSpawn.decode(x.encode() + urandom(32))
+    y = block.ArkaUTXO.decode(x.encode() + urandom(32))
     assert x == y
     assert len(x.encode()) == x.size
 
@@ -501,8 +501,7 @@ def test_transaction_serdes():
             )
         ],
         outputs=[
-            block.UTXOSpawn(
-                asset=block.SignerHash(urandom(32)),
+            block.ArkaUTXO(
                 signer=block.SignerHash(urandom(32)),
                 units=rand(8)
             ),
@@ -575,8 +574,7 @@ async def test_transaction_hash():
             )
         ],
         outputs=[
-            block.UTXOSpawn(
-                asset=block.SignerHash(urandom(32)),
+            block.ArkaUTXO(
                 signer=block.SignerHash(urandom(32)),
                 units=rand(8)
             ),
@@ -639,7 +637,7 @@ def test_block_header_serdes():
             data_fee=rand(8),
             executive=block.SignerHash(urandom(32))
         ),
-        nonce=block.Nonce(urandom(32))
+        nonce=block.Nonce_32(urandom(32))
     )
     y = block.BlockHeader.decode(x.encode())
     assert x == y
@@ -673,7 +671,7 @@ async def test_block_header_hash():
             data_fee=rand(8),
             executive=block.SignerHash(urandom(32))
         ),
-        nonce=block.Nonce(urandom(32))
+        nonce=block.Nonce_32(urandom(32))
     )
     h = await x.hash()
     assert isinstance(h, block.BlockHeaderHash)
@@ -700,7 +698,7 @@ async def test_block_header_hash_nonce():
     h = await x.hash()
     with pytest.raises(ValueError):
         g = await x.hash_nonce()
-    x.nonce = block.Nonce(urandom(32))
+    x.nonce = block.Nonce_32(urandom(32))
     assert (await x.hash()) == h
     g = await x.hash_nonce()
     assert isinstance(g, block.BlockHash)
@@ -734,7 +732,7 @@ def test_block_serdes():
                     )
                 ],
                 outputs=[
-                    block.UTXOSpawn(
+                    block.ArkaUTXO(
                         signer=block.SignerHash(urandom(32)),
                         units=rand(8),
                         memo=urandom(0x100)
@@ -771,7 +769,7 @@ async def test_block_hash_transactions():
                     )
                 ],
                 outputs=[
-                    block.UTXOSpawn(
+                    block.ArkaUTXO(
                         signer=block.SignerHash(urandom(32)),
                         units=rand(8),
                         memo=urandom(0x100)
@@ -801,7 +799,7 @@ async def test_block_hash():
                 data_fee=rand(8),
                 executive=block.SignerHash(urandom(32))
             ),
-            nonce = block.Nonce(urandom(32))
+            nonce = block.Nonce_32(urandom(32))
         ),
         transactions=[
             block.Transaction(
@@ -813,7 +811,7 @@ async def test_block_hash():
                     )
                 ],
                 outputs=[
-                    block.UTXOSpawn(
+                    block.ArkaUTXO(
                         signer=block.SignerHash(urandom(32)),
                         units=rand(8),
                         memo=urandom(0x100)

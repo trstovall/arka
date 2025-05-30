@@ -3,23 +3,17 @@ from arka import block
 import json
 
 
-ARKATEKT = block.SignerList(
-    signers=[
-        block.SignerKey(bytes.fromhex((
-            '0000_0000_0000_0000_0000_0000_0000_0000'
-            '0000_0000_0000_0000_0000_0000_0000_0000'
-        ).replace('_', ''))),
-        block.SignerKey(bytes.fromhex((
-            '0000_0000_0000_0000_0000_0000_0000_0000'
-            '0000_0000_0000_0000_0000_0000_0000_0000'
-        ).replace('_', ''))),
-        block.SignerHash(bytes.fromhex((
-            '0000_0000_0000_0000_0000_0000_0000_0000'
-            '0000_0000_0000_0000_0000_0000_0000_0000'
-        ).replace('_', ''))),
-    ],
-    threshold=2
-)
+# ARKATEKT is the first executive of the ARKA network.
+
+ARKATEKT = block.Nonce_16(bytes.fromhex((
+    '0000_0000_0000_0000_0000_0000_0000_0000'
+).replace('_', '')))
+
+
+ARKATEKT_SIGNER = block.SignerKey(bytes.fromhex((
+    '0000_0000_0000_0000_0000_0000_0000_0000'
+    '0000_0000_0000_0000_0000_0000_0000_0000'
+).replace('_', '')))
 
 
 ARKATEKT_HASH = block.SignerHash(bytes.fromhex((
@@ -28,23 +22,18 @@ ARKATEKT_HASH = block.SignerHash(bytes.fromhex((
 ).replace('_', '')))
 
 
-ARKATEKT_SHARES = block.SignerList(
-    signers=[
-        block.SignerKey(bytes.fromhex((
-            '0000_0000_0000_0000_0000_0000_0000_0000'
-            '0000_0000_0000_0000_0000_0000_0000_0000'
-        ).replace('_', ''))),
-        block.SignerKey(bytes.fromhex((
-            '0000_0000_0000_0000_0000_0000_0000_0000'
-            '0000_0000_0000_0000_0000_0000_0000_0000'
-        ).replace('_', ''))),
-        block.SignerHash(bytes.fromhex((
-            '0000_0000_0000_0000_0000_0000_0000_0000'
-            '0000_0000_0000_0000_0000_0000_0000_0000'
-        ).replace('_', ''))),
-    ],
-    threshold=2
-)
+# ARKATEKT_SHARES is the first asset of the ARKA network,
+# representing shares in Arkatekt, Inc.
+
+ARKATEKT_SHARES = block.Nonce_16(bytes.fromhex((
+    '0000_0000_0000_0000_0000_0000_0000_0000'
+).replace('_', '')))
+
+
+ARKATEKT_SHARES_SIGNER = block.SignerKey(bytes.fromhex((
+    '0000_0000_0000_0000_0000_0000_0000_0000'
+    '0000_0000_0000_0000_0000_0000_0000_0000'
+).replace('_', '')))
 
 
 ARKATEKT_SHARES_HASH = block.SignerHash(bytes.fromhex((
@@ -53,23 +42,18 @@ ARKATEKT_SHARES_HASH = block.SignerHash(bytes.fromhex((
 ).replace('_', '')))
 
 
-ARKATEKT_CASH = block.SignerList(
-    signers=[
-        block.SignerKey(bytes.fromhex((
-            '0000_0000_0000_0000_0000_0000_0000_0000'
-            '0000_0000_0000_0000_0000_0000_0000_0000'
-        ).replace('_', ''))),
-        block.SignerKey(bytes.fromhex((
-            '0000_0000_0000_0000_0000_0000_0000_0000'
-            '0000_0000_0000_0000_0000_0000_0000_0000'
-        ).replace('_', ''))),
-        block.SignerHash(bytes.fromhex((
-            '0000_0000_0000_0000_0000_0000_0000_0000'
-            '0000_0000_0000_0000_0000_0000_0000_0000'
-        ).replace('_', ''))),
-    ],
-    threshold=2
-)
+# ARKATEKT_CASH is the first cash asset of the ARKA network,
+# representing USD holdings of Arkatekt, Inc.
+
+ARKATEKT_CASH = block.Nonce_16(bytes.fromhex((
+    '0000_0000_0000_0000_0000_0000_0000_0000'
+).replace('_', '')))
+
+
+ARKATEKT_CASH_SIGNER = block.SignerKey(bytes.fromhex((
+    '0000_0000_0000_0000_0000_0000_0000_0000'
+    '0000_0000_0000_0000_0000_0000_0000_0000'
+).replace('_', '')))
 
 
 ARKATEKT_CASH_HASH = block.SignerHash(bytes.fromhex((
@@ -78,23 +62,13 @@ ARKATEKT_CASH_HASH = block.SignerHash(bytes.fromhex((
 ).replace('_', '')))
 
 
-TRSTOVALL = block.SignerList(
-    signers=[
-        block.SignerKey(bytes.fromhex((
-            '0000_0000_0000_0000_0000_0000_0000_0000'
-            '0000_0000_0000_0000_0000_0000_0000_0000'
-        ).replace('_', ''))),
-        block.SignerKey(bytes.fromhex((
-            '0000_0000_0000_0000_0000_0000_0000_0000'
-            '0000_0000_0000_0000_0000_0000_0000_0000'
-        ).replace('_', ''))),
-        block.SignerHash(bytes.fromhex((
-            '0000_0000_0000_0000_0000_0000_0000_0000'
-            '0000_0000_0000_0000_0000_0000_0000_0000'
-        ).replace('_', ''))),
-    ],
-    threshold=2
-)
+# TRSTOVALL is the first publisher of the ARKA network,
+# representing the creator of the ARKA network.
+
+TRSTOVALL = block.SignerKey(bytes.fromhex((
+    '0000_0000_0000_0000_0000_0000_0000_0000'
+    '0000_0000_0000_0000_0000_0000_0000_0000'
+).replace('_', '')))
 
 
 TRSTOVALL_HASH = block.SignerHash(bytes.fromhex((
@@ -102,6 +76,24 @@ TRSTOVALL_HASH = block.SignerHash(bytes.fromhex((
     '0000_0000_0000_0000_0000_0000_0000_0000'
 ).replace('_', '')))
 
+
+# JOHN is the first purchaser of ARKA,
+# trading 100.00 USD for 1_000_000.000_000 ARKA shares.
+
+JOHN = block.SignerKey(bytes.fromhex((
+    '0000_0000_0000_0000_0000_0000_0000_0000'
+    '0000_0000_0000_0000_0000_0000_0000_0000'
+).replace('_', '')))
+
+
+JOHN_HASH = block.SignerHash(bytes.fromhex((
+    '0000_0000_0000_0000_0000_0000_0000_0000'
+    '0000_0000_0000_0000_0000_0000_0000_0000'
+).replace('_', '')))
+
+
+# GENESIS is the first block of the ARKA network,
+# containing the initial state of the network.
 
 GENESIS = block.Block(
     header=block.BlockHeader(
@@ -120,7 +112,7 @@ GENESIS = block.Block(
             exec_fund=10_000_000_000 * 10 ** 6,
             utxo_fee=2**64 // (1_000 * 60 * 24 * 365),
             data_fee=100_000,
-            executive=ARKATEKT_HASH
+            executive=ARKATEKT
         ),
         nonce=block.Nonce(bytes(32))
     ),
@@ -129,35 +121,36 @@ GENESIS = block.Block(
             inputs=[
                 # Spawn ARKATEKT
                 block.ExecutiveSpawn(
-                    signer=ARKATEKT,
+                    executive=ARKATEKT,
+                    signer=ARKATEKT_SIGNER,
                     memo=b'dict:' + json.dumps({
-                        'id': ARKATEKT_HASH.value.hex(),
                         'name': 'Arkatekt, Inc.',
                         'repo': 'https://github.com/arkatekt/',
                         'dns': 'arkatekt.com',
-                        'msg': 'An ARKA treasury.',
+                        'msg': 'An ARKA treasury company.',
                     }, indent=None, sort_keys=True).encode()
                 ),
                 # Spawn AKT
                 block.AssetSpawn(
-                    signer=ARKATEKT_SHARES,
+                    asset=ARKATEKT_SHARES,
+                    signer=ARKATEKT_SHARES_SIGNER,
                     memo=b'dict:' + json.dumps({
-                        'id': ARKATEKT_SHARES_HASH.value.hex(),
                         'name': 'Arkatekt, Inc.',
                         'symbol': 'AKT',
                         'authorized': '1_000_000_000_000.000_000',
                         'outstanding': '500_000_000_000.000_000',
+                        'msg': "Used to represent Arkatekt's shares.",
                     }, indent=None, sort_keys=True).encode(),
                     lock=True
                 ),
                 # Spawn AUSD
                 block.AssetSpawn(
-                    signer=ARKATEKT_CASH,
+                    asset=ARKATEKT_CASH,
+                    signer=ARKATEKT_CASH_SIGNER,
                     memo=b'dict:' + json.dumps({
-                        'id': ARKATEKT_CASH_HASH.value.hex(),
                         'name': 'ArkatektUSD',
                         'symbol': 'AUSD',
-                        'outstanding': '0.000_000',
+                        'outstanding': '100.000_000',
                         'msg': "Used to represent Arkatekt's USD holdings.",
                     }, indent=None, sort_keys=True).encode(),
                     lock=False
@@ -165,7 +158,7 @@ GENESIS = block.Block(
                 # Claim Executive Fund for creating the network
                 block.ExecutiveSpend(
                     block=0,
-                    signer=ARKATEKT,
+                    signer=ARKATEKT_SIGNER,
                     memo=b'dict:' + json.dumps({
                         'msg': 'Claiming 10_000_000_000 ARKA shares.'
                     }, indent=None, sort_keys=True).encode()
@@ -181,7 +174,7 @@ GENESIS = block.Block(
             ],
             outputs=[
                 # ARKA shares to ARKATEKT
-                block.UTXOSpawn(
+                block.ArkaUTXO(
                     signer=ARKATEKT_HASH,
                     units=5_000_000_000 * 10 ** 6,
                     memo=b'dict:' + json.dumps({
@@ -189,8 +182,8 @@ GENESIS = block.Block(
                     }, indent=None, sort_keys=True).encode(),
                 ),
                 # ARKATEKT shares to ARKATEKT
-                block.UTXOSpawn(
-                    asset=ARKATEKT_HASH,
+                block.AssetUTXO(
+                    asset=ARKATEKT_SHARES,
                     signer=ARKATEKT_HASH,
                     units=500_000_000_000 * 10 ** 6,
                     memo=b'dict:' + json.dumps({
@@ -198,7 +191,7 @@ GENESIS = block.Block(
                     }, indent=None, sort_keys=True).encode(),
                 ),
                 # ARKA shares to TRSTOVALL
-                block.UTXOSpawn(
+                block.ArkaUTXO(
                     signer=TRSTOVALL_HASH,
                     units=1_000_000_000 * 10 ** 6,
                     target=128 * 2 ** 16,
@@ -211,7 +204,7 @@ GENESIS = block.Block(
                     }, indent=None, sort_keys=True).encode(),
                 ),
                 # ARKA shares to TRSTOVALL
-                block.UTXOSpawn(
+                block.ArkaUTXO(
                     signer=TRSTOVALL_HASH,
                     units=4_000_000_000 * 10 ** 6,
                     memo=b'dict:' + json.dumps({
@@ -219,17 +212,26 @@ GENESIS = block.Block(
                     }, indent=None, sort_keys=True).encode(),
                 ),
                 # ARKATEKT shares to TRSTOVALL
-                block.UTXOSpawn(
-                    asset=ARKATEKT_HASH,
+                block.AssetUTXO(
+                    asset=ARKATEKT_SHARES,
                     signer=TRSTOVALL_HASH,
                     units=500_000_000_000 * 10 ** 6,
                     memo=b'dict:' + json.dumps({
                         'msg': 'Arkatekt, Inc. treasury shares paid to TRSTOVALL.'
                     }, indent=None, sort_keys=True).encode(),
                 ),
+                # ArkatektUSD to JOHN
+                block.AssetUTXO(
+                    asset=ARKATEKT_CASH,
+                    signer=JOHN_HASH,
+                    units=100 * 10 ** 6,
+                    memo=b'dict:' + json.dumps({
+                        'msg': 'ArkatektUSD paid to JOHN.'
+                    }, indent=None, sort_keys=True).encode(),
+                ),
                 # Burn the remaining ARKA to vote for ARKATEKT.
                 block.ExecutiveVote(
-                    executive=ARKATEKT_HASH,
+                    executive=ARKATEKT,
                     promote=True,
                     units=100_000 * 10 ** 6,
                     memo=b'dict:' + json.dumps({

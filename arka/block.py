@@ -6,6 +6,31 @@ from arka.crypto import keccak_800, keccak_1600
 from asyncio import gather
 
 
+MAX_INT_BYTES = 15
+
+
+def _encode_optional_int(x: int | None) -> bytes:
+    if x:
+        n = (x.bit_length() + 7) >> 3
+        if n > MAX_INT_BYTES:
+            raise ValueError('Invalid integer.')
+        return x.to_bytes(n, 'little')
+    elif x is None:
+        return b''
+    else:
+        return b'\x00'
+
+
+def _decode_optional_int(
+    nbytes: int, view: bytes | bytearray | memoryview
+) -> int | None:
+    if not nbytes:
+        return
+    if len(view) < nbytes:
+        raise ValueError('Invalid view size.')
+    return int.from_bytes(view[:nbytes], 'little')
+
+
 async def identity(x):
     return x
 
@@ -578,33 +603,55 @@ class ExecutiveSpend(BlockSpend):
 class ExecutiveSpawn(TransactionInput):
 
     def __init__(self,
+        executive: Nonce_16,
         signer: SignerKey | SignerList,
+        new_signer: SignerHash | None = None,
         memo: bytes | bytearray | memoryview | None = None,
         _validate: bool = True
     ):
-        if _validate and signer is None:
-            raise ValueError('Invalid signer.')
+        if _validate:
+            if not isinstance(executive, Nonce_16):
+                raise ValueError('Invalid executive identifier.')
+            if signer is None:
+                raise ValueError('Invalid signer.')
+            if new_signer is not None and not isinstance(new_signer, SignerHash):
+                raise ValueError('Invalid new_signer.')
         super().__init__(signer, memo, _validate=_validate)
+        self.executive = executive
+        self.new_signer = new_signer
 
     def __eq__(self, value: ExecutiveSpawn) -> bool:
         if not isinstance(value, ExecutiveSpawn):
             return NotImplemented
-        return self.signer == value.signer and self.memo == value.memo
+        return (
+            self.executive == value.executive
+            and self.signer == value.signer
+            and self.new_signer == value.new_signer
+            and self.memo == value.memo
+        )
 
     @property
     def size(self) -> int:
-        n = 1 + self.signer.size
+        n = 1           # prefix[1]
+        n += self.executive.size
+        n += self.signer.size
+        n += self.new_signer.size if self.new_signer else 0
         mlen = self._encode_mlen(self.memo)
         if mlen:
             n += len(mlen) + len(self.memo)
         return n
     
     def encode(self) -> bytes:
+        executive = self.executive.encode()
         prefix, signer = self._encode_signer(self.signer)
+        shift = 1
+        new_signer = b'' if self.new_signer is None else self.new_signer.encode()
+        prefix |= (1 << shift) if new_signer else 0
+        shift += 1
         mlen = self._encode_mlen(self.memo)
-        prefix |= len(mlen) << 1
+        prefix |= len(mlen) << shift
         return b''.join([
-            pack('<B', prefix), signer, mlen, (self.memo or b'')
+            pack('<B', prefix), executive, signer, new_signer, mlen, (self.memo or b'')
         ])
 
     @classmethod
@@ -612,53 +659,78 @@ class ExecutiveSpawn(TransactionInput):
         if not view:
             raise ValueError('Invalid size when decoding.')
         prefix = view[0]
-        signer = cls._decode_signer(prefix & 1, view[1:])
+        executive = Nonce_16.decode(view[1:])
+        offset = 1 + executive.size
+        signer = cls._decode_signer(prefix & 1, view[offset:])
         prefix >>= 1
-        memo = cls._decode_memo(prefix & 3, view[1+signer.size:])
-        return cls(signer, memo, _validate=False)
+        offset += signer.size
+        new_signer = SignerHash.decode(view[offset:]) if prefix & 1 else None
+        prefix >>= 1
+        offset += new_signer.size if new_signer else 0
+        memo = cls._decode_memo(prefix & 3, view[offset:])
+        return cls(executive, signer, new_signer, memo, _validate=False)
 
 
 class AssetSpawn(TransactionInput):
 
     def __init__(self,
+        asset: Nonce_16,
         signer: SignerKey | SignerList,
+        new_signer: SignerHash | None = None,
         memo: bytes | bytearray | memoryview | None = None,
         lock: bool = False,
         _validate: bool = True
     ):
         if _validate:
+            if not isinstance(asset, Nonce_16):
+                raise ValueError('Invalid asset identifier.')
+            if new_signer is not None and not isinstance(new_signer, SignerHash):
+                raise ValueError('Invalid new_signer.')
             if not isinstance(lock, bool):
                 raise ValueError('Invalid lock.')
         super().__init__(signer, memo, _validate=_validate)
+        self.asset = asset
+        self.new_signer = new_signer
         self.lock = lock
 
     def __eq__(self, value: AssetSpawn) -> bool:
         if not isinstance(value, AssetSpawn):
             return NotImplemented
         return (
-            self.signer == value.signer
+            self.asset == value.asset
+            and self.signer == value.signer
+            and self.new_signer == value.new_signer
             and self.memo == value.memo
             and self.lock == value.lock
         )
 
     @property
     def size(self) -> int:
-        n = 1 + self.signer.size
+        n = 1
+        n += self.asset.size
+        n += self.signer.size
+        n += self.new_signer.size if self.new_signer else 0
         mlen = self._encode_mlen(self.memo)
         if mlen:
             n += len(mlen) + len(self.memo)
         return n
     
     def encode(self) -> bytes:
+        asset = self.asset.encode()
         prefix, signer = self._encode_signer(self.signer)
+        shift = 1
+        new_signer = b'' if self.new_signer is None else self.new_signer.encode()
+        prefix |= (1 << shift) if new_signer else 0
+        shift += 1
         mlen = self._encode_mlen(self.memo)
-        prefix |= len(mlen) << 1
+        prefix |= len(mlen) << shift
+        shift += 2
         if isinstance(self.lock, bool):
-            prefix |= int(self.lock) << 3
+            prefix |= int(self.lock) << shift
         else:
             raise ValueError('Invalid lock value.')
         return b''.join([
-            pack('<B', prefix), signer, mlen, (self.memo or b'')
+            pack('<B', prefix), asset, signer, new_signer, mlen, (self.memo or b'')
         ])
 
     @classmethod
@@ -666,12 +738,15 @@ class AssetSpawn(TransactionInput):
         if not view:
             raise ValueError('Invalid size when decoding.')
         prefix = view[0]
-        signer = cls._decode_signer(prefix & 1, view[1:])
+        asset = Nonce_16.decode(view[1:])
+        offset = 1 + asset.size
+        signer = cls._decode_signer(prefix & 1, view[offset:])
         prefix >>= 1
-        memo = cls._decode_memo(prefix & 3, view[1+signer.size:])
+        offset += signer.size
+        memo = cls._decode_memo(prefix & 3, view[offset:])
         prefix >>= 2
         lock = bool(prefix & 1)
-        return cls(signer, memo, lock, _validate=False)
+        return cls(asset, signer, memo, lock, _validate=False)
 
 
 class TransactionOutput(TransactionElement):
@@ -687,22 +762,30 @@ class TransactionOutput(TransactionElement):
                 and (
                     not isinstance(units, int)
                     or units <= 0
-                    or units >= 0x1_0000_0000_0000_0000
+                    or (units.bit_length() + 7) >> 3 > MAX_INT_BYTES
                 )
             ):
                 raise ValueError('Invalid units.')
         super().__init__(memo, _validate)
-        self.units = units
+        self._units = units
+
+    @property
+    def units(self) -> int | None:
+        return self._units if self._units else None
+    
+    @units.setter
+    def units(self, value: int | None) -> int | None:
+        self._units = value if value else None
+        return self._units
 
 
-class UTXOSpawn(TransactionOutput):
+class ArkaUTXO(TransactionOutput):
 
     SIGNER_KEY = 0
     SIGNER_HASH = 1
     SIGNER_NONE = 2
 
     def __init__(self,
-        asset: SignerHash | None = None,
         signer: SignerHash | SignerKey | None = None,
         units: int | None = None,
         block_reward: int | None = None,
@@ -713,8 +796,6 @@ class UTXOSpawn(TransactionOutput):
         _validate: bool = True
     ):
         if _validate:
-            if asset is not None and not isinstance(asset, SignerHash):
-                raise ValueError('Invalid asset identifier.')
             if (
                 signer is not None
                 and not isinstance(signer, (SignerKey, SignerHash))
@@ -725,7 +806,7 @@ class UTXOSpawn(TransactionOutput):
                 and (
                     not isinstance(block_reward, int)
                     or block_reward < 0
-                    or block_reward >= 0x1_0000_0000_0000_0000
+                    or (block_reward.bit_length() + 7) >> 3 > MAX_INT_BYTES
                 )
             ):
                 raise ValueError('Invalid block_reward.')
@@ -734,7 +815,7 @@ class UTXOSpawn(TransactionOutput):
                 and (
                     not isinstance(exec_fund, int)
                     or exec_fund < 0
-                    or exec_fund >= 0x1_0000_0000_0000_0000
+                    or (exec_fund.bit_length() + 7) >> 3 > MAX_INT_BYTES
                 )
             ):
                 raise ValueError('Invalid exec_fund.')
@@ -743,7 +824,7 @@ class UTXOSpawn(TransactionOutput):
                 and (
                     not isinstance(utxo_fee, int)
                     or utxo_fee < 0
-                    or utxo_fee >= 0x1_0000_0000_0000_0000
+                    or (utxo_fee.bit_length() + 7) >> 3 > MAX_INT_BYTES
                 )
             ):
                 raise ValueError('Invalid utxo_fee.')
@@ -752,24 +833,22 @@ class UTXOSpawn(TransactionOutput):
                 and (
                     not isinstance(data_fee, int)
                     or data_fee < 0
-                    or data_fee >= 0x1_0000_0000_0000_0000
+                    or (data_fee.bit_length() + 7) >> 3 > MAX_INT_BYTES
                 )
             ):
                 raise ValueError('Invalid data_fee.')
         super().__init__(units, memo, _validate=_validate)
-        self.asset = asset
         self.signer = signer
         self.block_reward = block_reward
         self.exec_fund = exec_fund
         self.utxo_fee = utxo_fee
         self.data_fee = data_fee
 
-    def __eq__(self, value: UTXOSpawn) -> bool:
-        if not isinstance(value, UTXOSpawn):
+    def __eq__(self, value: ArkaUTXO) -> bool:
+        if not isinstance(value, ArkaUTXO):
             return NotImplemented
         return (
-            self.asset == value.asset
-            and self.signer == value.signer
+            self.signer == value.signer
             and self.units == value.units
             and self.block_reward == value.block_reward
             and self.exec_fund == value.exec_fund
@@ -780,8 +859,7 @@ class UTXOSpawn(TransactionOutput):
 
     @property
     def size(self) -> int:
-        n = 2
-        n += self.asset.size if self.asset else 0
+        n = 3
         match self.signer:
             case None:
                 pass
@@ -789,57 +867,75 @@ class UTXOSpawn(TransactionOutput):
                 n += self.signer.size
             case _:
                 raise ValueError('Invalid signer.')
-        n += 8 if self.units else 0
-        n += 0 if self.block_reward is None else 8
-        n += 0 if self.exec_fund is None else 8
-        n += 0 if self.utxo_fee is None else 8
-        n += 0 if self.data_fee is None else 8
+        if self.units:
+            n += (self.units.bit_length() + 7) >> 3
+        if self.block_reward:
+            n += ((self.block_reward.bit_length() + 7) >> 3)
+        else:
+            n += 0 if self.block_reward is None else 1
+        if self.exec_fund:
+            n += ((self.exec_fund.bit_length() + 7) >> 3)
+        else:
+            n += 0 if self.exec_fund is None else 1
+        if self.utxo_fee:
+            n += ((self.utxo_fee.bit_length() + 7) >> 3)
+        else:
+            n += 0 if self.utxo_fee is None else 1
+        if self.data_fee:
+            n += ((self.data_fee.bit_length() + 7) >> 3)
+        else:
+            n += 0 if self.data_fee is None else 1
         mlen = self._encode_mlen(self.memo)
         if mlen:
-            n += len(mlen) + len(self.memo)
+            n += len(mlen) + len(self.memo or b'')
         return n
 
     def encode(self) -> bytes:
         prefix = 0
-        asset = self.asset.encode() if self.asset else b''
-        prefix |= 1 if asset else 0
         match self.signer:
             case SignerKey():
                 signer = self.signer.encode()
-                prefix |= self.SIGNER_KEY << 1
+                prefix |= self.SIGNER_KEY
             case SignerHash():
                 signer = self.signer.encode()
-                prefix |= self.SIGNER_HASH << 1
+                prefix |= self.SIGNER_HASH
             case None:
                 signer = b''
-                prefix |= self.SIGNER_NONE << 1
+                prefix |= self.SIGNER_NONE
             case _:
                 raise ValueError('Invalid signer.')
-        units = pack('<Q', self.units) if self.units else b''
-        prefix |= 8 if units else 0
-        reward = b'' if self.block_reward is None else pack('<Q', self.block_reward)
-        prefix |= 16 if reward else 0
-        fund = b'' if self.exec_fund is None else pack('<Q', self.exec_fund)
-        prefix |= 32 if fund else 0
-        utxo_fee = b'' if self.utxo_fee is None else pack('<Q', self.utxo_fee)
-        prefix |= 64 if utxo_fee else 0
-        data_fee = b'' if self.data_fee is None else pack('<Q', self.data_fee)
-        prefix |= 128 if data_fee else 0
+        shift = 2
+        units = _encode_optional_int(self.units)
+        prefix |= len(units) << shift
+        shift += 4
+        reward = _encode_optional_int(self.block_reward)
+        prefix |= len(reward) << shift
+        shift += 4
+        fund = _encode_optional_int(self.exec_fund)
+        prefix |= len(fund) << shift
+        shift += 4
+        utxo_fee = _encode_optional_int(self.utxo_fee)
+        prefix |= len(utxo_fee) << shift
+        shift += 4
+        data_fee = _encode_optional_int(self.data_fee)
+        prefix |= len(data_fee) << shift
+        shift += 4
         mlen = self._encode_mlen(self.memo)
-        prefix |= len(mlen) << 8
+        prefix |= len(mlen) << shift
+        shift += 2
+        prefix = prefix.to_bytes(3, 'little')
         return b''.join([
-            pack('<H', prefix), asset, signer, units, reward,
-            fund, utxo_fee, data_fee, mlen, (self.memo or b'')
+            prefix, signer, units, reward, fund,
+            utxo_fee, data_fee, mlen, (self.memo or b'')
         ])
 
     @classmethod
-    def decode(cls, view: bytes | bytearray | memoryview) -> UTXOSpawn:
+    def decode(cls, view: bytes | bytearray | memoryview) -> ArkaUTXO:
         try:
-            prefix = unpack_from('<H', view, 0)[0]
-            offset = 2
-            asset = SignerHash.decode(view[offset:]) if prefix & 1 else None
-            offset += 0 if asset is None else asset.size
-            prefix >>= 1
+            if len(view) < 3:
+                raise IndexError()
+            prefix = int.from_bytes(view[:3], 'little')
+            offset = 3
             match prefix & 3:
                 case cls.SIGNER_NONE:
                     signer = None
@@ -851,28 +947,141 @@ class UTXOSpawn(TransactionOutput):
                     raise ValueError('Invalid signer.')
             offset += 0 if signer is None else signer.size
             prefix >>= 2
-            units = unpack_from('<Q', view, offset)[0] if prefix & 1 else None
+            nbytes = prefix & 15
+            units = _decode_optional_int(nbytes, view[offset:])
             if units == 0:
                 raise ValueError('Invalid units.')
-            offset += 8 if prefix & 1 else 0
-            prefix >>= 1
-            reward = unpack_from('<Q', view, offset)[0] if prefix & 1 else None
-            offset += 8 if prefix & 1 else 0
-            prefix >>= 1
-            fund = unpack_from('<Q', view, offset)[0] if prefix & 1 else None
-            offset += 8 if prefix & 1 else 0
-            prefix >>= 1
-            utxo_fee = unpack_from('<Q', view, offset)[0] if prefix & 1 else None
-            offset += 8 if prefix & 1 else 0
-            prefix >>= 1
-            data_fee = unpack_from('<Q', view, offset)[0] if prefix & 1 else None
-            offset += 8 if prefix & 1 else 0
-            prefix >>= 1
+            offset += nbytes
+            prefix >>= 4
+            nbytes = prefix & 15
+            reward = _decode_optional_int(nbytes, view[offset:])
+            offset += nbytes
+            prefix >>= 4
+            nbytes = prefix & 15
+            fund = _decode_optional_int(nbytes, view[offset:])
+            offset += nbytes
+            prefix >>= 4
+            nbytes = prefix & 15
+            utxo_fee = _decode_optional_int(nbytes, view[offset:])
+            offset += nbytes
+            prefix >>= 4
+            nbytes = prefix & 15
+            data_fee = _decode_optional_int(nbytes, view[offset:])
+            offset += nbytes
+            prefix >>= 4
             memo = cls._decode_memo(prefix & 3, view[offset:])
             return cls(
-                asset, signer, units, reward, fund,
-                utxo_fee, data_fee, memo, _validate=False
+                signer, units, reward, fund, utxo_fee,
+                data_fee, memo, _validate=False
             )
+        except (IndexError, StructError) as e:
+            raise ValueError('Invalid view size.')
+
+
+class Nonce_16(Bytes):
+
+    SIZE = 16
+
+
+class AssetUTXO(TransactionOutput):
+
+    SIGNER_KEY = 0
+    SIGNER_HASH = 1
+    SIGNER_NONE = 2
+
+    def __init__(self,
+        asset: Nonce_16,
+        signer: SignerKey | SignerHash | None = None,
+        units: int | None = None,
+        memo: bytes | bytearray | memoryview | None = None,
+        _validate: bool = True
+    ):
+        if _validate:
+            if not isinstance(asset, Nonce_16):
+                raise ValueError('Invalid asset identifier.')
+            if (
+                signer is not None
+                and not isinstance(signer, (SignerKey, SignerHash))
+            ):
+                raise ValueError('Invalid signer.')
+        super().__init__(units, memo, _validate=_validate)
+        self.asset = asset
+        self.signer = signer
+    
+    def __eq__(self, value: AssetUTXO) -> bool:
+        if not isinstance(value, AssetUTXO):
+            return NotImplemented
+        return (
+            self.asset == value.asset
+            and self.signer == value.signer
+            and self.units == value.units
+            and self.memo == value.memo
+        )
+
+    @property
+    def size(self) -> int:
+        n = 1
+        n += self.asset.size
+        n += self.signer.size if self.signer else 0
+        if self.units:
+            n += (self.units.bit_length() + 7) >> 3
+        mlen = self._encode_mlen(self.memo)
+        if mlen:
+            n += len(mlen) + len(self.memo or b'')
+        return n
+
+    def encode(self) -> bytes:
+        prefix = 0
+        asset = self.asset.encode()
+        match self.signer:
+            case SignerKey():
+                signer = self.signer.encode()
+                prefix |= self.SIGNER_KEY
+            case SignerHash():
+                signer = self.signer.encode()
+                prefix |= self.SIGNER_HASH
+            case None:
+                signer = b''
+                prefix |= self.SIGNER_NONE
+            case _:
+                raise ValueError('Invalid signer.')
+        shift = 2
+        units = _encode_optional_int(self.units)
+        prefix |= len(units) << shift
+        shift += 4
+        mlen = self._encode_mlen(self.memo)
+        prefix |= len(mlen) << shift
+        shift += 2
+        return b''.join([
+            pack('<B', prefix), asset, signer, units, mlen, (self.memo or b'')
+        ])
+
+    @classmethod
+    def decode(cls, view: bytes | bytearray | memoryview) -> AssetUTXO:
+        try:
+            prefix = view[0]
+            offset = 1
+            asset = Nonce_16.decode(view[offset:])
+            offset += asset.size
+            match prefix & 3:
+                case cls.SIGNER_NONE:
+                    signer = None
+                case cls.SIGNER_HASH:
+                    signer = SignerHash.decode(view[offset:])
+                case cls.SIGNER_KEY:
+                    signer = SignerKey.decode(view[offset:])
+                case _:
+                    raise ValueError('Invalid signer.')
+            offset += 0 if signer is None else signer.size
+            prefix >>= 2
+            nbytes = prefix & 15
+            units = _decode_optional_int(nbytes, view[offset:])
+            if units == 0:
+                raise ValueError('Invalid units.')
+            offset += nbytes
+            prefix >>= 4
+            memo = cls._decode_memo(prefix & 3, view[offset:])
+            return cls(asset, signer, units, memo, _validate=False)
         except (IndexError, StructError) as e:
             raise ValueError('Invalid view size.')
 
@@ -880,14 +1089,14 @@ class UTXOSpawn(TransactionOutput):
 class ExecutiveVote(TransactionOutput):
     
     def __init__(self,
-        executive: SignerHash,
+        executive: Nonce_16,
         promote: bool = True,
         units: int | None = None,
         memo: bytes | bytearray | memoryview | None = None,
         _validate: bool = True
     ):
         if _validate:
-            if not isinstance(executive, SignerHash):
+            if not isinstance(executive, Nonce_16):
                 raise ValueError('Invalid executive identifier.')
             if not isinstance(promote, bool):
                 raise ValueError('Invalid promote flag.')
@@ -919,10 +1128,10 @@ class ExecutiveVote(TransactionOutput):
         prefix = 0
         executive = self.executive.encode()
         prefix |= 1 if self.promote else 0
-        units = pack('<Q', self.units) if self.units else b''
-        prefix |= 2 if units else 0
+        units = _encode_optional_int(self.units)
+        prefix |= len(units) << 1
         mlen = self._encode_mlen(self.memo)
-        prefix |= len(mlen) << 2
+        prefix |= len(mlen) << 5
         return b''.join([
             pack('<B', prefix), executive, units, mlen, (self.memo or b'')
         ])
@@ -932,14 +1141,16 @@ class ExecutiveVote(TransactionOutput):
         try:
             prefix = view[0]
             offset = 1
-            executive = SignerHash.decode(view[offset:])
+            executive = Nonce_16.decode(view[offset:])
             offset += executive.size
             promote = bool(prefix & 1)
-            units = unpack_from('<Q', view, offset)[0] if prefix & 2 else None
+            prefix >>= 1
+            nbytes = prefix & 15
+            units = _decode_optional_int(nbytes, view[offset:])
             if units == 0:
                 raise ValueError('Invalid units.')
-            offset += 8 if prefix & 2 else 0
-            prefix >>= 2
+            offset += nbytes
+            prefix >>= 4
             memo = cls._decode_memo(prefix & 3, view[offset:])
             return cls(executive, promote, units, memo, _validate=False)
         except (IndexError, StructError) as e:
@@ -959,15 +1170,16 @@ class Transaction(AbstractElement):
     ASSET_SPAWN = 3
     EXECUTIVE_SPAWN = 4
 
-    UTXO_SPAWN = 0
-    EXECUTIVE_VOTE = 1
+    ARKA_UTXO = 0
+    ASSET_UTXO = 1
+    EXECUTIVE_VOTE = 2
 
     def __init__(self,
         inputs: list[
             PublisherSpend | ExecutiveSpend | UTXOSpend
             | AssetSpawn | ExecutiveSpawn
         ],
-        outputs: list[UTXOSpawn | ExecutiveVote] = [],
+        outputs: list[ArkaUTXO | AssetUTXO | ExecutiveVote] = [],
         signatures: list[Signature] = [],
         _validate: bool = True
     ):
@@ -981,7 +1193,7 @@ class Transaction(AbstractElement):
             ):
                 raise ValueError('Invalid inputs list.')
             if not all(
-                isinstance(x, (UTXOSpawn, ExecutiveVote))
+                isinstance(x, (ArkaUTXO, AssetUTXO, ExecutiveVote))
                 for x in outputs
             ):
                 raise ValueError('Invalid outputs list.')
@@ -1018,10 +1230,10 @@ class Transaction(AbstractElement):
     def size(self) -> int:
         n = 6
         n += (len(self.inputs) + 1) >> 1
-        n += (len(self.outputs) + 7) >> 3
+        n += (len(self.outputs) + 3) >> 2
         n += sum(x.size for x in self.inputs)
         n += sum(x.size for x in self.outputs)
-        n += 64 * len(self.signatures)
+        n += Signature.SIZE * len(self.signatures)
         return n
 
     async def hash(self) -> TransactionHash:
@@ -1050,13 +1262,15 @@ class Transaction(AbstractElement):
                 case _:
                     raise ValueError('Invalid input type.')
         inputs = [x.encode() for x in self.inputs]
-        out_types = bytearray((len(self.outputs) + 7) >> 3)
+        out_types = bytearray((len(self.outputs) + 3) >> 2)
         for i, x in enumerate(self.outputs):
             match x:
-                case UTXOSpawn():
-                    out_types[i >> 3] |= self.UTXO_SPAWN << (i & 7)
+                case ArkaUTXO():
+                    out_types[i >> 2] |= self.ARKA_UTXO << (i & 3)
+                case AssetUTXO():
+                    out_types[i >> 2] |= self.ASSET_UTXO << (i & 3)
                 case ExecutiveVote():
-                    out_types[i >> 3] |= self.EXECUTIVE_VOTE << (i & 7)
+                    out_types[i >> 2] |= self.EXECUTIVE_VOTE << (i & 3)
                 case _:
                     raise ValueError('Invalid output type.')
         outputs = [x.encode() for x in self.outputs]
@@ -1076,7 +1290,7 @@ class Transaction(AbstractElement):
             in_types = view[offset:offset + in_types_len]
             offset += in_types_len
             # Output types
-            out_types_len = (noutputs + 7) >> 3
+            out_types_len = (noutputs + 3) >> 2
             if len(view) < offset + out_types_len:
                 raise IndexError()
             out_types = view[offset:offset + out_types_len]
@@ -1098,24 +1312,26 @@ class Transaction(AbstractElement):
                     case cls.EXECUTIVE_SPAWN:
                         x = ExecutiveSpawn.decode(view[offset:])
                     case _:
-                        raise ValueError('Invalid input type.')
+                        raise ValueError('Invalid Transaction input type.')
                 inputs.append(x)
                 offset += x.size
             # Decode outputs
-            outputs: list[UTXOSpawn | ExecutiveVote] = []
+            outputs: list[ArkaUTXO | ExecutiveVote] = []
             for i in range(noutputs):
-                match (out_types[i >> 3] >> (i & 7)) & 1:
-                    case cls.UTXO_SPAWN:
-                        x = UTXOSpawn.decode(view[offset:])
+                match (out_types[i >> 2] >> (i & 3)) & 3:
+                    case cls.ARKA_UTXO:
+                        x = ArkaUTXO.decode(view[offset:])
+                    case cls.ASSET_UTXO:
+                        x = AssetUTXO.decode(view[offset:])
                     case cls.EXECUTIVE_VOTE:
                         x = ExecutiveVote.decode(view[offset:])
+                    case _:
+                        raise ValueError('Invalid Transaction output type.')
                 outputs.append(x)
                 offset += x.size
             # Decode signatures
             signatures: list[Signature] = []
             for i in range(nsignatures):
-                if len(view) < offset + 64:
-                    raise IndexError()
                 x = Signature.decode(view[offset:])
                 signatures.append(x)
                 offset += x.size
@@ -1140,14 +1356,12 @@ class TransactionListHash(Bytes):
     SIZE = 32
 
 
-class Nonce(Bytes):
+class Nonce_32(Bytes):
 
     SIZE = 32
 
 
 class Parameters(AbstractElement):
-
-    SIZE = 66
 
     TARGET_MAX = 255 * 2 ** 255
 
@@ -1157,7 +1371,7 @@ class Parameters(AbstractElement):
         exec_fund: int,         # units generated each epoch for executives
         utxo_fee: int,          # decay of UTXOs per block as a fraction z / 2**64
         data_fee: int,          # units to destroy per byte in payment
-        executive: SignerHash,  # identifier of elected executive
+        executive: Nonce_16,    # identifier of elected executive
         _validate: bool = True
     ):
         if _validate:
@@ -1170,25 +1384,25 @@ class Parameters(AbstractElement):
             if (
                 not isinstance(block_reward, int)
                 or block_reward < 0
-                or block_reward >= 0x1_0000_0000_0000_0000
+                or (block_reward.bit_length() + 7) >> 3 > MAX_INT_BYTES
             ):
                 raise ValueError('Invalid block_reward.')
             if (
                 not isinstance(exec_fund, int)
                 or exec_fund < 0
-                or exec_fund >= 0x1_0000_0000_0000_0000
+                or (exec_fund.bit_length() + 7) >> 3 > MAX_INT_BYTES
             ):
                 raise ValueError('Invalid exec_fund.')
             if (
                 not isinstance(utxo_fee, int)
                 or utxo_fee < 0
-                or utxo_fee >= 0x1_0000_0000_0000_0000
+                or (utxo_fee.bit_length() + 7) >> 3 > MAX_INT_BYTES
             ):
                 raise ValueError('Invalid utxo_fee.')
             if (
                 not isinstance(data_fee, int)
                 or data_fee < 0
-                or data_fee >= 0x1_0000_0000_0000_0000
+                or (data_fee.bit_length() + 7) >> 3 > MAX_INT_BYTES
             ):
                 raise ValueError('Invalid data_fee.')
             if not isinstance(executive, SignerHash):
@@ -1214,7 +1428,13 @@ class Parameters(AbstractElement):
 
     @property
     def size(self) -> int:
-        return self.SIZE
+        n = 4       # prefix[2] | target[2] 
+        n += (self.block_reward.bit_length() + 7) >> 3
+        n += (self.exec_fund.bit_length() + 7) >> 3
+        n += (self.utxo_fee.bit_length() + 7) >> 3
+        n += (self.data_fee.bit_length() + 7) >> 3
+        n += self.executive.size
+        return n
 
     def encode_target(self) -> bytes:
         n = max(0, self.target.bit_length() - 8)
@@ -1222,20 +1442,61 @@ class Parameters(AbstractElement):
         return bytes([x, n])
 
     def encode(self) -> bytes:
+        prefix = 0
         target = self.encode_target()
-        ints = pack('<QQQQ', 
-            self.block_reward, self.exec_fund, self.utxo_fee, self.data_fee
-        )
+        reward = _encode_optional_int(self.block_reward or None)
+        prefix |= len(reward)
+        shift = 4
+        fund = _encode_optional_int(self.exec_fund or None)
+        prefix |= len(fund) << shift
+        shift += 4
+        utxo_fee = _encode_optional_int(self.utxo_fee or None)
+        prefix |= len(utxo_fee) << shift
+        shift += 4
+        data_fee = _encode_optional_int(self.data_fee or None)
+        prefix |= len(data_fee) << shift
+        shift += 4
         executive = self.executive.encode()
-        return b''.join([target, ints, executive])
+        prefix = prefix.to_bytes(2, 'little')
+        return b''.join([prefix, target, reward, fund, utxo_fee, data_fee, executive])
 
     @classmethod
     def decode(cls, view: bytes | bytearray | memoryview) -> Parameters:
-        if len(view) < cls.SIZE:
+        try:
+            prefix = unpack_from('<H', view, 0)[0]
+            target = view[2] * (1 << view[3])
+            offset = 4
+            nbytes = prefix & 15
+            reward = _decode_optional_int(nbytes, view[offset:])
+            if reward == 0:
+                raise ValueError('Invalid block_reward.')
+            reward = reward or 0
+            offset += nbytes
+            prefix >>= 4
+            nbytes = prefix & 15
+            fund = _decode_optional_int(nbytes, view[offset:])
+            if fund == 0:
+                raise ValueError('Invalid exec_fund.')
+            fund = fund or 0
+            offset += nbytes
+            prefix >>= 4
+            nbytes = prefix & 15
+            utxo_fee = _decode_optional_int(nbytes, view[offset:])
+            if utxo_fee == 0:
+                raise ValueError('Invalid utxo_fee.')
+            utxo_fee = utxo_fee or 0
+            offset += nbytes
+            prefix >>= 4
+            nbytes = prefix & 15
+            data_fee = _decode_optional_int(nbytes, view[offset:])
+            if data_fee == 0:
+                raise ValueError('Invalid data_fee.')
+            data_fee = data_fee or 0
+            offset += nbytes
+            prefix >>= 4
+            executive = Nonce_16.decode(view[offset:])
+        except (IndexError, StructError) as e:
             raise ValueError('Invalid view size.')
-        target = view[0] * (1 << view[1])
-        reward, fund, utxo_fee, data_fee = unpack_from('<QQQQ', view, 2)
-        executive = SignerHash.decode(view[34:])
         return cls(target, reward, fund, utxo_fee, data_fee, executive, _validate=False)
 
 
@@ -1248,7 +1509,7 @@ class BlockHeader(AbstractElement):
         id: int, timestamp: int, prev_block: BlockHash,
         publisher: SignerKey | SignerHash, ntxs: int | None = None,
         root_hash: TransactionListHash | None = None,
-        parameters: Parameters | None = None, nonce: Nonce | None = None,
+        parameters: Parameters | None = None, nonce: Nonce_32 | None = None,
         _validate: bool = True
     ):
         if _validate:
@@ -1274,7 +1535,7 @@ class BlockHeader(AbstractElement):
             elif (
                 not isinstance(ntxs, int)
                 or ntxs <= 0
-                or ntxs >= 0x1_0000_0000_0000_0000
+                or ntxs >= 0x1_0000_0000
             ):
                 raise ValueError('Invalid ntxs.')
             if root_hash is None:
@@ -1284,7 +1545,7 @@ class BlockHeader(AbstractElement):
                 raise ValueError('Invalid root_hash.')
             if parameters is not None and not isinstance(parameters, Parameters):
                 raise ValueError('Invalid parameters.')
-            if nonce is not None and not isinstance(nonce, Nonce):
+            if nonce is not None and not isinstance(nonce, Nonce_32):
                 raise ValueError('Invalid nonce.')
         self.id = id
         self.timestamp = timestamp
@@ -1394,7 +1655,7 @@ class BlockHeader(AbstractElement):
                 root_hash = None
             parameters = Parameters.decode(view[offset:]) if prefix & 4 else None
             offset += parameters.size if parameters else 0
-            nonce = Nonce.decode(view[offset:]) if prefix & 8 else None
+            nonce = Nonce_32.decode(view[offset:]) if prefix & 8 else None
         except (IndexError, StructError) as e:
             raise ValueError('Invalid view size.')
         return cls(

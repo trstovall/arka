@@ -609,17 +609,18 @@ class ExecutiveSpawn(TransactionInput):
 
     def __init__(self,
         executive: Nonce_16,
-        signer: SignerKey | SignerList,
-        new_signer: SignerHash | None = None,
+        signer: SignerKey | SignerList | None = None,
+        new_signer: SignerKey | SignerList | None = None,
         memo: bytes | bytearray | memoryview | None = None,
         _validate: bool = True
     ):
         if _validate:
             if not isinstance(executive, Nonce_16):
                 raise ValueError('Invalid executive identifier.')
-            if signer is None:
-                raise ValueError('Invalid signer.')
-            if new_signer is not None and not isinstance(new_signer, SignerHash):
+            if (
+                new_signer is not None
+                and not isinstance(new_signer, (SignerKey, SignerList))
+            ):
                 raise ValueError('Invalid new_signer.')
         super().__init__(signer, memo, _validate=_validate)
         self.executive = executive
@@ -639,7 +640,7 @@ class ExecutiveSpawn(TransactionInput):
     def size(self) -> int:
         n = 1           # prefix[1]
         n += self.executive.size
-        n += self.signer.size
+        n += self.signer.size if self.signer else 0
         n += self.new_signer.size if self.new_signer else 0
         mlen = self._encode_mlen(self.memo)
         if mlen:
@@ -648,11 +649,11 @@ class ExecutiveSpawn(TransactionInput):
     
     def encode(self) -> bytes:
         executive = self.executive.encode()
-        prefix, signer = self._encode_signer(self.signer)
-        shift = 1
-        new_signer = b'' if self.new_signer is None else self.new_signer.encode()
-        prefix |= (1 << shift) if new_signer else 0
-        shift += 1
+        prefix, signer = self._encode_optional_signer(self.signer)
+        shift = 2
+        _prefix, new_signer = self._encode_optional_signer(self.new_signer)
+        prefix |= _prefix << shift
+        shift += 2
         mlen = self._encode_mlen(self.memo)
         prefix |= len(mlen) << shift
         return b''.join([
@@ -666,11 +667,11 @@ class ExecutiveSpawn(TransactionInput):
         prefix = view[0]
         executive = Nonce_16.decode(view[1:])
         offset = 1 + executive.size
-        signer = cls._decode_signer(prefix & 1, view[offset:])
-        prefix >>= 1
-        offset += signer.size
-        new_signer = SignerHash.decode(view[offset:]) if prefix & 1 else None
-        prefix >>= 1
+        signer = cls._decode_optional_signer(prefix & 3, view[offset:])
+        prefix >>= 2
+        offset += signer.size if signer else 0
+        new_signer = cls._decode_optional_signer(prefix & 3, view[offset:])
+        prefix >>= 2
         offset += new_signer.size if new_signer else 0
         memo = cls._decode_memo(prefix & 3, view[offset:])
         return cls(executive, signer, new_signer, memo, _validate=False)
@@ -680,8 +681,8 @@ class AssetSpawn(TransactionInput):
 
     def __init__(self,
         asset: Nonce_16,
-        signer: SignerKey | SignerList,
-        new_signer: SignerHash | None = None,
+        signer: SignerKey | SignerList | None = None,
+        new_signer: SignerKey | SignerList | None = None,
         memo: bytes | bytearray | memoryview | None = None,
         lock: bool = False,
         _validate: bool = True
@@ -689,7 +690,10 @@ class AssetSpawn(TransactionInput):
         if _validate:
             if not isinstance(asset, Nonce_16):
                 raise ValueError('Invalid asset identifier.')
-            if new_signer is not None and not isinstance(new_signer, SignerHash):
+            if (
+                new_signer is not None
+                and not isinstance(new_signer, (SignerKey, SignerList))
+            ):
                 raise ValueError('Invalid new_signer.')
             if not isinstance(lock, bool):
                 raise ValueError('Invalid lock.')
@@ -713,7 +717,7 @@ class AssetSpawn(TransactionInput):
     def size(self) -> int:
         n = 1
         n += self.asset.size
-        n += self.signer.size
+        n += self.signer.size if self.signer else 0
         n += self.new_signer.size if self.new_signer else 0
         mlen = self._encode_mlen(self.memo)
         if mlen:
@@ -722,18 +726,15 @@ class AssetSpawn(TransactionInput):
     
     def encode(self) -> bytes:
         asset = self.asset.encode()
-        prefix, signer = self._encode_signer(self.signer)
-        shift = 1
-        new_signer = b'' if self.new_signer is None else self.new_signer.encode()
-        prefix |= (1 << shift) if new_signer else 0
-        shift += 1
+        prefix, signer = self._encode_optional_signer(self.signer)
+        shift = 2
+        _prefix, new_signer = self._encode_optional_signer(self.new_signer)
+        prefix |= _prefix << shift
+        shift += 2
         mlen = self._encode_mlen(self.memo)
         prefix |= len(mlen) << shift
         shift += 2
-        if isinstance(self.lock, bool):
-            prefix |= int(self.lock) << shift
-        else:
-            raise ValueError('Invalid lock value.')
+        prefix |= int(self.lock) << shift
         return b''.join([
             pack('<B', prefix), asset, signer, new_signer, mlen, (self.memo or b'')
         ])
@@ -745,13 +746,16 @@ class AssetSpawn(TransactionInput):
         prefix = view[0]
         asset = Nonce_16.decode(view[1:])
         offset = 1 + asset.size
-        signer = cls._decode_signer(prefix & 1, view[offset:])
-        prefix >>= 1
-        offset += signer.size
+        signer = cls._decode_optional_signer(prefix & 3, view[offset:])
+        prefix >>= 2
+        offset += signer.size if signer else 0
+        new_signer = cls._decode_optional_signer(prefix & 3, view[offset:])
+        prefix >>= 2
+        offset += new_signer.size if new_signer else 0
         memo = cls._decode_memo(prefix & 3, view[offset:])
         prefix >>= 2
         lock = bool(prefix & 1)
-        return cls(asset, signer, memo, lock, _validate=False)
+        return cls(asset, signer, new_signer, memo, lock, _validate=False)
 
 
 class TransactionOutput(TransactionElement):

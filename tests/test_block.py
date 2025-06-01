@@ -351,6 +351,7 @@ def test_executive_spawn_serdes():
     x = block.ExecutiveSpawn(
         executive=block.Nonce_16(urandom(16)),
         signer=block.SignerKey(urandom(32)),
+        new_signer=block.SignerKey(urandom(32)),
         memo=urandom(32)
     )
     y = block.ExecutiveSpawn.decode(x.encode())
@@ -372,9 +373,10 @@ def test_executive_spawn_keys():
     x = block.ExecutiveSpawn(
         executive=block.Nonce_16(urandom(16)),
         signer=keys[0],
+        new_signer=block.SignerKey(urandom(32)),
         memo=urandom(32)
     )
-    assert x.keys == [keys[0]]
+    assert x.keys == keys[:1]
     x = block.ExecutiveSpawn(
         executive=block.Nonce_16(urandom(16)),
         signer=block.SignerList(keys, 3),
@@ -388,6 +390,7 @@ def test_asset_spawn_serdes():
     x = block.AssetSpawn(
         asset=block.Nonce_16(urandom(16)),
         signer=keys[0],
+        new_signer=block.SignerKey(urandom(32)),
         memo=urandom(32),
         lock=False
     )
@@ -418,7 +421,8 @@ def test_asset_spawn_keys():
     keys = [block.SignerKey(urandom(32)) for i in range(3)]
     x = block.AssetSpawn(
         asset=block.Nonce_16(urandom(16)),
-        signer=keys[0]
+        signer=keys[0],
+        new_signer=block.SignerKey(urandom(32))
     )
     assert x.keys == keys[:1]
     x = block.AssetSpawn(
@@ -435,7 +439,6 @@ def test_arka_utxo_serdes():
     )
     y = block.ArkaUTXO.decode(x.encode())
     assert x == y
-    x.asset = block.SignerHash(urandom(32))
     y = block.ArkaUTXO.decode(x.encode())
     assert x == y
     x.signer = block.SignerKey(urandom(32))

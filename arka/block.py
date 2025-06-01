@@ -1312,7 +1312,6 @@ class Transaction(AbstractElement):
             out_types = view[offset:offset + out_types_len]
             offset += out_types_len
             # Decode inputs
-            print('Decoding inputs...')
             inputs: list[
                 PublisherSpend | ExecutiveSpend | UTXOSpend | AssetSpawn | ExecutiveSpawn
             ] = []
@@ -1332,12 +1331,10 @@ class Transaction(AbstractElement):
                         raise ValueError('Invalid Transaction input type.')
                 inputs.append(x)
                 offset += x.size
-                print(x.size)
             # Decode outputs
-            print('Decoding outputs...')
             outputs: list[ArkaUTXO | AssetUTXO | ExecutiveVote] = []
             for i in range(noutputs):
-                match (out_types[i >> 2] >> (i & 3)) & 3:
+                match (out_types[i >> 2] >> ((i & 3) << 1)) & 3:
                     case cls.ARKA_UTXO:
                         x = ArkaUTXO.decode(view[offset:])
                     case cls.ASSET_UTXO:
@@ -1348,7 +1345,6 @@ class Transaction(AbstractElement):
                         raise ValueError('Invalid Transaction output type.')
                 outputs.append(x)
                 offset += x.size
-                print((type(x), x.size))
             # Decode signatures
             signatures: list[Signature] = []
             for i in range(nsignatures):

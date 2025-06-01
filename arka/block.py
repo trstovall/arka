@@ -38,11 +38,11 @@ async def identity(x):
 class AbstractElement(object):
 
     def __eq__(self, value: AbstractElement) -> bool:
-        raise NotImplementedError()
+        return isinstance(value, type(self)) and self.encode() == value.encode()
     
     @property
     def size(self) -> int:
-        raise NotImplementedError()
+        return len(self.encode())
     
     def encode(self) -> bytes:
         raise NotImplementedError()
@@ -391,7 +391,7 @@ class TransactionInput(TransactionElement):
         self.signer = signer
 
     @property
-    def signers(self) -> list[SignerKey]:
+    def keys(self) -> list[SignerKey]:
         match self.signer:
             case SignerKey():
                 return [self.signer]
@@ -598,6 +598,11 @@ class ExecutiveSpend(BlockSpend):
     def decode(cls, view: bytes | bytearray | memoryview) -> ExecutiveSpend:
         x = BlockSpend.decode(view)
         return cls(x.block, x.signer, x.memo, _validate=False)
+
+
+class Nonce_16(Bytes):
+
+    SIZE = 16
 
 
 class ExecutiveSpawn(TransactionInput):
@@ -978,11 +983,6 @@ class ArkaUTXO(TransactionOutput):
             raise ValueError('Invalid view size.')
 
 
-class Nonce_16(Bytes):
-
-    SIZE = 16
-
-
 class AssetUTXO(TransactionOutput):
 
     SIGNER_KEY = 0
@@ -1181,6 +1181,7 @@ class Transaction(AbstractElement):
         ],
         outputs: list[ArkaUTXO | AssetUTXO | ExecutiveVote] = [],
         signatures: list[Signature] = [],
+        digest: TransactionHash | None = None,
         _validate: bool = True
     ):
         if _validate:
@@ -1202,9 +1203,15 @@ class Transaction(AbstractElement):
                 for x in signatures
             ):
                 raise ValueError('Invalid signatures list.')
+            if (
+                digest is not None
+                and not isinstance(digest, TransactionHash)
+            ):
+                raise ValueError('Invalid digest.')
         self.inputs = inputs
         self.outputs = outputs
         self.signatures = signatures
+        self.digest = digest
 
     def __eq__(self, value: Transaction) -> bool:
         if not isinstance(value, Transaction):
@@ -1216,8 +1223,8 @@ class Transaction(AbstractElement):
         )
 
     @property
-    def signers(self) -> list[SignerKey]:
-        keys: list[SignerKey] = [k for x in self.inputs for k in x.signers]
+    def keys(self) -> list[SignerKey]:
+        keys: list[SignerKey] = [k for x in self.inputs for k in x.keys]
         unique: set[bytes] = set()
         output: list[SignerKey] = []
         for k in keys:
@@ -1237,6 +1244,8 @@ class Transaction(AbstractElement):
         return n
 
     async def hash(self) -> TransactionHash:
+        if self.digest is not None:
+            return self.digest
         preimage = self.encode(include_signatures=False)
         return TransactionHash(await keccak_1600(preimage))
 
@@ -1279,7 +1288,10 @@ class Transaction(AbstractElement):
         )
 
     @classmethod
-    def decode(cls, view: bytes | bytearray | memoryview) -> Transaction:
+    def decode(cls,
+        view: bytes | bytearray | memoryview,
+        digest: TransactionHash | None = None
+    ) -> Transaction:
         try:
             ninputs, noutputs, nsignatures = unpack_from('<HHH', view, 0)
             offset = 6
@@ -1336,7 +1348,7 @@ class Transaction(AbstractElement):
                 signatures.append(x)
                 offset += x.size
             # Return Transaction
-            return cls(inputs, outputs, signatures, _validate=False)
+            return cls(inputs, outputs, signatures, digest, _validate=False)
         except (IndexError, StructError) as e:
             raise ValueError('Invalid view size.')
 
@@ -1756,11 +1768,18 @@ class Block(AbstractElement):
             [header, tx_lens] + transactions
         )
 
+    @staticmethod
+    async def _decode_transaction(view: bytes | bytearray | memoryview) -> Transaction:
+        tx = Transaction.decode(view)
+        if tx.size != len(view):
+            raise ValueError('Invalid transaction size.')
+        tx.digest = await tx.hash()
+        return tx
+
     @classmethod
-    def decode(cls, view: bytes | bytearray | memoryview) -> Block:
+    async def decode(cls, view: bytes | bytearray | memoryview) -> Block:
         try:
             header = BlockHeader.decode(view)
-            transactions: list[Transaction] = []
             if header.ntxs:
                 offset = header.size
                 end = offset + 2 * header.ntxs
@@ -1772,12 +1791,12 @@ class Block(AbstractElement):
                     offsets.append(end)
                 if len(view) < offsets[-1]:
                     raise IndexError()
-                for i in range(header.ntxs):
-                    s, e = offsets[i], offsets[i + 1]
-                    tx = Transaction.decode(view[s:e])
-                    if tx.size != (e - s):
-                        raise ValueError('Invalid transaction size.')
-                    transactions.append(tx)
+                transactions: list[Transaction] = await gather(*[
+                    cls._decode_transaction(view[offsets[i]:offsets[i + 1]])
+                    for i in range(header.ntxs)
+                ])
+            else:
+                transactions = []
         except (IndexError, StructError) as e:
             raise ValueError('Invalid view size.')
         return cls(

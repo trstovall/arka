@@ -349,12 +349,14 @@ def test_executive_spend_keys():
 def test_executive_spawn_serdes():
     keys = [block.SignerKey(urandom(32)) for i in range(3)]
     x = block.ExecutiveSpawn(
+        executive=block.Nonce_16(urandom(16)),
         signer=block.SignerKey(urandom(32)),
         memo=urandom(32)
     )
     y = block.ExecutiveSpawn.decode(x.encode())
     assert x == y
     x = block.ExecutiveSpawn(
+        executive=block.Nonce_16(urandom(16)),
         signer=block.SignerList(keys, 3),
         memo=urandom(0x100)
     )
@@ -368,11 +370,13 @@ def test_executive_spawn_serdes():
 def test_executive_spawn_keys():
     keys = [block.SignerKey(urandom(32)) for i in range(3)]
     x = block.ExecutiveSpawn(
+        executive=block.Nonce_16(urandom(16)),
         signer=keys[0],
         memo=urandom(32)
     )
     assert x.keys == [keys[0]]
     x = block.ExecutiveSpawn(
+        executive=block.Nonce_16(urandom(16)),
         signer=block.SignerList(keys, 3),
         memo=urandom(32)
     )
@@ -382,6 +386,7 @@ def test_executive_spawn_keys():
 def test_asset_spawn_serdes():
     keys = [block.SignerKey(urandom(32)) for i in range(3)]
     x = block.AssetSpawn(
+        asset=block.Nonce_16(urandom(16)),
         signer=keys[0],
         memo=urandom(32),
         lock=False
@@ -389,6 +394,7 @@ def test_asset_spawn_serdes():
     y = block.AssetSpawn.decode(x.encode())
     assert x == y
     x = block.AssetSpawn(
+        asset=block.Nonce_16(urandom(16)),
         signer=block.SignerList(keys, 3),
         memo=urandom(32),
         lock=False
@@ -396,6 +402,7 @@ def test_asset_spawn_serdes():
     y = block.AssetSpawn.decode(x.encode())
     assert x == y
     x = block.AssetSpawn(
+        asset=block.Nonce_16(urandom(16)),
         signer=block.SignerList(keys, 3),
         memo=urandom(32),
         lock=True
@@ -410,10 +417,12 @@ def test_asset_spawn_serdes():
 def test_asset_spawn_keys():
     keys = [block.SignerKey(urandom(32)) for i in range(3)]
     x = block.AssetSpawn(
+        asset=block.Nonce_16(urandom(16)),
         signer=keys[0]
     )
     assert x.keys == keys[:1]
     x = block.AssetSpawn(
+        asset=block.Nonce_16(urandom(16)),
         signer=block.SignerList(keys, 3)
     )
     assert x.keys == keys
@@ -477,7 +486,7 @@ def test_asset_utxo_serdes():
 
 def test_executive_vote_serdes():
     x = block.ExecutiveVote(
-        executive=block.SignerHash(urandom(32))
+        executive=block.Nonce_16(urandom(16))
     )
     y = block.ExecutiveVote.decode(x.encode())
     assert x == y

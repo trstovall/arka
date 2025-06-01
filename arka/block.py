@@ -1417,7 +1417,7 @@ class Parameters(AbstractElement):
                 or (data_fee.bit_length() + 7) >> 3 > MAX_INT_BYTES
             ):
                 raise ValueError('Invalid data_fee.')
-            if not isinstance(executive, SignerHash):
+            if not isinstance(executive, Nonce_16):
                 raise ValueError('Invalid executive identifier.')
         self.target = target
         self.block_reward = block_reward

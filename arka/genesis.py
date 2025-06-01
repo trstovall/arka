@@ -80,7 +80,7 @@ GENESIS = block.Block(
                 block.ExecutiveSpawn(
                     # signer is implicitly ARKATEKT_SIGNER
                     executive=ARKATEKT,
-                    memo=b'dict:' + json.dumps({
+                    memo=b'json:' + json.dumps({
                         'name': 'Arkatekt, Inc.',
                         'repo': 'https://github.com/arkatekt/',
                         'dns': 'arkatekt.com',
@@ -91,7 +91,7 @@ GENESIS = block.Block(
                 block.AssetSpawn(
                     asset=ARKATEKT_SHARES,
                     signer=ARKATEKT_SIGNER,
-                    memo=b'dict:' + json.dumps({
+                    memo=b'json:' + json.dumps({
                         'name': 'Arkatekt, Inc.',
                         'symbol': 'AKT',
                         'authorized': '1_000_000_000_000.000_000',
@@ -103,7 +103,7 @@ GENESIS = block.Block(
                 block.AssetSpawn(
                     asset=ARKATEKT_USD,
                     signer=ARKATEKT_SIGNER,
-                    memo=b'dict:' + json.dumps({
+                    memo=b'json:' + json.dumps({
                         'name': 'Arkatekt USD',
                         'symbol': 'AUSD',
                         'msg': "USD credit issued by Arkatekt, Inc.",
@@ -114,7 +114,7 @@ GENESIS = block.Block(
                 block.ExecutiveSpend(
                     # signer is implicitly ARKATEKT_SIGNER
                     block=0,
-                    memo=b'dict:' + json.dumps({
+                    memo=b'json:' + json.dumps({
                         'msg': 'Claiming 10_000_000_000 ARKA shares.'
                     }, indent=None, sort_keys=True).encode()
                 ),
@@ -122,7 +122,7 @@ GENESIS = block.Block(
                 block.PublisherSpend(
                     # signer is implicitly TRSTOVALL
                     block=0,
-                    memo=b'dict:' + json.dumps({
+                    memo=b'json:' + json.dumps({
                         'msg': 'For transaction fees.'
                     }, indent=None, sort_keys=True).encode()
                 ),
@@ -132,7 +132,7 @@ GENESIS = block.Block(
                 block.ArkaUTXO(
                     signer=ARKATEKT_SIGNER,
                     units=5_000_000_000 * 10 ** 6,
-                    memo=b'dict:' + json.dumps({
+                    memo=b'json:' + json.dumps({
                         'msg': '5 billion ARKA reserved by ARKATEKT.'
                     }, indent=None, sort_keys=True).encode(),
                 ),
@@ -141,7 +141,7 @@ GENESIS = block.Block(
                     asset=ARKATEKT_SHARES,
                     signer=ARKATEKT_SIGNER,
                     units=500_000_000_000 * 10 ** 6,
-                    memo=b'dict:' + json.dumps({
+                    memo=b'json:' + json.dumps({
                         'msg': '500 billion Arkatekt, Inc. shares reserved by ARKATEKT.'
                     }, indent=None, sort_keys=True).encode(),
                 ),
@@ -154,7 +154,7 @@ GENESIS = block.Block(
                     exec_fund=0,                    # Set executive fund to zero
                     utxo_fee=2**64 // (1_000 * 60 * 24 * 365),  # UTXOs decay over 1,000 years
                     data_fee=100_000,               # 0.1 ARKA per byte of data
-                    memo=b'dict:' + json.dumps({
+                    memo=b'json:' + json.dumps({
                         'msg': '1 billion ARKA paid to TRSTOVALL with votes set.'
                     }, indent=None, sort_keys=True).encode(),
                 ),
@@ -162,7 +162,7 @@ GENESIS = block.Block(
                 block.ArkaUTXO(
                     signer=TRSTOVALL,
                     units=4_000_000_000 * 10 ** 6,
-                    memo=b'dict:' + json.dumps({
+                    memo=b'json:' + json.dumps({
                         'msg': '4 billion ARKA paid to TRSTOVALL without votes set.'
                     }, indent=None, sort_keys=True).encode(),
                 ),
@@ -171,7 +171,7 @@ GENESIS = block.Block(
                     asset=ARKATEKT_SHARES,
                     signer=TRSTOVALL,
                     units=500_000_000_000 * 10 ** 6,
-                    memo=b'dict:' + json.dumps({
+                    memo=b'json:' + json.dumps({
                         'msg': '500 billion Arkatekt, Inc. shares paid to TRSTOVALL.'
                     }, indent=None, sort_keys=True).encode(),
                 ),
@@ -180,7 +180,7 @@ GENESIS = block.Block(
                     asset=ARKATEKT_USD,
                     signer=JOHN,
                     units=1 * 10 ** 6,
-                    memo=b'dict:' + json.dumps({
+                    memo=b'json:' + json.dumps({
                         'msg': '$1 AUSD paid to JOHN.'
                     }, indent=None, sort_keys=True).encode(),
                 ),
@@ -189,7 +189,7 @@ GENESIS = block.Block(
                     executive=ARKATEKT,
                     promote=True,                   # True = vote for, False = vote against
                     units=100_000 * 10 ** 6,        # ARKA burned to vote
-                    memo=b'dict:' + json.dumps({
+                    memo=b'json:' + json.dumps({
                         'msg': 'A vote for ARKATEKT.'
                     }, indent=None, sort_keys=True).encode(),
                 ),

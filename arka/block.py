@@ -1279,11 +1279,11 @@ class Transaction(AbstractElement):
         for i, x in enumerate(self.outputs):
             match x:
                 case ArkaUTXO():
-                    out_types[i >> 2] |= self.ARKA_UTXO << (i & 3)
+                    out_types[i >> 2] |= self.ARKA_UTXO << ((i & 3) << 1)
                 case AssetUTXO():
-                    out_types[i >> 2] |= self.ASSET_UTXO << (i & 3)
+                    out_types[i >> 2] |= self.ASSET_UTXO << ((i & 3) << 1)
                 case ExecutiveVote():
-                    out_types[i >> 2] |= self.EXECUTIVE_VOTE << (i & 3)
+                    out_types[i >> 2] |= self.EXECUTIVE_VOTE << ((i & 3) << 1)
                 case _:
                     raise ValueError('Invalid output type.')
         outputs = [x.encode() for x in self.outputs]

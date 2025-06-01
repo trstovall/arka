@@ -1122,7 +1122,7 @@ class ExecutiveVote(TransactionOutput):
     def size(self) -> int:
         n = 1       # prefix[1]
         n += self.executive.size
-        n += 8 if self.units else 0
+        n += ((self.units.bit_length() + 7) >> 3) if self.units else 0
         mlen = self._encode_mlen(self.memo)
         if mlen:
             n += len(mlen) + len(self.memo)

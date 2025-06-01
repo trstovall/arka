@@ -526,10 +526,12 @@ def test_transaction_serdes():
                 memo=urandom(0x100)
             ),
             block.AssetSpawn(
+                asset=block.Nonce_16(urandom(16)),
                 signer=block.SignerKey(urandom(32)),
                 memo=urandom(0x100)
             ),
             block.ExecutiveSpawn(
+                executive=block.Nonce_16(urandom(16)),
                 signer=block.SignerKey(urandom(32)),
                 memo=urandom(0x100)
             )
@@ -546,7 +548,7 @@ def test_transaction_serdes():
                 memo=urandom(32)
             ),
             block.ExecutiveVote(
-                executive=block.SignerHash(urandom(32)),
+                executive=block.Nonce_16(urandom(16)),
                 units=rand(15),
                 memo=b'hello'
             )
@@ -608,10 +610,12 @@ async def test_transaction_hash():
                 memo=urandom(0x100)
             ),
             block.AssetSpawn(
+                asset=block.Nonce_16(urandom(16)),
                 signer=block.SignerKey(urandom(32)),
                 memo=urandom(0x100)
             ),
             block.ExecutiveSpawn(
+                executive=block.Nonce_16(urandom(16)),
                 signer=block.SignerKey(urandom(32)),
                 memo=urandom(0x100)
             )
@@ -622,7 +626,7 @@ async def test_transaction_hash():
                 units=rand(8)
             ),
             block.ExecutiveVote(
-                executive=block.SignerHash(urandom(32)),
+                executive=block.Nonce_16(urandom(16)),
                 units=rand(8),
                 memo=b'hello'
             )
@@ -644,7 +648,7 @@ def test_parameters_serdes():
         exec_fund=rand(15),
         utxo_fee=rand(15),
         data_fee=rand(15),
-        executive=block.SignerHash(urandom(32))
+        executive=block.Nonce_16(urandom(16))
     )
     y = block.Parameters.decode(x.encode())
     assert x == y
@@ -678,7 +682,7 @@ def test_block_header_serdes():
             exec_fund=rand(15),
             utxo_fee=rand(15),
             data_fee=rand(15),
-            executive=block.SignerHash(urandom(32))
+            executive=block.Nonce_16(urandom(16))
         ),
         nonce=block.Nonce_32(urandom(32))
     )
@@ -712,7 +716,7 @@ async def test_block_header_hash():
             exec_fund=rand(8),
             utxo_fee=rand(8),
             data_fee=rand(8),
-            executive=block.SignerHash(urandom(32))
+            executive=block.Nonce_16(urandom(16))
         ),
         nonce=block.Nonce_32(urandom(32))
     )
@@ -735,7 +739,7 @@ async def test_block_header_hash_nonce():
             exec_fund=rand(8),
             utxo_fee=rand(8),
             data_fee=rand(8),
-            executive=block.SignerHash(urandom(32))
+            executive=block.Nonce_16(urandom(16))
         )
     )
     h = await x.hash()
@@ -763,7 +767,7 @@ async def test_block_serdes():
                 exec_fund=rand(15),
                 utxo_fee=rand(15),
                 data_fee=rand(15),
-                executive=block.SignerHash(urandom(32))
+                executive=block.Nonce_16(urandom(16))
             )
         ),
         transactions=[
@@ -841,7 +845,7 @@ async def test_block_hash():
                 exec_fund=rand(15),
                 utxo_fee=rand(15),
                 data_fee=rand(15),
-                executive=block.SignerHash(urandom(32))
+                executive=block.Nonce_16(urandom(16))
             ),
             nonce = block.Nonce_32(urandom(32))
         ),

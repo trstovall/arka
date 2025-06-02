@@ -1216,6 +1216,7 @@ class Transaction(AbstractElement):
         self.outputs = outputs
         self.signatures = signatures
         self.digest = digest
+        self._size: int | None = None
 
     def __eq__(self, value: Transaction) -> bool:
         if not isinstance(value, Transaction):
@@ -1239,6 +1240,8 @@ class Transaction(AbstractElement):
 
     @property
     def size(self) -> int:
+        if self._size is not None:
+            return self._size
         n = 6
         n += (len(self.inputs) + 1) >> 1
         n += (len(self.outputs) + 3) >> 2
@@ -1778,6 +1781,7 @@ class Block(AbstractElement):
         if tx.size != len(view):
             raise ValueError('Invalid transaction size.')
         tx.digest = await tx.hash()
+        tx._size = len(view)
         return tx
 
     @classmethod

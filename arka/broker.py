@@ -74,8 +74,11 @@ class Broker(AbstractBroker):
     def unsub(self, event: type[AbstractBrokerEvent], queue: asyncio.Queue):
         self.subs.setdefault(event, set()).discard(queue)
     
-    async def pub(self, event: AbstractBrokerEvent):
-        x: list[asyncio.Queue] = list(self.subs.get(type(event), self._empty)):
-        if not x:
-            return
-        await asyncio.gather(*[q.put(event) for q in x])
+    def pub(self, event: AbstractBrokerEvent):
+        x: list[asyncio.Queue] = list(self.subs.get(type(event), self._empty))
+        for q in x:
+            try:
+                q.put_nowait(event)
+            except asyncio.QueueFull:
+                # If the queue is full, we skip this subscriber
+                continue

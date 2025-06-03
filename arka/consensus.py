@@ -7,6 +7,9 @@ from arka import crypto
 import asyncio
 
 
+UTXO_FEE_DIVISOR = 2 ** 64
+
+
 class ConsensusError(Exception):
     """
     Base class for all consensus-related errors.
@@ -27,110 +30,222 @@ class Consensus(object):
         self.chain = chain
         self.loop = loop or asyncio.get_running_loop()
 
-    async def validate_transaction(self,
+    async def transaction_delta(self,
         tx: block.Transaction,
         height: int
-    ) -> list[chain.AbstractDeltaItem] | None:
+    ) -> tuple[list[chain.AbstractDeltaItem], list[chain.AbstractDeltaItem]]:
         """
         Validate a transaction against the current state of the chain.
         """
-        keys: list[crypto.Verifier] = [
-            crypto.Verifier(k.value) for k in tx.keys
-        ]
-        if not keys or len(keys) != len(tx.signatures):
-            raise ConsensusError('Invalid number of keys or signatures.')
-        verified = await asyncio.gather(*[
-            k.verify(s.value, tx.digest.value)
-            for k, s in zip(keys, tx.signatures)
-        ])
-        if not all(verified):
-            raise ConsensusError('Invalid signatures in transaction.')
         params = await self.chain.parameters(height)
-        delta: list[chain.AbstractDeltaItem] = []
+        if params is None:
+            raise ValueError(
+                f'No parameters for height {height}.'
+            )
+        deltas = await asyncio.gather(*[
+            self.chain.transaction_input_delta(input)
+            for input in tx.inputs
+        ])
+        keys: list[block.SignerKey] = []
         assets: dict[block.Nonce_16 | None, int | None] = {
             None: -(params.data_fee * (tx.size + 2))
         }
-        inputs: list[block.TransactionInput] = []
-        for input in tx.inputs:
-            match input:
-                case block.PublisherSpend():
-                    reward = await self.chain.block_reward(input.block)
-                    if reward is None:
+        for delta, input in zip(deltas, tx.inputs):
+            match delta:
+                case chain.ArkaUTXOUpdate() | chain.AssetUTXOUpdate():
+                    if delta.old is None:
                         raise ConsensusError(
-                            f'No block reward for block {input.block}.'
+                            'Invalid UTXOSpend.'
                         )
-                    if input.signer is None:
-                        if not isinstance(reward.publisher, block.SignerKey):
+                    if isinstance(delta.old.signer, block.SignerKey):
+                        if input.signer is None:
+                            keys.append(delta.old.signer)
+                        elif (
+                            isinstance(input.signer, block.SignerKey)
+                            and input.signer == delta.old.signer
+                        ):
+                            keys.append(input.signer)
+                        else:
                             raise ConsensusError(
-                                f'Invalid PublisherSpend().signer.'
+                                'Invalid UTXOSpend signer.'
                             )
-                        input = block.PublisherSpend(
-                            block=input.block,
-                            signer=reward.publisher
-                        )
-                    elif (
-                        isinstance(input.signer, block.SignerKey)
-                        and isinstance(reward.publisher, block.SignerKey)
-                        and not input.signer == reward.publisher
-                    ):
-                        raise ConsensusError(
-                            f'Invalid PublisherSpend().signer.'
-                        )
-                    elif input.signer.hash() != reward.publisher:
-                        raise ConsensusError(
-                            f'Invalid PublisherSpend().signer hash.'
-                        )
-                    inputs.append(input)
-                    delta.append(
-                        chain.BlockRewardUpdate(
-                            ref=input.block,
-                            old=reward
-                        )
-                    )
-                    assets[None] += reward.units - params.utxo_fee * (height - input.block)
-                case block.ExecutiveSpend():
-                    fund = await self.chain.executive_fund(input.block)
-                    if fund is None:
-                        raise ConsensusError(
-                            f'No ExecutiveFund for block {input.block}.'
-                        )
-                    if input.signer is None:
-                        if not isinstance(params.executive, block.SignerKey):
+                    elif isinstance(delta.old.signer, block.SignerHash):
+                        if isinstance(input.signer, block.SignerKey):
+                            if (await input.signer.hash()) == delta.old.signer:
+                                keys.append(input.signer)
+                            else:
+                                raise ConsensusError(
+                                    'Invalid UTXOSpend signer hash.'
+                                )
+                        elif isinstance(input.signer, block.SignerList):
+                            if (await input.signer.hash()) == delta.old.signer:
+                                keys.extend(input.signer.keys)
+                            else:
+                                raise ConsensusError(
+                                    'Invalid UTXOSpend signer hash.'
+                                )
+                        else:
                             raise ConsensusError(
-                                f'Invalid ExecutiveSpend().signer.'
+                                'Invalid UTXOSpend signer.'
                             )
-                        input = block.ExecutiveSpend(
-                            block=input.block,
-                            signer=params.executive
-                        )
-                    elif (
-                        isinstance(input.signer, block.SignerKey)
-                        and isinstance(params.executive, block.SignerKey)
-                        and not input.signer == params.executive
-                    ):
+                    else:
                         raise ConsensusError(
-                            f'Invalid ExecutiveSpend().signer.'
+                            'Invalid UTXOSpend.'
                         )
-                    elif input.signer.hash() != params.executive:
+                    if delta.ref.block > height:
                         raise ConsensusError(
-                            f'Invalid ExecutiveSpend().signer hash.'
+                            'Invalid UTXOSpend().utxo.'
                         )
-                    inputs.append(input)
-                    delta.append(
-                        chain.ExecutiveFundUpdate(
-                            ref=input.block,
-                            old=fund
+                    if isinstance(delta, chain.ArkaUTXOUpdate):
+                        assets[None] += (
+                            delta.old.units
+                            - ((params.utxo_fee * (height - delta.ref.block)) // UTXO_FEE_DIVISOR)
                         )
+                    else:
+                        balance = assets.get(delta.old.asset, 0)
+                        if balance is not None:
+                            assets[delta.old.asset] = balance + delta.old.units
+                case chain.BlockRewardUpdate():
+                    if delta.old is None:
+                        raise ConsensusError(
+                            'Invalid PublisherSpend.'
+                        )
+                    if isinstance(delta.old.publisher, block.SignerKey):
+                        if input.signer is None:
+                            keys.append(delta.old.publisher)
+                        elif (
+                            isinstance(input.signer, block.SignerKey)
+                            and input.signer == delta.old.publisher
+                        ):
+                            keys.append(input.signer)
+                        else:
+                            raise ConsensusError(
+                                'Invalid PublisherSpend signer.'
+                            )
+                    elif isinstance(delta.old.publisher, block.SignerHash):
+                        if isinstance(input.signer, block.SignerKey):
+                            if (await input.signer.hash()) == delta.old.publisher:
+                                keys.append(input.signer)
+                            else:
+                                raise ConsensusError(
+                                    'Invalid PublisherSpend signer hash.'
+                                )
+                        elif isinstance(input.signer, block.SignerList):
+                            if (await input.signer.hash()) == delta.old.publisher:
+                                keys.extend(input.signer.keys)
+                            else:
+                                raise ConsensusError(
+                                    'Invalid PublisherSpend signer hash.'
+                                )
+                        else:
+                            raise ConsensusError(
+                                'Invalid PublisherSpend signer.'
+                            )
+                    else:
+                        raise ConsensusError(
+                            'Invalid PublisherSpend.'
+                        )
+                    assets[None] += (
+                        delta.old.units
+                        - ((params.utxo_fee * (height - delta.ref)) // UTXO_FEE_DIVISOR)
                     )
-                    assets[None] += fund.units - params.utxo_fee * (height - input.block)
-                case block.UTXOSpend():
-                    pass
-                case block.AssetSpawn():
-                    pass
-                case block.ExecutiveSpawn():
-                    pass
+                case chain.ExecutiveFundUpdate():
+                    if delta.old is None:
+                        raise ConsensusError(
+                            'Invalid ExecutiveSpend.'
+                        )
+                    if isinstance(params.executive, block.SignerKey):
+                        if input.signer is None:
+                            keys.append(params.executive)
+                        elif (
+                            isinstance(input.signer, block.SignerKey)
+                            and input.signer == params.executive
+                        ):
+                            keys.append(params.executive)
+                        else:
+                            raise ConsensusError(
+                                'Invalid ExecutiveSpend signer.'
+                            )
+                    elif isinstance(params.executive, block.SignerHash):
+                        if isinstance(input.signer, block.SignerKey):
+                            if (await input.signer.hash()) == params.executive:
+                                keys.append(params.executive)
+                            else:
+                                raise ConsensusError(
+                                    'Invalid ExecutiveSpend signer hash.'
+                                )
+                        elif isinstance(input.signer, block.SignerList):
+                            if (await input.signer.hash()) == params.executive:
+                                keys.extend(input.signer.keys)
+                            else:
+                                raise ConsensusError(
+                                    'Invalid ExecutiveSpend signer hash.'
+                                )
+                        else:
+                            raise ConsensusError(
+                                'Invalid ExecutiveSpend signer.'
+                            )
+                    else:
+                        raise ConsensusError(
+                            'Invalid ExecutiveSpend.'
+                        )
+                    assets[None] += (
+                        delta.old.units
+                        - ((params.utxo_fee * (height - delta.ref)) // UTXO_FEE_DIVISOR)
+                    )
+                case chain.ExecutiveDefinitionUpdate() | chain.AssetDefinitionUpdate():
+                    if delta.old is None:
+                        if isinstance(input.signer, block.SignerKey):
+                            keys.append(input.signer)
+                        elif isinstance(input.signer, block.SignerList):
+                            keys.extend(input.signer.keys)
+                        else:
+                            raise ConsensusError(
+                                'Invalid TransactionInput signer.'
+                            )
+                    elif isinstance(input.signer, block.SignerKey):
+                        if delta.old.new_signer is None:
+                            if input.signer != delta.old.signer:
+                                raise ConsensusError(
+                                    'Invalid TransactionInput signer.'
+                                )
+                        else:
+                            if (await input.signer.hash()) != delta.old.new_signer:
+                                raise ConsensusError(
+                                    'Invalid TransactionInput signer.'
+                                )
+                        keys.append(input.signer)
+                    elif isinstance(input.signer, block.SignerList):
+                        if delta.old.new_signer is None:
+                            if input.signer != delta.old.signer:
+                                raise ConsensusError(
+                                    'Invalid TransactionInput signer.'
+                                )
+                        else:
+                            if (await input.signer.hash()) != delta.old.new_signer:
+                                raise ConsensusError(
+                                    'Invalid TransactionInput signer.'
+                                )
+                        keys.extend(input.signer.keys)
+                    if isinstance(input, block.AssetDefinition):
+                        if delta.old is None or not delta.old.lock:
+                            assets[input.asset] = None
                 case _:
-                    return
+                    raise ConsensusError('Invalid transaction input type.')
+        unique: set[block.SignerKey] = set()
+        verifiers: list[crypto.Verifier] = []
+        for key in keys:
+            if key not in unique:
+                unique.add(key)
+                verifiers.append(crypto.Verifier(key.value))
+        if not verifiers or len(verifiers) != len(tx.signatures):
+            raise ConsensusError('Invalid number of verifiers or signatures.')
+        verified = await asyncio.gather(*[
+            v.verify(s.value, tx.digest.value)
+            for v, s in zip(verifiers, tx.signatures)
+        ])
+        if not all(verified):
+            raise ConsensusError('Invalid signatures in transaction.')
         for output in tx.outputs:
             match output:
                 case block.ArkaUTXO():
@@ -140,4 +255,6 @@ class Consensus(object):
                 case block.ExecutiveVote():
                     pass
                 case _:
-                    return
+                    raise ConsensusError(
+                        'Invalid transaction output type.'
+                    )

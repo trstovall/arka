@@ -346,38 +346,38 @@ def test_executive_spend_keys():
         y = x.keys
 
 
-def test_executive_spawn_serdes():
+def test_executive_definition_serdes():
     keys = [block.SignerKey(urandom(32)) for i in range(3)]
-    x = block.ExecutiveSpawn(
+    x = block.ExecutiveDefinition(
         executive=block.Nonce_16(urandom(16)),
         signer=block.SignerKey(urandom(32)),
         new_signer=block.SignerKey(urandom(32)),
         memo=urandom(32)
     )
-    y = block.ExecutiveSpawn.decode(x.encode())
+    y = block.ExecutiveDefinition.decode(x.encode())
     assert x == y
-    x = block.ExecutiveSpawn(
+    x = block.ExecutiveDefinition(
         executive=block.Nonce_16(urandom(16)),
         signer=block.SignerList(keys, 3),
         memo=urandom(0x100)
     )
-    y = block.ExecutiveSpawn.decode(x.encode())
+    y = block.ExecutiveDefinition.decode(x.encode())
     assert x == y
-    y = block.ExecutiveSpawn.decode(x.encode() + urandom(32))
+    y = block.ExecutiveDefinition.decode(x.encode() + urandom(32))
     assert x == y
     assert len(x.encode()) == x.size
 
 
-def test_executive_spawn_keys():
+def test_executive_definition_keys():
     keys = [block.SignerKey(urandom(32)) for i in range(3)]
-    x = block.ExecutiveSpawn(
+    x = block.ExecutiveDefinition(
         executive=block.Nonce_16(urandom(16)),
         signer=keys[0],
         new_signer=block.SignerKey(urandom(32)),
         memo=urandom(32)
     )
     assert x.keys == keys[:1]
-    x = block.ExecutiveSpawn(
+    x = block.ExecutiveDefinition(
         executive=block.Nonce_16(urandom(16)),
         signer=block.SignerList(keys, 3),
         memo=urandom(32)
@@ -385,47 +385,47 @@ def test_executive_spawn_keys():
     assert x.keys == keys
 
 
-def test_asset_spawn_serdes():
+def test_asset_definition_serdes():
     keys = [block.SignerKey(urandom(32)) for i in range(3)]
-    x = block.AssetSpawn(
+    x = block.AssetDefinition(
         asset=block.Nonce_16(urandom(16)),
         signer=keys[0],
         new_signer=block.SignerKey(urandom(32)),
         memo=urandom(32),
         lock=False
     )
-    y = block.AssetSpawn.decode(x.encode())
+    y = block.AssetDefinition.decode(x.encode())
     assert x == y
-    x = block.AssetSpawn(
+    x = block.AssetDefinition(
         asset=block.Nonce_16(urandom(16)),
         signer=block.SignerList(keys, 3),
         memo=urandom(32),
         lock=False
     )
-    y = block.AssetSpawn.decode(x.encode())
+    y = block.AssetDefinition.decode(x.encode())
     assert x == y
-    x = block.AssetSpawn(
+    x = block.AssetDefinition(
         asset=block.Nonce_16(urandom(16)),
         signer=block.SignerList(keys, 3),
         memo=urandom(32),
         lock=True
     )
-    y = block.AssetSpawn.decode(x.encode())
+    y = block.AssetDefinition.decode(x.encode())
     assert x == y
-    y = block.AssetSpawn.decode(x.encode() + urandom(32))
+    y = block.AssetDefinition.decode(x.encode() + urandom(32))
     assert x == y
     assert len(x.encode()) == x.size
 
 
-def test_asset_spawn_keys():
+def test_asset_definition_keys():
     keys = [block.SignerKey(urandom(32)) for i in range(3)]
-    x = block.AssetSpawn(
+    x = block.AssetDefinition(
         asset=block.Nonce_16(urandom(16)),
         signer=keys[0],
         new_signer=block.SignerKey(urandom(32))
     )
     assert x.keys == keys[:1]
-    x = block.AssetSpawn(
+    x = block.AssetDefinition(
         asset=block.Nonce_16(urandom(16)),
         signer=block.SignerList(keys, 3)
     )
@@ -525,12 +525,12 @@ def test_transaction_serdes():
                 signer=block.SignerKey(urandom(32)),
                 memo=urandom(0x100)
             ),
-            block.AssetSpawn(
+            block.AssetDefinition(
                 asset=block.Nonce_16(urandom(16)),
                 signer=block.SignerKey(urandom(32)),
                 memo=urandom(0x100)
             ),
-            block.ExecutiveSpawn(
+            block.ExecutiveDefinition(
                 executive=block.Nonce_16(urandom(16)),
                 signer=block.SignerKey(urandom(32)),
                 memo=urandom(0x100)
@@ -609,12 +609,12 @@ async def test_transaction_hash():
                 signer=block.SignerKey(urandom(32)),
                 memo=urandom(0x100)
             ),
-            block.AssetSpawn(
+            block.AssetDefinition(
                 asset=block.Nonce_16(urandom(16)),
                 signer=block.SignerKey(urandom(32)),
                 memo=urandom(0x100)
             ),
-            block.ExecutiveSpawn(
+            block.ExecutiveDefinition(
                 executive=block.Nonce_16(urandom(16)),
                 signer=block.SignerKey(urandom(32)),
                 memo=urandom(0x100)

@@ -38,8 +38,14 @@ async def identity(x):
 class AbstractElement(object):
 
     def __eq__(self, value: AbstractElement) -> bool:
-        return isinstance(value, type(self)) and self.encode() == value.encode()
+        return isinstance(value, type(self))
+
+    def __ne__(self, value: AbstractElement) -> bool:
+        return not self.__eq__(value)
     
+    def __hash__(self) -> int:
+        return hash(self.encode())
+
     @property
     def size(self) -> int:
         return len(self.encode())
@@ -65,10 +71,11 @@ class Bytes(AbstractElement):
                 raise ValueError('Invalid value size.')
         self.value = value if isinstance(value, bytes) else bytes(value)
 
-    def __eq__(self, value) -> bool:
-        if not isinstance(value, type(self)):
-            return NotImplemented
-        return self.value == value.value
+    def __eq__(self, value: Bytes) -> bool:
+        return (
+            super().__eq__(value)
+            and self.value == value.value
+        )
 
     @property
     def size(self) -> int:
@@ -119,10 +126,9 @@ class SignerList(AbstractElement):
         self.threshold = threshold
 
     def __eq__(self, value: SignerList) -> bool:
-        if not isinstance(value, SignerList):
-            return NotImplemented
         return (
-            self.signers == value.signers
+            super().__eq__(value)
+            and self.signers == value.signers
             and self.threshold == value.threshold
         )
 
@@ -251,10 +257,9 @@ class UTXORefByIndex(AbstractElement):
         self.block, self.tx, self.output = block, tx, output
 
     def __eq__(self, value: UTXORefByIndex) -> bool:
-        if not isinstance(value, UTXORefByIndex):
-            return NotImplemented
         return (
-            self.block == value.block
+            super().__eq__(value)
+            and self.block == value.block
             and self.tx == value.tx
             and self.output == value.output
         )
@@ -290,10 +295,9 @@ class UTXORefByHash(AbstractElement):
         self.output = output
 
     def __eq__(self, value: UTXORefByHash) -> bool:
-        if not isinstance(value, UTXORefByHash):
-            return NotImplemented
         return (
-            self.tx_hash == value.tx_hash
+            super().__eq__(value)
+            and self.tx_hash == value.tx_hash
             and self.output == value.output
         )
 
@@ -329,6 +333,11 @@ class TransactionElement(AbstractElement):
                     raise ValueError('Invalid memo.')
         self.memo = memo
 
+    def __eq__(self, value: TransactionElement) -> bool:
+        return (
+            super().__eq__(value)
+            and self.memo == value.memo
+        )
 
     @staticmethod
     def _encode_mlen(
@@ -389,6 +398,12 @@ class TransactionInput(TransactionElement):
                 raise ValueError('Invalid signer.')
         super().__init__(memo, _validate=_validate)
         self.signer = signer
+
+    def __eq__(self, value: TransactionInput) -> bool:
+        return (
+            super().__eq__(value)
+            and self.signer == value.signer
+        )
 
     @property
     def keys(self) -> list[SignerKey]:
@@ -473,12 +488,9 @@ class UTXOSpend(TransactionInput):
         self.utxo = utxo
 
     def __eq__(self, value: UTXOSpend) -> bool:
-        if not isinstance(value, UTXOSpend):
-            return NotImplemented
         return (
-            self.utxo == value.utxo
-            and self.signer == value.signer
-            and self.memo == value.memo
+            super().__eq__(value)
+            and self.utxo == value.utxo
         )
 
     @property
@@ -546,12 +558,9 @@ class BlockSpend(TransactionInput):
         self.block = block
 
     def __eq__(self, value: BlockSpend) -> bool:
-        if not isinstance(value, type(self)):
-            return NotImplemented
         return (
-            self.block == value.block
-            and self.signer == value.signer
-            and self.memo == value.memo
+            super().__eq__(value)
+            and self.block == value.block
         )
 
     @property
@@ -605,35 +614,34 @@ class Nonce_16(Bytes):
     SIZE = 16
 
 
-class ExecutiveSpawn(TransactionInput):
+class ExecutiveDefinition(TransactionInput):
 
     def __init__(self,
         executive: Nonce_16,
-        signer: SignerKey | SignerList | None = None,
-        new_signer: SignerKey | SignerList | None = None,
+        signer: SignerKey | SignerList,
+        new_signer: SignerHash | None = None,
         memo: bytes | bytearray | memoryview | None = None,
         _validate: bool = True
     ):
         if _validate:
             if not isinstance(executive, Nonce_16):
                 raise ValueError('Invalid executive identifier.')
+            if not isinstance(signer, (SignerKey, SignerList)):
+                raise ValueError('Invalid signer.')
             if (
                 new_signer is not None
-                and not isinstance(new_signer, (SignerKey, SignerList))
+                and not isinstance(new_signer, SignerHash)
             ):
                 raise ValueError('Invalid new_signer.')
         super().__init__(signer, memo, _validate=_validate)
         self.executive = executive
         self.new_signer = new_signer
 
-    def __eq__(self, value: ExecutiveSpawn) -> bool:
-        if not isinstance(value, ExecutiveSpawn):
-            return NotImplemented
+    def __eq__(self, value: ExecutiveDefinition) -> bool:
         return (
-            self.executive == value.executive
-            and self.signer == value.signer
+            super().__eq__(value)
+            and self.executive == value.executive
             and self.new_signer == value.new_signer
-            and self.memo == value.memo
         )
 
     @property
@@ -649,11 +657,11 @@ class ExecutiveSpawn(TransactionInput):
     
     def encode(self) -> bytes:
         executive = self.executive.encode()
-        prefix, signer = self._encode_optional_signer(self.signer)
-        shift = 2
-        _prefix, new_signer = self._encode_optional_signer(self.new_signer)
-        prefix |= _prefix << shift
-        shift += 2
+        prefix, signer = self._encode_signer(self.signer)
+        shift = 1
+        new_signer = self.new_signer.encode() if self.new_signer else b''
+        prefix |= (1 << shift) if new_signer else 0
+        shift += 1
         mlen = self._encode_mlen(self.memo)
         prefix |= len(mlen) << shift
         return b''.join([
@@ -661,28 +669,28 @@ class ExecutiveSpawn(TransactionInput):
         ])
 
     @classmethod
-    def decode(cls, view: bytes | bytearray | memoryview) -> ExecutiveSpawn:
+    def decode(cls, view: bytes | bytearray | memoryview) -> ExecutiveDefinition:
         if not view:
             raise ValueError('Invalid size when decoding.')
         prefix = view[0]
         executive = Nonce_16.decode(view[1:])
         offset = 1 + executive.size
-        signer = cls._decode_optional_signer(prefix & 3, view[offset:])
-        prefix >>= 2
-        offset += signer.size if signer else 0
-        new_signer = cls._decode_optional_signer(prefix & 3, view[offset:])
-        prefix >>= 2
+        signer = cls._decode_signer(prefix & 1, view[offset:])
+        prefix >>= 1
+        offset += signer.size
+        new_signer = SignerHash.decode(view[offset:]) if prefix & 1 else None
+        prefix >>= 1
         offset += new_signer.size if new_signer else 0
         memo = cls._decode_memo(prefix & 3, view[offset:])
         return cls(executive, signer, new_signer, memo, _validate=False)
 
 
-class AssetSpawn(TransactionInput):
+class AssetDefinition(TransactionInput):
 
     def __init__(self,
         asset: Nonce_16,
-        signer: SignerKey | SignerList | None = None,
-        new_signer: SignerKey | SignerList | None = None,
+        signer: SignerKey | SignerList,
+        new_signer: SignerHash | None = None,
         memo: bytes | bytearray | memoryview | None = None,
         lock: bool = False,
         _validate: bool = True
@@ -690,9 +698,11 @@ class AssetSpawn(TransactionInput):
         if _validate:
             if not isinstance(asset, Nonce_16):
                 raise ValueError('Invalid asset identifier.')
+            if not isinstance(signer, (SignerKey, SignerList)):
+                raise ValueError('Invalid signer.')
             if (
                 new_signer is not None
-                and not isinstance(new_signer, (SignerKey, SignerList))
+                and not isinstance(new_signer, SignerHash)
             ):
                 raise ValueError('Invalid new_signer.')
             if not isinstance(lock, bool):
@@ -702,14 +712,11 @@ class AssetSpawn(TransactionInput):
         self.new_signer = new_signer
         self.lock = lock
 
-    def __eq__(self, value: AssetSpawn) -> bool:
-        if not isinstance(value, AssetSpawn):
-            return NotImplemented
+    def __eq__(self, value: AssetDefinition) -> bool:
         return (
-            self.asset == value.asset
-            and self.signer == value.signer
+            super().__eq__(value)
+            and self.asset == value.asset
             and self.new_signer == value.new_signer
-            and self.memo == value.memo
             and self.lock == value.lock
         )
 
@@ -717,7 +724,7 @@ class AssetSpawn(TransactionInput):
     def size(self) -> int:
         n = 1
         n += self.asset.size
-        n += self.signer.size if self.signer else 0
+        n += self.signer.size
         n += self.new_signer.size if self.new_signer else 0
         mlen = self._encode_mlen(self.memo)
         if mlen:
@@ -726,11 +733,11 @@ class AssetSpawn(TransactionInput):
     
     def encode(self) -> bytes:
         asset = self.asset.encode()
-        prefix, signer = self._encode_optional_signer(self.signer)
-        shift = 2
-        _prefix, new_signer = self._encode_optional_signer(self.new_signer)
-        prefix |= _prefix << shift
-        shift += 2
+        prefix, signer = self._encode_signer(self.signer)
+        shift = 1
+        new_signer = self.new_signer.encode() if self.new_signer else b''
+        prefix |= (1 << shift) if new_signer else 0
+        shift += 1
         mlen = self._encode_mlen(self.memo)
         prefix |= len(mlen) << shift
         shift += 2
@@ -740,17 +747,17 @@ class AssetSpawn(TransactionInput):
         ])
 
     @classmethod
-    def decode(cls, view: bytes | bytearray | memoryview) -> AssetSpawn:
+    def decode(cls, view: bytes | bytearray | memoryview) -> AssetDefinition:
         if not view:
             raise ValueError('Invalid size when decoding.')
         prefix = view[0]
         asset = Nonce_16.decode(view[1:])
         offset = 1 + asset.size
-        signer = cls._decode_optional_signer(prefix & 3, view[offset:])
-        prefix >>= 2
-        offset += signer.size if signer else 0
-        new_signer = cls._decode_optional_signer(prefix & 3, view[offset:])
-        prefix >>= 2
+        signer = cls._decode_signer(prefix & 1, view[offset:])
+        prefix >>= 1
+        offset += signer.size
+        new_signer = SignerHash.decode(view[offset:]) if prefix & 1 else None
+        prefix >>= 1
         offset += new_signer.size if new_signer else 0
         memo = cls._decode_memo(prefix & 3, view[offset:])
         prefix >>= 2
@@ -777,6 +784,12 @@ class TransactionOutput(TransactionElement):
                 raise ValueError('Invalid units.')
         super().__init__(memo, _validate)
         self._units = units
+
+    def __eq__(self, value: TransactionOutput) -> bool:
+        return (
+            super().__eq__(value)
+            and self.units == value.units
+        )
 
     @property
     def units(self) -> int | None:
@@ -854,16 +867,13 @@ class ArkaUTXO(TransactionOutput):
         self.data_fee = data_fee
 
     def __eq__(self, value: ArkaUTXO) -> bool:
-        if not isinstance(value, ArkaUTXO):
-            return NotImplemented
         return (
-            self.signer == value.signer
-            and self.units == value.units
+            super().__eq__(value)
+            and self.signer == value.signer
             and self.block_reward == value.block_reward
             and self.exec_fund == value.exec_fund
             and self.utxo_fee == value.utxo_fee
             and self.data_fee == value.data_fee
-            and self.memo == value.memo
         )
 
     @property
@@ -1013,13 +1023,10 @@ class AssetUTXO(TransactionOutput):
         self.signer = signer
     
     def __eq__(self, value: AssetUTXO) -> bool:
-        if not isinstance(value, AssetUTXO):
-            return NotImplemented
         return (
-            self.asset == value.asset
+            super().__eq__(value)
+            and self.asset == value.asset
             and self.signer == value.signer
-            and self.units == value.units
-            and self.memo == value.memo
         )
 
     @property
@@ -1109,13 +1116,10 @@ class ExecutiveVote(TransactionOutput):
         self.promote = promote
 
     def __eq__(self, value: ExecutiveVote) -> bool:
-        if not isinstance(value, ExecutiveVote):
-            return NotImplemented
         return (
-            self.executive == value.executive
+            super().__eq__(value)
+            and self.executive == value.executive
             and self.promote == value.promote
-            and self.units == value.units
-            and self.memo == value.memo
         )
 
     @property
@@ -1181,7 +1185,7 @@ class Transaction(AbstractElement):
     def __init__(self,
         inputs: list[
             PublisherSpend | ExecutiveSpend | UTXOSpend
-            | AssetSpawn | ExecutiveSpawn
+            | AssetDefinition | ExecutiveDefinition
         ],
         outputs: list[ArkaUTXO | AssetUTXO | ExecutiveVote] = [],
         signatures: list[Signature] = [],
@@ -1192,7 +1196,7 @@ class Transaction(AbstractElement):
             if not all(
                 isinstance(x, (
                     PublisherSpend, ExecutiveSpend, UTXOSpend,
-                    AssetSpawn, ExecutiveSpawn
+                    AssetDefinition, ExecutiveDefinition
                 ))
                 for x in inputs
             ):
@@ -1219,10 +1223,9 @@ class Transaction(AbstractElement):
         self._size: int | None = None
 
     def __eq__(self, value: Transaction) -> bool:
-        if not isinstance(value, Transaction):
-            return NotImplemented
         return (
-            self.inputs == value.inputs
+            super().__eq__(value)
+            and self.inputs == value.inputs
             and self.outputs == value.outputs
             and self.signatures == value.signatures
         )
@@ -1271,9 +1274,9 @@ class Transaction(AbstractElement):
                     in_types[i >> 1] |= self.EXECUTIVE_SPEND << ((i & 1) << 2)
                 case UTXOSpend():
                     in_types[i >> 1] |= self.UTXO_SPEND << ((i & 1) << 2)
-                case AssetSpawn():
+                case AssetDefinition():
                     in_types[i >> 1] |= self.ASSET_SPAWN << ((i & 1) << 2)
-                case ExecutiveSpawn():
+                case ExecutiveDefinition():
                     in_types[i >> 1] |= self.EXECUTIVE_SPAWN << ((i & 1) << 2)
                 case _:
                     raise ValueError('Invalid input type.')
@@ -1316,7 +1319,7 @@ class Transaction(AbstractElement):
             offset += out_types_len
             # Decode inputs
             inputs: list[
-                PublisherSpend | ExecutiveSpend | UTXOSpend | AssetSpawn | ExecutiveSpawn
+                PublisherSpend | ExecutiveSpend | UTXOSpend | AssetDefinition | ExecutiveDefinition
             ] = []
             for i in range(ninputs):
                 match (in_types[i >> 1] >> ((i & 1) << 2)) & 7:
@@ -1327,9 +1330,9 @@ class Transaction(AbstractElement):
                     case cls.UTXO_SPEND:
                         x = UTXOSpend.decode(view[offset:])
                     case cls.ASSET_SPAWN:
-                        x = AssetSpawn.decode(view[offset:])
+                        x = AssetDefinition.decode(view[offset:])
                     case cls.EXECUTIVE_SPAWN:
-                        x = ExecutiveSpawn.decode(view[offset:])
+                        x = ExecutiveDefinition.decode(view[offset:])
                     case _:
                         raise ValueError('Invalid Transaction input type.')
                 inputs.append(x)
@@ -1434,10 +1437,9 @@ class Parameters(AbstractElement):
         self.executive = executive
 
     def __eq__(self, value: Parameters) -> bool:
-        if not isinstance(value, Parameters):
-            return NotImplemented
         return (
-            self.encode_target() == value.encode_target()
+            super().__eq__(value)
+            and self.encode_target() == value.encode_target()
             and self.block_reward == value.block_reward
             and self.exec_fund == value.exec_fund
             and self.utxo_fee == value.utxo_fee
@@ -1576,10 +1578,9 @@ class BlockHeader(AbstractElement):
         self.nonce = nonce
 
     def __eq__(self, value: BlockHeader) -> bool:
-        if not isinstance(value, BlockHeader):
-            return NotImplemented
         return (
-            self.id == value.id
+            super().__eq__(value)
+            and self.id == value.id
             and self.timestamp == value.timestamp
             and self.prev_block == value.prev_block
             and self.publisher == value.publisher
@@ -1701,10 +1702,9 @@ class Block(AbstractElement):
         self.transactions = transactions
 
     def __eq__(self, value: Block) -> bool:
-        if not isinstance(value, Block):
-            return NotImplemented
         return (
-            self.header == value.header
+            super().__eq__(value)
+            and self.header == value.header
             and self.transactions == value.transactions
         )
 

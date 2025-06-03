@@ -77,7 +77,7 @@ GENESIS = block.Block(
         block.Transaction(
             inputs=[
                 # Define ARKATEKT
-                block.ExecutiveSpawn(
+                block.ExecutiveDefinition(
                     # signer is implicitly ARKATEKT_SIGNER
                     executive=ARKATEKT,
                     memo=b'json:' + json.dumps({
@@ -88,7 +88,7 @@ GENESIS = block.Block(
                     }, indent=None, sort_keys=True).encode()
                 ),
                 # Define AKT (Arkatekt, Inc. shares)
-                block.AssetSpawn(
+                block.AssetDefinition(
                     asset=ARKATEKT_SHARES,
                     signer=ARKATEKT_SIGNER,
                     memo=b'json:' + json.dumps({
@@ -100,7 +100,7 @@ GENESIS = block.Block(
                     lock=True
                 ),
                 # Define AUSD (Arkatekt USD)
-                block.AssetSpawn(
+                block.AssetDefinition(
                     asset=ARKATEKT_USD,
                     signer=ARKATEKT_SIGNER,
                     memo=b'json:' + json.dumps({

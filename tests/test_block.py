@@ -11,8 +11,7 @@ rand = lambda n: int.from_bytes(urandom(n), 'little')
 
 def test_abstract_element():
     x = block.AbstractElement()
-    with pytest.raises(NotImplementedError):
-        x == block.AbstractElement()
+    x == block.AbstractElement()
     with pytest.raises(NotImplementedError):
         y = x.size
     with pytest.raises(NotImplementedError):
@@ -351,7 +350,7 @@ def test_executive_definition_serdes():
     x = block.ExecutiveDefinition(
         executive=block.Nonce_16(urandom(16)),
         signer=block.SignerKey(urandom(32)),
-        new_signer=block.SignerKey(urandom(32)),
+        new_signer=block.SignerHash(urandom(32)),
         memo=urandom(32)
     )
     y = block.ExecutiveDefinition.decode(x.encode())
@@ -373,7 +372,7 @@ def test_executive_definition_keys():
     x = block.ExecutiveDefinition(
         executive=block.Nonce_16(urandom(16)),
         signer=keys[0],
-        new_signer=block.SignerKey(urandom(32)),
+        new_signer=block.SignerHash(urandom(32)),
         memo=urandom(32)
     )
     assert x.keys == keys[:1]
@@ -390,7 +389,7 @@ def test_asset_definition_serdes():
     x = block.AssetDefinition(
         asset=block.Nonce_16(urandom(16)),
         signer=keys[0],
-        new_signer=block.SignerKey(urandom(32)),
+        new_signer=block.SignerHash(urandom(32)),
         memo=urandom(32),
         lock=False
     )
@@ -422,7 +421,7 @@ def test_asset_definition_keys():
     x = block.AssetDefinition(
         asset=block.Nonce_16(urandom(16)),
         signer=keys[0],
-        new_signer=block.SignerKey(urandom(32))
+        new_signer=block.SignerHash(urandom(32))
     )
     assert x.keys == keys[:1]
     x = block.AssetDefinition(

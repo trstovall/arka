@@ -15,49 +15,6 @@ import heapq
 import random
 
 
-# Message Types
-class MSG:
-    
-    # Peer discovery
-    PEERS_SUB = b'\x00'
-    PEERS_PUB = b'\x01'
-    PEERS_REQ = b'\x02'
-    PEERS_RES = b'\x03'
-
-    # Transaction gossip
-    TX_SUB = b'\x10'
-    TX_PUB = b'\x11'
-    TX_REQ = b'\x12'
-    TX_RES = b'\x13'
-
-    # Block gossip
-    BLOCK_SUB = b'\x20'
-    BLOCK_PUB = b'\x21'
-    BLOCK_REQ = b'\x22'
-    BLOCK_RES = b'\x23'
-
-    # Request to send/recv tips for good peer behavior
-    TIP_SUB = b'\x30'
-    TIP_PUB = b'\x31'
-    TIP_REQ = b'\x32'
-    TIP_RES = b'\x33'
-
-    # Manage Proof-of-Work subnet
-    WORK_SUB = b'\x40'
-    WORK_PUB = b'\x41'
-    WORK_REQ = b'\x42'
-    WORK_RES = b'\x43'
-
-    # EOF, gracefully close connection after peer sends NONE
-    NONE = b'\xfd'
-
-    # Ignored, but planned conditional responses
-    EXT = b'\xfe'
-
-    # Ignored, but planned conditional responses
-    ERROR = b'\xff'
-
-
 # Type aliases
 Address = tuple[str, int]
 Message = bytes
@@ -151,140 +108,12 @@ def bytes_to_ipv6(binary: bytes) -> str:
     except socket.error as e:
         raise ValueError(f"Invalid binary data: {e}")
 
-def addr_to_bytes(addr: Address) -> bytes:
+def encode_address(addr: Address) -> bytes:
     host, port = addr
     return ipv6_to_bytes(host) + struct.pack('<H', port)
 
-def bytes_to_addr(binary: bytes) -> Address:
+def decode_address(binary: bytes) -> Address:
     return bytes_to_ipv6(binary[:16]), struct.unpack('<H', binary[16:])[0]
-
-
-### Message serializers
-
-def msg_peers_sub(active: bool = True) -> Message:
-    return MSG.PEERS_SUB + int(active).to_bytes(1, 'little')
-
-def msg_peers_pub(
-        added: set[Address] = set(), removed: set[Address] = set()
-) -> Message:
-    msg_type = MSG.PEERS_PUB
-    num_added = len(added)
-    if num_added < 0x80:
-        num_added = bytes([num_added << 1])
-    elif num_added < 0x8000:
-        num_added = struct.pack('<H', (num_added << 1) | 1)
-    else:
-        raise ValueError('Too many peers added.')
-    num_removed = len(removed)
-    if num_removed < 0x80:
-        num_removed = bytes([num_removed << 1])
-    elif num_removed < 0x8000:
-        num_removed = struct.pack('<H', (num_removed << 1) | 1)
-    else:
-        raise ValueError('Too many peers removed.')
-    return b''.join(
-        [msg_type, num_added, num_removed]
-        + [addr_to_bytes(x) for x in added]
-        + [addr_to_bytes(x) for x in removed]
-    )
-
-def msg_peers_req(neighbor: Address) -> Message:
-    return MSG.PEERS_REQ + addr_to_bytes(neighbor)
-
-def msg_peers_res(neighbor: Address) -> Message:
-    return MSG.PEERS_RES + addr_to_bytes(neighbor)
-
-
-### Message deserializers
-
-class MsgToSend(AbstractMessageEvent):
-
-    def __init__(self, msg: Message):
-        self.msg = msg
-
-
-class MsgPeersSub(AbstractMessageEvent):
-
-    def __init__(self, msg: Message):
-        # self.active
-        self.active = bool(msg[1] & 1)
-
-
-class MsgPeersPub(AbstractMessageEvent):
-
-    def __init__(self, msg: Message):
-        if msg[1] & 1:
-            num_added = struct.unpack_from('<H', msg, 1)[0] >> 1
-            offset = 3
-        else:
-            num_added = msg[1] >> 1
-            offset = 2
-        if msg[offset] & 1:
-            num_removed = struct.unpack_from('<H', msg, offset)[0] >> 1
-            offset += 2
-        else:
-            num_removed = msg[offset] >> 1
-            offset += 1
-        if len(msg) != offset + 18 * (num_added + num_removed):
-            raise ValueError('Invalid message size.')
-        start, end = offset, offset + 18 * num_added
-        # self.added
-        self.added: set[Address] = {
-            bytes_to_addr(msg[i:i+18]) for i in range(start, end, 18)
-        }
-        start, end = end, end + 18 * num_removed
-        # self.removed
-        self.removed: set[Address] = {
-            bytes_to_addr(msg[i:i+18]) for i in range(start, end, 18)
-        }
-
-
-class MsgPeersReq(AbstractMessageEvent):
-
-    def __init__(self, msg: Message):
-        if len(msg) != 19:
-            raise ValueError('Invalid message size.')
-        # self.neighbor
-        self.neighbor: Address = bytes_to_addr(msg[1:])
-
-
-class MsgPeersRes(AbstractMessageEvent):
-
-    def __init__(self, msg: Message):
-        if len(msg) != 19:
-            raise ValueError('Invalid message size.')
-        # self.neighbor
-        self.neighbor: Address = bytes_to_addr(msg[1:])
-
-
-DESERIALIZE: dict[bytes, type[AbstractMessageEvent]] = {
-    MSG.PEERS_SUB: MsgPeersSub,
-    MSG.PEERS_PUB: MsgPeersPub,
-    MSG.PEERS_REQ: MsgPeersReq,
-    MSG.PEERS_RES: MsgPeersRes,
-
-    # MSG.TX_SUB: MsgTxSub,
-    # MSG.TX_PUB: MsgTxPub,
-    # MSG.TX_REQ: MsgTxReq,
-    # MSG.TX_RES: MsgTxRes,
-
-    # MSG.BLOCK_SUB: MsgBlockSub,
-    # MSG.BLOCK_PUB: MsgBlockPub,
-    # MSG.BLOCK_REQ: MsgBlockReq,
-    # MSG.BLOCK_RES: MsgBlockRes,
-
-    # MSG.TIP_SUB: MsgTipSub,
-    # MSG.TIP_PUB: MsgTipPub,
-    # MSG.TIP_REQ: MsgTipReq,
-    # MSG.TIP_RES: MsgTipRes,
-    
-    # MSG.WORK_SUB: MsgWorkSub,
-    # MSG.WORK_PUB: MsgWorkPub,
-    # MSG.WORK_REQ: MsgWorkReq,
-    # MSG.WORK_RES: MsgWorkRes,
-
-    # MSG.NONE: MsgNone
-}
 
 
 ### Socket
@@ -929,6 +758,225 @@ class Socket(object):
                     pass
 
 
+### Message Types
+
+class MSG:
+    
+    # Peer discovery
+    PEERS_SUB = b'\x00'
+    PEERS_PUB = b'\x01'
+    PEERS_REQ = b'\x02'
+    PEERS_RES = b'\x03'
+
+    # Transaction gossip
+    TX_SUB = b'\x10'
+    TX_PUB = b'\x11'
+    TX_REQ = b'\x12'
+    TX_RES = b'\x13'
+
+    # Block gossip
+    BLOCK_SUB = b'\x20'
+    BLOCK_PUB = b'\x21'
+    BLOCK_REQ = b'\x22'
+    BLOCK_RES = b'\x23'
+
+    # Request to send/recv tips for good peer behavior
+    TIP_SUB = b'\x30'
+    TIP_PUB = b'\x31'
+    TIP_REQ = b'\x32'
+    TIP_RES = b'\x33'
+
+    # Manage Proof-of-Work subnet
+    WORK_SUB = b'\x40'
+    WORK_PUB = b'\x41'
+    WORK_REQ = b'\x42'
+    WORK_RES = b'\x43'
+
+    # EOF, gracefully close connection after peer sends NONE
+    NONE = b'\xfd'
+
+    # Ignored, but planned conditional responses
+    EXT = b'\xfe'
+
+    # Ignored, but planned conditional responses
+    ERROR = b'\xff'
+
+
+### Abstract message events
+
+class MsgToSend(AbstractMessageEvent):
+
+    TYPE = None
+
+    def __init__(self, msg: bytes):
+        self.msg = msg
+
+    def encode(self) -> bytes:
+        return self.msg
+    
+    @classmethod
+    def decode(cls, msg: bytes | bytearray | memoryview) -> MsgToSend:
+        return cls(bytes(msg))
+
+
+class PeersSubscribe(AbstractMessageEvent):
+
+    TYPE = MSG.PEERS_SUB
+
+    def __init__(self, active: bool = True):
+        self.active = active
+
+    def encode(self) -> bytes:
+        return self.TYPE + int(self.active).to_bytes(1, 'little')
+    
+    @classmethod
+    def decode(cls, msg: bytes | bytearray | memoryview) -> PeersSubscribe:
+        if len(msg) != 2:
+            raise ValueError('Invalid message size.')
+        active = bool(msg[1] & 1)
+        return cls(active)
+
+
+class PeersPublish(AbstractMessageEvent):
+
+    TYPE = MSG.PEERS_PUB
+
+    def __init__(self, added: set[Address] = set(), removed: set[Address] = set()):
+        if len(added) >= 0x8000:
+            raise ValueError('Too many peers added.')
+        if len(removed) >= 0x8000:
+            raise ValueError('Too many peers removed.')
+        self.added = added
+        self.removed = removed
+
+    def encode(self) -> bytes:
+        num_added = len(self.added)
+        if num_added < 0x80:
+            num_added = (num_added << 1).to_bytes(1, 'little')
+        elif num_added < 0x8000:
+            num_added = ((num_added << 1) | 1).to_bytes(2, 'little')
+        else:
+            raise ValueError('Too many peers added.')
+        num_removed = len(self.removed)
+        if num_removed < 0x80:
+            num_removed = (num_removed << 1).to_bytes(1, 'little')
+        elif num_removed < 0x8000:
+            num_removed = ((num_removed << 1) | 1).to_bytes(2, 'little')
+        else:
+            raise ValueError('Too many peers removed.')
+        return b''.join(
+            [self.TYPE, num_added, num_removed]
+            + [encode_address(x) for x in self.added]
+            + [encode_address(x) for x in self.removed]
+        )
+
+    @classmethod
+    def decode(cls, msg: bytes | bytearray | memoryview) -> PeersPublish:
+        try:
+            if msg[1] & 1:
+                if len(msg) < 3:
+                    raise IndexError()
+                num_added = int.from_bytes(msg[1:3], 'little') >> 1
+                offset = 3
+            else:
+                num_added = msg[1] >> 1
+                offset = 2
+            if msg[offset] & 1:
+                if len(msg) < offset + 2:
+                    raise IndexError()
+                num_removed = int.from_bytes(msg[offset:offset+2], 'little') >> 1
+                offset += 2
+            else:
+                num_removed = msg[offset] >> 1
+                offset += 1
+            start, end = offset, offset + 18 * num_added
+            if len(msg) < end:
+                raise IndexError()
+            # self.added
+            added: set[Address] = {
+                decode_address(msg[i:i+18]) for i in range(start, end, 18)
+            }
+            start, end = end, end + 18 * num_removed
+            if len(msg) < end:
+                raise IndexError()
+            # self.removed
+            removed: set[Address] = {
+                decode_address(msg[i:i+18]) for i in range(start, end, 18)
+            }
+            return cls(added, removed)
+        except IndexError:
+            raise ValueError('Invalid message size.')
+
+
+class PeersRequest(AbstractMessageEvent):
+
+    TYPE = MSG.PEERS_REQ
+    
+    def __init__(self, neighbor: Address):
+        self.neighbor = neighbor
+    
+    def encode(self) -> bytes:
+        return self.TYPE + encode_address(self.neighbor)
+    
+    @classmethod
+    def decode(cls, msg: bytes | bytearray | memoryview) -> PeersRequest:
+        if len(msg) < 19:
+            raise ValueError('Invalid message size.')
+        # self.neighbor
+        neighbor: Address = decode_address(msg[1:])
+        return cls(neighbor)
+
+class PeersResponse(AbstractMessageEvent):
+
+    TYPE = MSG.PEERS_RES
+    
+    def __init__(self, neighbor: Address):
+        self.neighbor = neighbor
+    
+    def encode(self) -> bytes:
+        return self.TYPE + encode_address(self.neighbor)
+    
+    @classmethod
+    def decode(cls, msg: bytes | bytearray | memoryview) -> PeersResponse:
+        if len(msg) < 19:
+            raise ValueError('Invalid message size.')
+        # self.neighbor
+        neighbor: Address = decode_address(msg[1:])
+        return cls(neighbor)
+
+
+DECODERS: dict[bytes, Callable[
+    [bytes | bytearray | memoryview], AbstractMessageEvent
+]] = {
+    PeersSubscribe.TYPE: PeersSubscribe.decode,
+    PeersPublish.TYPE: PeersPublish.decode,
+    PeersRequest.TYPE: PeersRequest.decode,
+    PeersResponse.TYPE: PeersResponse.decode,
+
+    # MSG.TX_SUB: MsgTxSub,
+    # MSG.TX_PUB: MsgTxPub,
+    # MSG.TX_REQ: MsgTxReq,
+    # MSG.TX_RES: MsgTxRes,
+
+    # MSG.BLOCK_SUB: MsgBlockSub,
+    # MSG.BLOCK_PUB: MsgBlockPub,
+    # MSG.BLOCK_REQ: MsgBlockReq,
+    # MSG.BLOCK_RES: MsgBlockRes,
+
+    # MSG.TIP_SUB: MsgTipSub,
+    # MSG.TIP_PUB: MsgTipPub,
+    # MSG.TIP_REQ: MsgTipReq,
+    # MSG.TIP_RES: MsgTipRes,
+    
+    # MSG.WORK_SUB: MsgWorkSub,
+    # MSG.WORK_PUB: MsgWorkPub,
+    # MSG.WORK_REQ: MsgWorkReq,
+    # MSG.WORK_RES: MsgWorkRes,
+
+    # MSG.NONE: MsgNone
+}
+
+
 class Peer(object):
 
     def __init__(self,
@@ -956,7 +1004,7 @@ class MeshProtocol(asyncio.DatagramProtocol):
 
     def datagram_received(self, data: Datagram, addr: Address):
         # Route Datagram to mesh.peers[addr]
-        addr = addr[:2]
+        addr = addr[:2]     # (host, port) only
         peer = self.mesh.peers.get(addr) or self.mesh.accept(addr)
         if peer:
             peer.sock.datagram_received(data)
@@ -969,14 +1017,15 @@ class MeshProtocol(asyncio.DatagramProtocol):
 
 class Mesh(object):
 
+    PEER_MESSAGE_QUEUE_SIZE = 100
     BLACKLIST_TIMEOUT = 600.0
 
     def __init__(self,
-            addr: Address,
-            broker: broker.Broker,
-            bootstrap: list[Address] = [],
-            loop: asyncio.AbstractEventLoop | None = None,
-            max_peers: int | None = None
+        addr: Address,
+        broker: broker.Broker,
+        bootstrap: list[Address] = [],
+        loop: asyncio.AbstractEventLoop | None = None,
+        max_peers: int | None = None
     ):
         self.addr = addr
         self.broker = broker
@@ -1048,13 +1097,13 @@ class Mesh(object):
             on_connect=self.handle_connect,
             on_close=self.handle_close
         )
-        peer = Peer(addr, sock, asyncio.Queue())
+        peer = Peer(addr, sock, asyncio.Queue(self.PEER_MESSAGE_QUEUE_SIZE))
         # Add peer to self.peers
         self.peers[addr] = peer
         return peer
 
     def connect(self, addr: Address):
-        addr = bytes_to_addr(addr_to_bytes(addr))
+        addr = decode_address(encode_address(addr))
         peer = self.accept(addr)
         if peer:
             peer.sock.connect()
@@ -1069,18 +1118,17 @@ class Mesh(object):
         peer = self.peers.pop(sock.peer, None)
         if not peer:
             return
-        if peer.handler:
-            if not peer.handler.done():
-                peer.handler.cancel()
+        if peer.handler and not peer.handler.done():
+            peer.handler.cancel()
         if blacklist:
             print(f'Blacklisted {peer.addr}')
             self.blacklist[peer.addr] = time.monotonic() + self.BLACKLIST_TIMEOUT
 
     async def handle_peer(self, peer: Peer):
         try:
-            await self.broker.pub(broker.PeerConnected(peer.addr))
+            self.broker.pub(broker.PeerConnected(peer.addr))
             # Set up connection
-            await peer.sock.send(msg_peers_sub(active=True))
+            await peer.sock.send(PeersSubscribe(active=True))
             # Process peer.msg_q
             peer.recvr = self.loop.create_task(self.handle_recv(peer))
             while not peer.recvr.done() and peer.sock.state == peer.sock.STATE_ESTABLISHED:
@@ -1088,8 +1136,8 @@ class Mesh(object):
                     case None:
                         break
                     case MsgToSend() as msg:
-                        await peer.sock.send(msg.msg)
-                    case MsgPeersSub() as msg:
+                        await peer.sock.send(msg.encode())
+                    case PeersSubscribe() as msg:
                         if msg.active and not peer.peers_sub:
                             peer.peers_sub = True
                             # Send peers addresses to peer
@@ -1097,15 +1145,15 @@ class Mesh(object):
                                 a for a, p in self.peers.items()
                                 if p.handler and not p.handler.done() and a != peer.addr
                             }
-                            # Drop or send multiple msg_peers_pub(added=set(peers))
-                            smsg = set(list(peers)[:0x7fff]) if len(peers) >> 15 else peers
-                            smsg = msg_peers_pub(added=smsg)
+                            # Drop or send multiple PeersPublish(added=set(peers))
+                            peers = set(list(peers)[:0x7fff]) if len(peers) >> 15 else peers
+                            m = PeersPublish(added=peers).encode()
                             peers = None
-                            await peer.sock.send(smsg)
-                            smsg = None
+                            await peer.sock.send(m)
+                            m = None
                         elif peer.peers_sub and not msg.active:
                             peer.peers_sub = False
-                    case MsgPeersPub() as msg:
+                    case PeersPublish() as msg:
                         if not peer.peers_sub:
                             # Silently drop peer publications
                             continue
@@ -1114,7 +1162,7 @@ class Mesh(object):
                         nbrs.difference_update(msg.removed)
                         self.neighbors[peer.addr] = nbrs
                         nbrs = None
-                    case MsgPeersReq() as msg:
+                    case PeersRequest() as msg:
                         nbr = self.peers.get(msg.neighbor)
                         if nbr is None:
                             # Ignore missing peers
@@ -1122,11 +1170,19 @@ class Mesh(object):
                         if nbr.sock.state != nbr.sock.STATE_ESTABLISHED:
                             # Don't pair with unconnected peers
                             continue
-                        # Exchange responses
-                        await nbr.msg_q.put(MsgToSend(msg_peers_res(peer.addr)))
-                        await peer.sock.send(msg_peers_res(msg.neighbor))
+                        if nbr.peers_sub:
+                            # Mediate greeting between peer and neighbor
+                            try:
+                                nbr.msg_q.put_nowait(MsgToSend(
+                                    PeersResponse(peer.addr).encode()
+                                ))
+                                await peer.sock.send(
+                                    PeersResponse(msg.neighbor).encode()
+                                )
+                            except asyncio.QueueFull:
+                                pass
                         nbr = None
-                    case MsgPeersRes() as msg:
+                    case PeersResponse() as msg:
                         if self.max_peers and len(self.peers) >= self.max_peers:
                             # Don't exceed limit of self.max_peers
                             continue
@@ -1137,7 +1193,7 @@ class Mesh(object):
             traceback.print_exc()
             raise
         finally:
-            await self.broker.pub(broker.PeerDisconnected(peer.addr))
+            self.broker.pub(broker.PeerDisconnected(peer.addr))
             if peer.recvr and not peer.recvr.done():
                 peer.recvr.cancel()
 
@@ -1145,11 +1201,15 @@ class Mesh(object):
         while True:
             msg = await peer.sock.recv()
             try:
-                msg = DESERIALIZE[msg[:1]](msg)
+                decoder = DECODERS.get(msg[:1])
+                if not decoder:
+                    continue
+                msg = decoder(msg)
             except Exception as e:
                 await peer.msg_q.put(None)
                 break
             await peer.msg_q.put(msg)
+            msg = None
 
     async def handle_broker(self):
         subs = {broker.PeerConnected, broker.PeerDisconnected}
@@ -1161,16 +1221,28 @@ class Mesh(object):
                 event = await event_q.get()
                 match event:
                     case broker.PeerConnected():
-                        msg = MsgToSend(msg_peers_pub(added={event.addr}))
+                        msg = MsgToSend(
+                            PeersPublish(added={event.addr}).encode()
+                        )
                         for addr, peer in self.peers.items():
                             if peer.peers_sub and addr != event.addr:
-                                await peer.msg_q.put(msg)
+                                try:
+                                    peer.msg_q.put_nowait(msg)
+                                except asyncio.QueueFull:
+                                    # If peer is busy, drop the message
+                                    pass
                         msg = None
                     case broker.PeerDisconnected():
-                        msg = MsgToSend(msg_peers_pub(removed={event.addr}))
+                        msg = MsgToSend(
+                            PeersPublish(removed={event.addr}).encode()
+                        )
                         for addr, peer in self.peers.items():
                             if peer.peers_sub:
-                                await peer.msg_q.put(msg)
+                                try:
+                                    peer.msg_q.put_nowait(msg)
+                                except asyncio.QueueFull:
+                                    # If peer is busy, drop the message
+                                    pass
                         msg = None
         finally:
             for sub in subs:
@@ -1211,6 +1283,11 @@ class Mesh(object):
                 await asyncio.sleep(1)
                 continue
             # Send request to meet neighbor to peer
-            msg = MsgToSend(msg_peers_req(neighbor=neighbor))
-            await peer.msg_q.put(msg)
+            msg = MsgToSend(
+                PeersRequest(neighbor=neighbor).encode()
+            )
+            try:
+                peer.msg_q.put_nowait(msg)
+            except asyncio.QueueFull:
+                pass
             await asyncio.sleep(1)

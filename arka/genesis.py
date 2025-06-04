@@ -84,7 +84,10 @@ GENESIS = block.Block(
                         'name': 'Arkatekt, Inc.',
                         'repo': 'https://github.com/arkatekt/',
                         'dns': 'arkatekt.com',
-                        'msg': 'An ARKA treasury company.',
+                        'msg': (
+                            'Arkatekt Inc. is an ARKA treasury company.\n'
+                            'Arkatekt plans to distribute ARKA as a universal income.\n'
+                        ),
                     }, indent=None, sort_keys=True).encode()
                 ),
                 # Define AKT (Arkatekt, Inc. shares)

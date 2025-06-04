@@ -1128,7 +1128,7 @@ class Mesh(object):
         try:
             self.broker.pub(broker.PeerConnected(peer.addr))
             # Set up connection
-            await peer.sock.send(PeersSubscribe(active=True))
+            await peer.sock.send(PeersSubscribe(active=True).encode())
             # Process peer.msg_q
             peer.recvr = self.loop.create_task(self.handle_recv(peer))
             while not peer.recvr.done() and peer.sock.state == peer.sock.STATE_ESTABLISHED:

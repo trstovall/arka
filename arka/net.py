@@ -945,6 +945,26 @@ class PeersResponse(AbstractMessageEvent):
         return cls(neighbor)
 
 
+class TransactionsSubscribe(AbstractMessageEvent):
+
+    TYPE = MSG.TX_SUB
+
+    def __init__(self, active: bool):
+        self.active = active
+
+    def encode(self):
+        return self.TYPE + int(self.active).to_bytes(1, 'little')
+
+    @classmethod
+    def decode(cls, msg: bytes | bytearray | memoryview) -> TransactionsSubscribe:
+        if len(msg) < 2:
+            raise ValueError('Invalid message size.')
+        active = bool(msg[1] & 1)
+        return cls(active)
+
+
+### DECODERS
+
 DECODERS: dict[bytes, Callable[
     [bytes | bytearray | memoryview], AbstractMessageEvent
 ]] = {

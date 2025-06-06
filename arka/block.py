@@ -1810,3 +1810,94 @@ class Block(AbstractElement):
         return cls(
             header, transactions, _validate=False
         )
+
+
+class BlockSummary(AbstractElement):
+
+    def __init__(self,
+        header: BlockHeader,
+        ids: list[int] = [],
+        _validate: bool = True
+    ):
+        if _validate:
+            if not isinstance(header, BlockHeader):
+                raise ValueError('Invalid block header.')
+            if not isinstance(ids, list) or not all(
+                isinstance(x, int) for x in ids
+            ):
+                raise ValueError('Invalid ids list.')
+            if (header.ntxs or 0) != len(ids) or len(ids) > 0x1_0000_0000:
+                raise ValueError('Invalid ids list.')
+        self.header = header
+        self.ids = ids
+
+    def __eq__(self, value: BlockSummary) -> bool:
+        return (
+            super().__eq__(value)
+            and self.header == value.header
+            and self.ids == value.ids
+        )
+    
+    @property
+    def size(self) -> int:
+        n = self.header.size
+        if not self.header.ntxs:
+            return n
+        n += 1  # prefix[1]
+        base = min(self.ids)
+        n += (base.bit_length() + 7) >> 3
+        if self.header.ntxs > 1:
+            bound = max(self.ids) - base
+            n += ((bound.bit_length() + 7) >> 3) * self.header.ntxs
+        return n
+    
+    def encode(self) -> bytes:
+        header = self.header.encode()
+        if not self.header.ntxs:
+            return header
+        base = min(self.ids)
+        prefix = (base + 7) >> 3
+        if prefix > MAX_INT_BYTES:
+            raise ValueError('Invalid ids list.')
+        if self.header.ntxs == 1:
+            base = base.to_bytes(prefix, 'little')
+            prefix = prefix.to_bytes(1, 'little')
+            return b''.join([header, prefix, base])
+        # self.header.ntxs > 1
+        bound = max(self.ids) - base
+        nbytes = (bound.bit_length() + 7) >> 3
+        if nbytes > MAX_INT_BYTES:
+            raise ValueError('Invalid ids list.')
+        prefix |= nbytes << 4
+        ids = [(x - base).to_bytes(nbytes, 'little') for x in self.ids]
+        base = base.to_bytes(prefix & 15, 'little')
+        prefix = prefix.to_bytes(1, 'little')
+        return b''.join([header, prefix, base] + ids)
+
+    @classmethod
+    def decode(cls, view: bytes | bytearray | memoryview) -> BlockSummary:
+        try:
+            header = BlockHeader.decode(view)
+            if not header.ntxs:
+                return cls(header, [], _validate=False)
+            offset = header.size
+            prefix = view[offset]
+            offset += 1
+            end = offset + (prefix & 15)
+            if len(view) < end:
+                raise IndexError()
+            base = int.from_bytes(view[offset:end], 'little')
+            if header.ntxs == 1:
+                return cls(header, [base], _validate=False)
+            offset = end
+            nbytes = prefix >> 4
+            end = offset + nbytes * header.ntxs
+            if len(view) < end:
+                raise IndexError()
+            ids: list[int] = [
+                int.from_bytes(view[i:i + nbytes], 'little') + base
+                for i in range(offset, end, nbytes)
+            ]
+            return cls(header, ids, _validate=False)
+        except IndexError as e:
+            raise ValueError('Invalid view size.')

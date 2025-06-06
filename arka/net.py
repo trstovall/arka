@@ -2,6 +2,7 @@
 from __future__ import annotations
 from typing import Generator, Callable
 from arka import broker
+from arka import block
 from collections import deque
 from os import urandom
 from sys import platform
@@ -23,7 +24,6 @@ MessageList = bytes
 EventQueue = asyncio.Queue[broker.AbstractBrokerEvent]
 
 class AbstractMessageEvent(object):
-    def __init__(self, msg: Message):
         pass
 
 MessageQueue = asyncio.Queue[broker.AbstractBrokerEvent | AbstractMessageEvent]
@@ -89,7 +89,7 @@ def interleave_msg_size(x: list[Message]) -> Generator[bytes, None, None]:
 def pack_message_list(x: list[Message]) -> MessageList:
     return b''.join(interleave_msg_size(x))
 
-def ipv6_to_bytes(ipv6_str: str) -> bytes:
+def encode_ipv6(ipv6_str: str) -> bytes:
     try:
         # Convert IPv6 address to binary form
         binary = socket.inet_pton(socket.AF_INET6, ipv6_str)
@@ -97,7 +97,7 @@ def ipv6_to_bytes(ipv6_str: str) -> bytes:
     except socket.error as e:
         raise ValueError(f"Invalid IPv6 address: {e}")
 
-def bytes_to_ipv6(binary: bytes) -> str:
+def decode_ipv6(binary: bytes) -> str:
     try:
         # Ensure input is 16 bytes
         if len(binary) != 16:
@@ -110,10 +110,10 @@ def bytes_to_ipv6(binary: bytes) -> str:
 
 def encode_address(addr: Address) -> bytes:
     host, port = addr
-    return ipv6_to_bytes(host) + struct.pack('<H', port)
+    return encode_ipv6(host) + struct.pack('<H', port)
 
 def decode_address(binary: bytes) -> Address:
-    return bytes_to_ipv6(binary[:16]), struct.unpack('<H', binary[16:])[0]
+    return decode_ipv6(binary[:16]), struct.unpack_from('<H', binary, 16)[0]
 
 
 ### Socket
@@ -963,6 +963,434 @@ class TransactionsSubscribe(AbstractMessageEvent):
         return cls(active)
 
 
+class TransactionsPublish(AbstractMessageEvent):
+
+    TYPE = MSG.TX_PUB
+
+    def __init__(self, tx_hashes: dict[int, block.TransactionHash] = {}):
+        if len(tx_hashes) >= 0x8000:
+            raise ValueError('Too many transactions to publish.')
+        self.tx_hashes = tx_hashes
+    
+    def encode(self) -> bytes:
+        num_hashes = len(self.tx_hashes)
+        if num_hashes == 0:
+            return self.TYPE + b'\x00'
+        elif num_hashes < 0x80:
+            num_hashes = (num_hashes << 1).to_bytes(1, 'little')
+        elif num_hashes < 0x8000_0000:
+            num_hashes = ((num_hashes << 1) | 1).to_bytes(4, 'little')
+        else:
+            raise ValueError('Too many transactions to publish.')
+        if num_hashes == b'\x01':
+            k, v = next(iter(self.tx_hashes.items()))
+            if k < 0:
+                raise ValueError('Transaction hash index cannot be negative.')
+            k = k.to_bytes((k.bit_length() + 7) // 8, 'little')
+            if len(k) < 16:
+                prefix = len(k).to_bytes(1, 'little')
+            else:
+                raise ValueError('Transaction hash index is too large.')
+            return b''.join(
+                [self.TYPE, num_hashes, prefix, k, v.encode()]
+            )
+        # Reindex tx_hashes to start from 0
+        prefix = 0
+        keys: list[int] = []
+        values: list[block.TransactionHash] = []
+        base = min(self.tx_hashes.keys(), default=0)
+        if base < 0:
+            raise ValueError('Transaction hash index cannot be negative.')
+        bound = 0
+        for i, hash in self.tx_hashes.items():
+            x = i - base
+            keys.append(x)
+            values.append(hash)
+            bound = max(bound, x)
+        base = base.to_bytes((base.bit_length() + 7) // 8, 'little')
+        if len(base) < 16:
+            prefix |= len(base)
+        else:
+            raise ValueError('Transaction hash index is too large.')
+        bound = (bound.bit_length() + 7) // 8
+        if bound < 16:
+            prefix |= bound << 4
+        else:
+            raise ValueError('Transaction hash index is too large.')
+        return b''.join(
+            [self.TYPE, num_hashes, prefix.to_bytes(1, 'little'), base]
+            + [x.to_bytes(bound, 'little') for x in keys]
+            + [v.encode() for v in values]
+        )
+
+    @classmethod
+    def decode(cls, msg: bytes | bytearray | memoryview) -> TransactionsPublish:
+        try:
+            if msg[1] & 1:
+                if len(msg) < 5:
+                    raise IndexError()
+                num_hashes = int.from_bytes(msg[1:5], 'little') >> 1
+                offset = 5
+            else:
+                num_hashes = msg[1] >> 1
+                offset = 2
+            if num_hashes == 0:
+                return cls()
+            prefix = msg[offset]
+            offset += 1
+            if num_hashes == 1:
+                key_size = prefix & 15
+                if key_size == 0:
+                    k = 0
+                else:
+                    if len(msg) < offset + key_size:
+                        raise IndexError()
+                    k = int.from_bytes(msg[offset:offset+key_size], 'little')
+                    offset += key_size
+                v = block.TransactionHash.decode(msg[offset:])
+                return cls({k: v})
+            # num_hashes > 1
+            key_size = prefix & 15
+            if key_size == 0:
+                base = 0
+            else:
+                if len(msg) < offset + key_size:
+                    raise IndexError()
+                base = int.from_bytes(msg[offset:offset+key_size], 'little')
+                offset += key_size
+            key_size = prefix >> 4
+            if key_size == 0:
+                raise ValueError('Invalid transaction hash index size.')
+            if len(msg) < offset + (key_size + block.TransactionHash.SIZE) * num_hashes:
+                raise IndexError()
+            keys: list[int] = [
+                int.from_bytes(msg[i:i+key_size], 'little') + base
+                for i in range(offset, offset + key_size * num_hashes, key_size)
+            ]
+            offset += key_size * num_hashes
+            values: list[block.TransactionHash] = [
+                block.TransactionHash.decode(msg[i:i + block.TransactionHash.SIZE])
+                for i in range(offset, offset + block.TransactionHash.SIZE * num_hashes, block.TransactionHash.SIZE)
+            ]
+            return cls(dict(zip(keys, values)))
+        except IndexError:
+            raise ValueError('Invalid message size.')
+
+
+class TransactionsRequest(AbstractMessageEvent):
+
+    TYPE = MSG.TX_REQ
+
+    def __init__(self, ids: set[int] = set()):
+        if len(ids) >= 0x8000_0000:
+            raise ValueError('Too many transactions requested.')
+        self.ids = ids
+
+    def encode(self) -> bytes:
+        num_ids = len(self.ids)
+        if num_ids == 0:
+            return self.TYPE + b'\x00'
+        if num_ids < 0x80:
+            num_ids = (num_ids << 1).to_bytes(1, 'little')
+        elif num_ids < 0x8000_0000:
+            num_ids = ((num_ids << 1) | 1).to_bytes(4, 'little')
+        else:
+            raise ValueError('Too many transactions requested.')
+        if num_ids == b'\x01':
+            i = next(iter(self.ids))
+            if i < 0:
+                raise ValueError('Transaction ID cannot be negative.')
+            i = i.to_bytes((i.bit_length() + 7) // 8, 'little')
+            if len(i) < 16:
+                prefix = len(i).to_bytes(1, 'little')
+            else:
+                raise ValueError('Transaction ID is too large.')
+            return b''.join(
+                [self.TYPE, num_ids, prefix, i]
+            )
+        # Reindex ids to start from 0
+        prefix = 0
+        ids: list[int] = []
+        base = min(self.ids, default=0)
+        if base < 0:
+            raise ValueError('Transaction ID cannot be negative.')
+        bound = 0
+        for i in self.ids:
+            x = i - base
+            ids.append(x)
+            bound = max(bound, x)
+        base = base.to_bytes((base.bit_length() + 7) // 8, 'little')
+        if len(base) < 16:
+            prefix |= len(base)
+        else:
+            raise ValueError('Transaction ID is too large.')
+        bound = (bound.bit_length() + 7) // 8
+        if bound < 16:
+            prefix |= bound << 4
+        else:
+            raise ValueError('Transaction ID is too large.')
+        return b''.join(
+            [self.TYPE, num_ids, prefix.to_bytes(1, 'little'), base]
+            + [i.to_bytes(bound, 'little') for i in ids]
+        )
+    
+    @classmethod
+    def decode(cls, msg: bytes | bytearray | memoryview) -> TransactionsRequest:
+        try:
+            if msg[1] & 1:
+                if len(msg) < 5:
+                    raise IndexError()
+                num_ids = int.from_bytes(msg[1:5], 'little') >> 1
+                offset = 5
+            else:
+                num_ids = msg[1] >> 1
+                offset = 2
+            if num_ids == 0:
+                return cls()
+            prefix = msg[offset]
+            offset += 1
+            if num_ids == 1:
+                id_size = prefix & 15
+                if id_size == 0:
+                    i = 0
+                else:
+                    if len(msg) < offset + id_size:
+                        raise IndexError()
+                    i = int.from_bytes(msg[offset:offset+id_size], 'little')
+                    offset += id_size
+                return cls({i})
+            # num_ids > 1
+            id_size = prefix & 15
+            if id_size == 0:
+                base = 0
+            else:
+                if len(msg) < offset + id_size:
+                    raise IndexError()
+                base = int.from_bytes(msg[offset:offset+id_size], 'little')
+                offset += id_size
+            id_size = prefix >> 4
+            if id_size == 0:
+                raise ValueError('Invalid transaction ID size.')
+            if len(msg) < offset + id_size * num_ids:
+                raise IndexError()
+            ids: list[int] = [
+                int.from_bytes(msg[i:i+id_size], 'little') + base
+                for i in range(offset, offset + id_size * num_ids, id_size)
+            ]
+            return cls(set(ids))
+        except IndexError:
+            raise ValueError('Invalid message size.')
+
+
+class TransactionsResponse(AbstractMessageEvent):
+    TYPE = MSG.TX_RES
+
+    def __init__(self, id: int, tx: block.Transaction):
+        if id < 0:
+            raise ValueError('Transaction ID cannot be negative.')
+        self.id = id
+        self.tx = tx
+
+    def encode(self) -> bytes:
+        id_bytes = self.id.to_bytes((self.id.bit_length() + 7) // 8, 'little')
+        if len(id_bytes) < 16:
+            prefix = len(id_bytes).to_bytes(1, 'little')
+        else:
+            raise ValueError('Transaction ID is too large.')
+        return b''.join(
+            [self.TYPE, prefix, id_bytes, self.tx.encode()]
+        )
+    
+    @classmethod
+    def decode(cls, msg: bytes | bytearray | memoryview) -> TransactionsResponse:
+        try:
+            if len(msg) < 2:
+                raise IndexError()
+            id_size = msg[1] & 15
+            offset = 2
+            if id_size == 0:
+                i = 0
+            else:
+                if len(msg) < offset + id_size:
+                    raise IndexError()
+                i = int.from_bytes(msg[offset:offset+id_size], 'little')
+            tx = block.Transaction.decode(msg[offset+id_size:])
+            return cls(i, tx)
+        except IndexError:
+            raise ValueError('Invalid message size.')
+
+
+class BlocksSubscribe(AbstractMessageEvent):
+
+    TYPE = MSG.BLOCK_SUB
+
+    def __init__(self, active: bool):
+        self.active = active
+
+    def encode(self) -> bytes:
+        return self.TYPE + int(self.active).to_bytes(1, 'little')
+
+    @classmethod
+    def decode(cls, msg: bytes | bytearray | memoryview) -> BlocksSubscribe:
+        if len(msg) < 2:
+            raise ValueError('Invalid message size.')
+        active = bool(msg[1] & 1)
+        return cls(active)
+
+
+class BlocksPublish(AbstractMessageEvent):
+
+    TYPE = MSG.BLOCK_PUB
+
+    def __init__(self, id: int, hash: block.BlockHash):
+        if id < 0:
+            raise ValueError('Block ID cannot be negative.')
+        if id >= 0x1_0000_0000_0000_0000:
+            raise ValueError('Block ID is too large.')
+        if not isinstance(hash, block.BlockHash):
+            raise TypeError('hash must be an instance of block.BlockHash.')
+        self.id = id
+        self.hash = hash
+
+    def encode(self) -> bytes:
+        id = self.id.to_bytes(8, 'little')
+        return b''.join(
+            [self.TYPE, id, self.hash.encode()]
+        )
+    
+    @classmethod
+    def decode(cls, msg: bytes | bytearray | memoryview) -> BlocksPublish:
+        try:
+            if len(msg) < 9:
+                raise IndexError()
+            id = int.from_bytes(msg[1:9], 'little')
+            hash = block.BlockHash.decode(msg[9:])
+            return cls(id, hash)
+        except IndexError:
+            raise ValueError('Invalid message size.')
+
+
+class BlocksRequest(AbstractMessageEvent):
+
+    TYPE = MSG.BLOCK_REQ
+
+    HEADER = 0
+    SUMMARY = 1
+    BLOCK = 2
+
+    def __init__(self, ids: set[int], mode: int = SUMMARY):
+        if len(ids) >= 0x100:
+            raise ValueError('Too many blocks requested.')
+        self.id = ids
+        self.mode = mode
+
+    def encode(self) -> bytes:
+        num_ids = len(self.ids)
+        prefix = self.mode
+        if num_ids == 0:
+            return self.TYPE + b'\x00' + prefix.to_bytes(2, 'little')
+        if num_ids >= 0x100:
+            raise ValueError('Too many blocks requested.')
+        base = min(self.ids, default=0)
+        if base < 0:
+            raise ValueError('Block ID cannot be negative.')
+        nbytes = (base.bit_length() + 7) // 8
+        if nbytes > 8:
+            raise ValueError('Block ID is too large.')
+        prefix |= nbytes << 2
+        if num_ids == 1:
+            return b''.join([
+                self.TYPE, b'\x01', prefix.to_bytes(2, 'little'),
+                base.to_bytes(nbytes, 'little')
+            ])
+        # Reindex ids to start from 0
+        bound = max(self.ids, default=0) - base
+        nbytes = (bound.bit_length() + 7) // 8
+        if nbytes > 8:
+            raise ValueError('Block ID is too large.')
+        prefix |= nbytes << 6
+        ids = [(i - base).to_bytes(nbytes, 'little') for i in self.ids]
+        return b''.join([
+            self.TYPE, num_ids.to_bytes(1, 'little'), prefix.to_bytes(2, 'little'),
+            base.to_bytes((prefix >> 2) & 15, 'little')
+        ] + ids)
+
+    @classmethod
+    def decode(cls, msg: bytes | bytearray | memoryview) -> BlocksRequest:
+        try:
+            if len(msg) < 3:
+                raise IndexError()
+            num_ids = msg[1]
+            prefix = int.from_bytes(msg[2:4], 'little')
+            mode = prefix & 3
+            if num_ids == 0:
+                return cls(set(), mode)
+            offset = 4
+            nbytes = (prefix >> 2) & 15
+            if len(msg) < offset + nbytes:
+                raise IndexError()
+            base = int.from_bytes(msg[offset:offset+nbytes], 'little')
+            if num_ids == 1:
+                return cls({base}, mode)
+            # num_ids > 1
+            offset += nbytes
+            nbytes = (prefix >> 6) & 15
+            end = offset + nbytes * num_ids
+            if len(msg) < end:
+                raise IndexError()
+            ids: set[int] = {
+                int.from_bytes(msg[i:i+nbytes], 'little') + base
+                for i in range(offset, end, nbytes)
+            }
+            return cls(ids, mode)
+        except IndexError:
+            raise ValueError('Invalid message size.')
+
+
+class BlocksResponse(AbstractMessageEvent):
+
+    TYPE = MSG.BLOCK_RES
+
+    HEADER = 0
+    SUMMARY = 1
+    BLOCK = 2
+
+    def __init__(self, block: block.BlockHeader | block.BlockSummary | block.Block):
+        self.block = block
+
+    def encode(self) -> bytes:
+        match self.block:
+            case block.BlockHeader():
+                prefix = self.HEADER
+            case block.BlockSummary():
+                prefix = self.SUMMARY
+            case block.Block():
+                prefix = self.BLOCK
+            case _:
+                raise TypeError('block must be an instance of block.BlockHeader, block.BlockSummary, or block.Block.')
+        return b''.join(
+            [self.TYPE, prefix.to_bytes(1, 'little'), self.block.encode()]
+        )
+    
+    @classmethod
+    def decode(cls, msg: bytes | bytearray | memoryview) -> BlocksResponse:
+        try:
+            if len(msg) < 2:
+                raise IndexError()
+            prefix = msg[1]
+            if prefix == cls.HEADER:
+                block = block.BlockHeader.decode(msg[2:])
+            elif prefix == cls.SUMMARY:
+                block = block.BlockSummary.decode(msg[2:])
+            elif prefix == cls.BLOCK:
+                block = block.Block.decode(msg[2:])
+            else:
+                raise ValueError('Invalid block response type.')
+            return cls(block)
+        except IndexError:
+            raise ValueError('Invalid message size.')
+
+
 ### DECODERS
 
 DECODERS: dict[bytes, Callable[
@@ -973,15 +1401,15 @@ DECODERS: dict[bytes, Callable[
     PeersRequest.TYPE: PeersRequest.decode,
     PeersResponse.TYPE: PeersResponse.decode,
 
-    # MSG.TX_SUB: MsgTxSub,
-    # MSG.TX_PUB: MsgTxPub,
-    # MSG.TX_REQ: MsgTxReq,
-    # MSG.TX_RES: MsgTxRes,
+    TransactionsSubscribe.TYPE: TransactionsSubscribe.decode,
+    TransactionsPublish.TYPE: TransactionsPublish.decode,
+    TransactionsRequest.TYPE: TransactionsRequest.decode,
+    TransactionsResponse.TYPE: TransactionsResponse.decode,
 
-    # MSG.BLOCK_SUB: MsgBlockSub,
-    # MSG.BLOCK_PUB: MsgBlockPub,
-    # MSG.BLOCK_REQ: MsgBlockReq,
-    # MSG.BLOCK_RES: MsgBlockRes,
+    BlocksSubscribe.TYPE: BlocksSubscribe.decode,
+    BlocksPublish.TYPE: BlocksPublish.decode,
+    BlocksRequest.TYPE: BlocksRequest.decode,
+    BlocksResponse.TYPE: BlocksResponse.decode,
 
     # MSG.TIP_SUB: MsgTipSub,
     # MSG.TIP_PUB: MsgTipPub,

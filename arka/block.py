@@ -242,6 +242,17 @@ class SignerList(AbstractElement):
         return SignerList(signers, x, _validate=False)
 
 
+class LockedSigner(AbstractElement):
+
+    def __init__(self,
+        hash_lock: Nonce_32, hash_locked_signer: SignerList,
+        time_lock: int, time_locked_signer: SignerList
+    )
+        pass
+
+
+
+
 class UTXORefByIndex(AbstractElement):
 
     SIZE = 14
@@ -479,6 +490,7 @@ class UTXOSpend(TransactionInput):
         utxo: UTXORefByIndex | UTXORefByHash,
         signer: SignerKey | SignerList | None = None,
         memo: bytes | bytearray | memoryview | None = None,
+        time_lock: int | None = None,
         _validate: bool = True
     ):
         if _validate:

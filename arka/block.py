@@ -242,15 +242,91 @@ class SignerList(AbstractElement):
         return SignerList(signers, x, _validate=False)
 
 
-class LockedSigner(AbstractElement):
+class SignerLocked(AbstractElement):
 
     def __init__(self,
         hash_lock: Nonce_32, hash_locked_signer: SignerList,
-        time_lock: int, time_locked_signer: SignerList
-    )
-        pass
+        time_lock: int, time_locked_signer: SignerList,
+        _validate: bool = True
+    ):
+        if _validate:
+            if not isinstance(hash_lock, Nonce_32):
+                raise ValueError('Invalid hash_lock.')
+            if not isinstance(hash_locked_signer, SignerList):
+                raise ValueError('Invalid hash_locked_signer.')
+            if not isinstance(time_lock, int) or time_lock < 0:
+                raise ValueError('Invalid time_lock.')
+            if not isinstance(time_locked_signer, SignerList):
+                raise ValueError('Invalid time_locked_signer.')
+        self.hash_lock = hash_lock
+        self.hash_locked_signer = hash_locked_signer
+        self.time_lock = time_lock
+        self.time_locked_signer = time_locked_signer
 
+    def __eq__(self, value: SignerLocked) -> bool:
+        return (
+            super().__eq__(value)
+            and self.hash_lock == value.hash_lock
+            and self.hash_locked_signer == value.hash_locked_signer
+            and self.time_lock == value.time_lock
+            and self.time_locked_signer == value.time_locked_signer
+        )
+    
+    @property
+    def size(self) -> int:
+        n = 1
+        n += self.hash_lock.size + self.hash_locked_signer.size
+        n += 4 + self.time_locked_signer.size
+        return n
+    
+    @property
+    def keys(self) -> list[SignerKey]:
+        keys = (
+            self.time_locked_signer.keys
+            + self.hash_locked_signer.keys
+        )
+        unique: set[bytes] = set()
+        output: list[SignerKey] = []
+        for k in keys:
+            if k.value not in unique:
+                unique.add(k.value)
+                output.append(k)
+        return output
 
+    async def hash(self) -> SignerHash:
+        hash_lock = await keccak_800(self.hash_lock.encode())
+        hash_locked_signer = await self.hash_locked_signer.hash()
+        time_lock = pack('<I', self.time_lock)
+        time_locked_signer = await self.time_locked_signer.hash()
+        preimage = b''.join([
+            hash_lock, hash_locked_signer,
+            time_lock, time_locked_signer
+        ])
+        return SignerHash(await keccak_1600(preimage))
+
+    def encode(self) -> bytes:
+        hash_lock = self.hash_lock.encode()
+        hash_locked_signer = self.hash_locked_signer.encode()
+        time_lock = pack('<I', self.time_lock)
+        time_locked_signer = self.time_locked_signer.encode()
+        return b''.join([
+            hash_lock, hash_locked_signer,
+            time_lock, time_locked_signer
+        ])
+
+    @classmethod
+    def decode(cls, view: bytes | bytearray | memoryview) -> SignerLocked:
+        if len(view) < 1:
+            raise ValueError('Invalid view size.')
+        hash_lock = Nonce_32.decode(view)
+        hash_locked_signer = SignerList.decode(view)
+        time_lock = unpack_from('<I', view, hash_lock.size + hash_locked_signer.size)[0]
+        time_locked_signer = SignerList.decode(view)
+        return cls(
+            hash_lock, hash_locked_signer,
+            time_lock, time_locked_signer,
+            _validate=False
+        )
 
 
 class UTXORefByIndex(AbstractElement):
@@ -394,17 +470,18 @@ class TransactionInput(TransactionElement):
 
     SIGNER_KEY = 0
     SIGNER_LIST = 1
-    SIGNER_NONE = 2
+    SIGNER_LOCKED = 2
+    SIGNER_NONE = 3
 
     def __init__(self,
-        signer: SignerKey | SignerList | None = None,
+        signer: SignerKey | SignerList | SignerLocked | None = None,
         memo: bytes | bytearray | memoryview | None = None,
         _validate: bool = True
     ):
         if _validate:
             if (
                 signer is not None
-                and not isinstance(signer, (SignerKey, SignerList))
+                and not isinstance(signer, (SignerKey, SignerList, SignerLocked))
             ):
                 raise ValueError('Invalid signer.')
         super().__init__(memo, _validate=_validate)
@@ -421,7 +498,7 @@ class TransactionInput(TransactionElement):
         match self.signer:
             case SignerKey():
                 return [self.signer]
-            case SignerList():
+            case SignerList() | SignerLocked():
                 return self.signer.keys
             case _:
                 raise ValueError('Invalid signer.')
@@ -453,13 +530,15 @@ class TransactionInput(TransactionElement):
 
     @classmethod
     def _encode_optional_signer(
-        cls, signer: SignerKey | SignerList | None
-    ) -> tuple[Literal[0, 1, 2], bytes]:
+        cls, signer: SignerKey | SignerList | SignerLocked | None
+    ) -> tuple[Literal[0, 1, 2, 3], bytes]:
         match signer:
             case SignerKey():
                 prefix = cls.SIGNER_KEY
             case SignerList():
                 prefix = cls.SIGNER_LIST
+            case SignerLocked():
+                prefix = cls.SIGNER_LOCKED
             case None:
                 prefix = cls.SIGNER_NONE
             case _:
@@ -468,13 +547,15 @@ class TransactionInput(TransactionElement):
 
     @classmethod
     def _decode_optional_signer(
-        cls, prefix: Literal[0, 1, 2], view: bytes | bytearray | memoryview
-    ) -> SignerKey | SignerList | None:
+        cls, prefix: Literal[0, 1, 2, 3], view: bytes | bytearray | memoryview
+    ) -> SignerKey | SignerList | SignerLocked | None:
         match prefix:
             case cls.SIGNER_KEY:
                 return SignerKey.decode(view)
             case cls.SIGNER_LIST:
                 return SignerList.decode(view)
+            case cls.SIGNER_LOCKED:
+                return SignerLocked.decode(view)
             case cls.SIGNER_NONE:
                 return
             case _:
@@ -488,7 +569,7 @@ class UTXOSpend(TransactionInput):
 
     def __init__(self,
         utxo: UTXORefByIndex | UTXORefByHash,
-        signer: SignerKey | SignerList | None = None,
+        signer: SignerKey | SignerList | SignerLocked | None = None,
         memo: bytes | bytearray | memoryview | None = None,
         time_lock: int | None = None,
         _validate: bool = True
@@ -496,18 +577,30 @@ class UTXOSpend(TransactionInput):
         if _validate:
             if not isinstance(utxo, (UTXORefByIndex, UTXORefByHash)):
                 raise ValueError('Invalid UTXO reference.')
+            if time_lock is not None:
+                if (
+                    not isinstance(time_lock, int)
+                    or time_lock <= 0
+                    or time_lock >= 0x1_0000_0000
+                ):
+                    raise ValueError('Invalid time lock.')
         super().__init__(signer, memo, _validate=_validate)
         self.utxo = utxo
+        self.time_lock = time_lock
 
     def __eq__(self, value: UTXOSpend) -> bool:
         return (
             super().__eq__(value)
             and self.utxo == value.utxo
+            and self.time_lock == value.time_lock
         )
 
     @property
     def size(self) -> int:
-        n = 1 + self.utxo.size + (self.signer.size if self.signer else 0)
+        n = 1
+        n += self.utxo.size
+        n += (self.signer.size if self.signer else 0)
+        n += 4 if self.time_lock is not None else 0
         mlen = self._encode_mlen(self.memo)
         if mlen:
             n += len(mlen) + len(self.memo)
@@ -523,32 +616,40 @@ class UTXOSpend(TransactionInput):
                 raise ValueError('Invalid UTXO reference.')
         _prefix, signer = self._encode_optional_signer(self.signer)
         prefix |= _prefix << 1
+        time_lock = b'' if self.time_lock is None else pack('<I', self.time_lock)
+        prefix |= (1 << 3) if time_lock else 0
         mlen = self._encode_mlen(self.memo)
-        prefix |= len(mlen) << 3
+        prefix |= len(mlen) << 5
         return b''.join([
             pack('<B', prefix), self.utxo.encode(),
-            signer, mlen, (self.memo or b'')
+            signer, time_lock, mlen, (self.memo or b'')
         ])
 
     @classmethod
     def decode(cls, view: bytes | bytearray | memoryview) -> UTXOSpend:
-        if not view:
-            raise ValueError('Invalid size when decoding.')
-        prefix = view[0]
-        match prefix & 1:
-            case cls.UTXO_REF_BY_INDEX:
-                utxo = UTXORefByIndex.decode(view[1:])
-            case cls.UTXO_REF_BY_HASH:
-                utxo = UTXORefByHash.decode(view[1:])
-            case _:
-                raise ValueError('Invalid UTXO reference.')
-        prefix >>= 1
-        offset = 1 + utxo.size
-        signer = cls._decode_optional_signer(prefix & 3, view[offset:])
-        prefix >>= 2
-        offset += signer.size if signer else 0
-        memo = cls._decode_memo(prefix & 3, view[offset:])
-        return cls(utxo, signer, memo, _validate=False)
+        try:
+            prefix = view[0]
+            match prefix & 1:
+                case cls.UTXO_REF_BY_INDEX:
+                    utxo = UTXORefByIndex.decode(view[1:])
+                case cls.UTXO_REF_BY_HASH:
+                    utxo = UTXORefByHash.decode(view[1:])
+                case _:
+                    raise ValueError('Invalid UTXO reference.')
+            prefix >>= 1
+            offset = 1 + utxo.size
+            signer = cls._decode_optional_signer(prefix & 3, view[offset:])
+            prefix >>= 2
+            offset += signer.size if signer else 0
+            time_lock = unpack_from('<I', view, offset)[0] if prefix & 1 else None
+            if time_lock == 0:
+                raise ValueError('Invalid time lock.')
+            prefix >>= 1
+            offset += 0 if time_lock is None else 4
+            memo = cls._decode_memo(prefix & 3, view[offset:])
+            return cls(utxo, signer, time_lock, memo, _validate=False)
+        except (IndexError, StructError):
+            raise ValueError('Invalid view size.')
 
 
 class BlockSpend(TransactionInput):
@@ -566,6 +667,9 @@ class BlockSpend(TransactionInput):
                 or block >= 0x1_0000_0000_0000_0000
             ):
                 raise ValueError('Invalid block number.')
+            if signer is not None:
+                if not isinstance(signer, (SignerKey, SignerList)):
+                    raise ValueError('Invalid signer.')
         super().__init__(signer, memo, _validate=_validate)
         self.block = block
 

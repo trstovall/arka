@@ -124,6 +124,51 @@ async def test_signer_list_hash():
     assert isinstance(x, block.SignerHash)
 
 
+def test_signer_locked_serdes():
+    x = block.SignerLocked(
+        hash_lock=block.Nonce_32(urandom(32)),
+        hash_lock_signer=block.SignerList(
+            [block.SignerKey(urandom(32)) for i in range(2)], 2
+        ),
+        time_lock=rand(4),
+        time_lock_signer=block.SignerList(
+            [block.SignerKey(urandom(32)) for i in range(2)], 2
+        )
+    )
+    y = block.SignerLocked.decode(x.encode())
+    assert x == y
+    y = block.SignerLocked.decode(x.encode() + urandom(32))
+    assert x == y
+    assert len(x.encode()) == x.size
+
+
+def test_signer_locked_keys():
+    keys = [block.SignerKey(urandom(32)) for i in range(4)]
+    x = block.SignerLocked(
+        hash_lock=block.Nonce_32(urandom(32)),
+        hash_lock_signer=keys[:2],
+        time_lock=rand(4),
+        time_lock_signer=keys[2:]
+    )
+    assert x.keys == keys
+
+
+@pytest.mark.asyncio
+async def test_signer_locked_hash():
+    x = block.SignerLocked(
+        hash_lock=block.Nonce_32(urandom(32)),
+        hash_lock_signer=block.SignerList(
+            [block.SignerKey(urandom(32)) for i in range(2)], 2
+        ),
+        time_lock=rand(4),
+        time_lock_signer=block.SignerList(
+            [block.SignerKey(urandom(32)) for i in range(2)], 2
+        )
+    )
+    h = await x.hash()
+    assert isinstance(h, block.SignerHash)
+
+
 def test_utxo_ref_by_index_serdes():
     x = block.UTXORefByIndex(
         rand(8),
@@ -227,7 +272,8 @@ def test_utxo_spend_serdes():
             rand(2)
         ),
         block.SignerList([block.SignerKey(urandom(32)) for i in range(2)], 2),
-        urandom(0x100)
+        urandom(0x100),
+        rand(4)
     )
     y = block.UTXOSpend.decode(x.encode())
     assert x == y

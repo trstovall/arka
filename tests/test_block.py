@@ -127,11 +127,11 @@ async def test_signer_list_hash():
 def test_signer_locked_serdes():
     x = block.SignerLocked(
         hash_lock=block.Nonce_32(urandom(32)),
-        hash_lock_signer=block.SignerList(
+        hash_locked_signer=block.SignerList(
             [block.SignerKey(urandom(32)) for i in range(2)], 2
         ),
         time_lock=rand(4),
-        time_lock_signer=block.SignerList(
+        time_locked_signer=block.SignerList(
             [block.SignerKey(urandom(32)) for i in range(2)], 2
         )
     )
@@ -146,9 +146,9 @@ def test_signer_locked_keys():
     keys = [block.SignerKey(urandom(32)) for i in range(4)]
     x = block.SignerLocked(
         hash_lock=block.Nonce_32(urandom(32)),
-        hash_lock_signer=keys[:2],
+        hash_locked_signer=keys[:2],
         time_lock=rand(4),
-        time_lock_signer=keys[2:]
+        time_locked_signer=keys[2:]
     )
     assert x.keys == keys
 
@@ -157,11 +157,11 @@ def test_signer_locked_keys():
 async def test_signer_locked_hash():
     x = block.SignerLocked(
         hash_lock=block.Nonce_32(urandom(32)),
-        hash_lock_signer=block.SignerList(
+        hash_locked_signer=block.SignerList(
             [block.SignerKey(urandom(32)) for i in range(2)], 2
         ),
         time_lock=rand(4),
-        time_lock_signer=block.SignerList(
+        time_locked_signer=block.SignerList(
             [block.SignerKey(urandom(32)) for i in range(2)], 2
         )
     )
@@ -259,6 +259,25 @@ def test_utxo_spend_serdes():
         block.UTXORefByHash(
             block.TransactionHash(urandom(32)),
             rand(2)
+        )
+    )
+    y = block.UTXOSpend.decode(x.encode())
+    assert x == y
+    y = block.UTXOSpend.decode(x.encode() + urandom(32))
+    assert x == y
+    x = block.UTXOSpend(
+        block.UTXORefByHash(
+            block.TransactionHash(urandom(32)),
+            rand(2)
+        ),
+        signer=block.SignerLocked(
+            hash_lock=block.Nonce_32(urandom(32)),
+            hash_locked_signer=block.SignerList(
+                [block.SignerKey(urandom(32)) for i in range(2)], 2
+            ),
+            time_locked_signer=block.SignerList(
+                [block.SignerKey(urandom(32)) for i in range(2)], 2
+            )
         )
     )
     y = block.UTXOSpend.decode(x.encode())

@@ -600,10 +600,10 @@ class UTXOSpend(TransactionInput):
         n = 1
         n += self.utxo.size
         n += (self.signer.size if self.signer else 0)
-        n += 4 if self.time_lock is not None else 0
         mlen = self._encode_mlen(self.memo)
         if mlen:
             n += len(mlen) + len(self.memo)
+        n += 4 if self.time_lock is not None else 0
         return n
 
     def encode(self) -> bytes:
@@ -614,15 +614,18 @@ class UTXOSpend(TransactionInput):
                 prefix = self.UTXO_REF_BY_HASH
             case _:
                 raise ValueError('Invalid UTXO reference.')
+        shift = 1
         _prefix, signer = self._encode_optional_signer(self.signer)
-        prefix |= _prefix << 1
-        time_lock = b'' if self.time_lock is None else pack('<I', self.time_lock)
-        prefix |= (1 << 3) if time_lock else 0
+        prefix |= _prefix << shift
+        shift += 2
         mlen = self._encode_mlen(self.memo)
-        prefix |= len(mlen) << 5
+        prefix |= len(mlen) << shift
+        shift += 2
+        time_lock = b'' if self.time_lock is None else pack('<I', self.time_lock)
+        prefix |= (1 << shift) if time_lock else 0
         return b''.join([
             pack('<B', prefix), self.utxo.encode(),
-            signer, time_lock, mlen, (self.memo or b'')
+            signer, mlen, (self.memo or b''), time_lock
         ])
 
     @classmethod
@@ -641,13 +644,13 @@ class UTXOSpend(TransactionInput):
             signer = cls._decode_optional_signer(prefix & 3, view[offset:])
             prefix >>= 2
             offset += signer.size if signer else 0
+            memo = cls._decode_memo(prefix & 3, view[offset:])
+            offset += prefix & 3 + len(memo) if memo else 0
+            prefix >>= 2
             time_lock = unpack_from('<I', view, offset)[0] if prefix & 1 else None
             if time_lock == 0:
                 raise ValueError('Invalid time lock.')
-            prefix >>= 1
-            offset += 0 if time_lock is None else 4
-            memo = cls._decode_memo(prefix & 3, view[offset:])
-            return cls(utxo, signer, time_lock, memo, _validate=False)
+            return cls(utxo, signer, memo, time_lock, _validate=False)
         except (IndexError, StructError):
             raise ValueError('Invalid view size.')
 

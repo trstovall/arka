@@ -1,5 +1,6 @@
 
 from arka import block
+from arka.crypto import keccak_800
 from os import urandom
 
 import pytest
@@ -125,15 +126,45 @@ async def test_signer_list_hash():
 
 
 def test_signer_locked_serdes():
+    keys = [block.SignerKey(urandom(32)) for i in range(4)]
     x = block.SignerLocked(
         hash_lock=block.Nonce_32(urandom(32)),
-        hash_locked_signer=block.SignerList(
-            [block.SignerKey(urandom(32)) for i in range(2)], 2
-        ),
+        hash_locked_signer=block.SignerList(keys[:2], 2),
         time_lock=rand(4),
-        time_locked_signer=block.SignerList(
-            [block.SignerKey(urandom(32)) for i in range(2)], 2
-        )
+        time_locked_signer=block.SignerHash(urandom(32))
+    )
+    y = block.SignerLocked.decode(x.encode())
+    assert x == y
+    y = block.SignerLocked.decode(x.encode() + urandom(32))
+    assert x == y
+    assert len(x.encode()) == x.size
+    x = block.SignerLocked(
+        hash_lock=block.Nonce_32(urandom(32)),
+        hash_locked_signer=block.SignerHash(urandom(32)),
+        time_lock=rand(4),
+        time_locked_signer=block.SignerList(keys[2:], 2)
+    )
+    y = block.SignerLocked.decode(x.encode())
+    assert x == y
+    y = block.SignerLocked.decode(x.encode() + urandom(32))
+    assert x == y
+    assert len(x.encode()) == x.size
+    x = block.SignerLocked(
+        hash_lock=block.Nonce_32(urandom(32)),
+        hash_locked_signer=block.SignerList(keys[:2], 2),
+        time_lock=rand(4),
+        time_locked_signer=block.SignerList(keys[2:], 2)
+    )
+    y = block.SignerLocked.decode(x.encode())
+    assert x == y
+    y = block.SignerLocked.decode(x.encode() + urandom(32))
+    assert x == y
+    assert len(x.encode()) == x.size
+    x = block.SignerLocked(
+        hash_lock=block.Nonce_32(urandom(32)),
+        hash_locked_signer=block.SignerHash(urandom(32)),
+        time_lock=rand(4),
+        time_locked_signer=block.SignerHash(urandom(32))
     )
     y = block.SignerLocked.decode(x.encode())
     assert x == y
@@ -146,27 +177,78 @@ def test_signer_locked_keys():
     keys = [block.SignerKey(urandom(32)) for i in range(4)]
     x = block.SignerLocked(
         hash_lock=block.Nonce_32(urandom(32)),
-        hash_locked_signer=keys[:2],
+        hash_locked_signer=block.SignerList(keys[:2], 2),
         time_lock=rand(4),
-        time_locked_signer=keys[2:]
+        time_locked_signer=block.SignerHash(urandom(32))
+    )
+    assert x.keys == keys[:2]
+    x = block.SignerLocked(
+        hash_lock=block.Nonce_32(urandom(32)),
+        hash_locked_signer=block.SignerHash(urandom(32)),
+        time_lock=rand(4),
+        time_locked_signer=block.SignerList(keys[2:], 2)
+    )
+    assert x.keys == keys[2:]
+    x = block.SignerLocked(
+        hash_lock=block.Nonce_32(urandom(32)),
+        hash_locked_signer=block.SignerList(keys[:2], 2),
+        time_lock=rand(4),
+        time_locked_signer=block.SignerList(keys[2:], 2)
     )
     assert x.keys == keys
+    x = block.SignerLocked(
+        hash_lock=block.Nonce_32(urandom(32)),
+        hash_locked_signer=block.SignerHash(urandom(32)),
+        time_lock=rand(4),
+        time_locked_signer=block.SignerHash(urandom(32))
+    )
+    with pytest.raises(ValueError):
+        y = x.keys
 
 
 @pytest.mark.asyncio
 async def test_signer_locked_hash():
+    keys = [block.SignerKey(urandom(32)) for i in range(4)]
+    signers = [
+        block.SignerList(keys[:2], 2),
+        block.SignerList(keys[2:], 2)
+    ]
+    signer_hashes = await gather(*[s.hash() for s in signers])
+    hash_lock_preimage = block.Nonce_32(urandom(32))
+    hash_lock = block.Nonce_32(await keccak_800(hash_lock_preimage.value))
     x = block.SignerLocked(
-        hash_lock=block.Nonce_32(urandom(32)),
-        hash_locked_signer=block.SignerList(
-            [block.SignerKey(urandom(32)) for i in range(2)], 2
-        ),
+        hash_lock=hash_lock_preimage,
+        hash_locked_signer=signers[0],
         time_lock=rand(4),
-        time_locked_signer=block.SignerList(
-            [block.SignerKey(urandom(32)) for i in range(2)], 2
-        )
+        time_locked_signer=signer_hashes[1]
     )
-    h = await x.hash()
-    assert isinstance(h, block.SignerHash)
+    h_x = await x.hash()
+    assert isinstance(h_x, block.SignerHash)
+    y = block.SignerLocked(
+        hash_lock=hash_lock,
+        hash_locked_signer=signer_hashes[0],
+        time_lock=rand(4),
+        time_locked_signer=signers[1]
+    )
+    h_y = await y.hash()
+    assert isinstance(h_y, block.SignerHash)
+    z = block.SignerLocked(
+        hash_lock=hash_lock,
+        hash_locked_signer=signer_hashes[0],
+        time_lock=rand(4),
+        time_locked_signer=signer_hashes[1]
+    )
+    h_z = await z.hash()
+    assert isinstance(h_z, block.SignerHash)
+    w = block.SignerLocked(
+        hash_lock=hash_lock_preimage,
+        hash_locked_signer=signers[0],
+        time_lock=rand(4),
+        time_locked_signer=signers[1]
+    )
+    h_w = await w.hash()
+    assert isinstance(h_w, block.SignerHash)
+    assert h_x == h_y == h_z == h_w
 
 
 def test_utxo_ref_by_index_serdes():
@@ -275,9 +357,8 @@ def test_utxo_spend_serdes():
             hash_locked_signer=block.SignerList(
                 [block.SignerKey(urandom(32)) for i in range(2)], 2
             ),
-            time_locked_signer=block.SignerList(
-                [block.SignerKey(urandom(32)) for i in range(2)], 2
-            )
+            time_lock=rand(4),
+            time_locked_signer=block.SignerHash(urandom(32))
         )
     )
     y = block.UTXOSpend.decode(x.encode())

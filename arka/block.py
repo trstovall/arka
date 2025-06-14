@@ -244,19 +244,22 @@ class SignerList(AbstractElement):
 
 class SignerLocked(AbstractElement):
 
+    SIGNER_HASH = 0
+    SIGNER_LIST = 1
+
     def __init__(self,
-        hash_lock: Nonce_32, hash_locked_signer: SignerList,
-        time_lock: int, time_locked_signer: SignerList,
+        hash_lock: Nonce_32, hash_locked_signer: SignerList | SignerHash,
+        time_lock: int, time_locked_signer: SignerList | SignerHash,
         _validate: bool = True
     ):
         if _validate:
             if not isinstance(hash_lock, Nonce_32):
                 raise ValueError('Invalid hash_lock.')
-            if not isinstance(hash_locked_signer, SignerList):
+            if not isinstance(hash_locked_signer, (SignerList, SignerHash)):
                 raise ValueError('Invalid hash_locked_signer.')
             if not isinstance(time_lock, int) or time_lock < 0:
                 raise ValueError('Invalid time_lock.')
-            if not isinstance(time_locked_signer, SignerList):
+            if not isinstance(time_locked_signer, (SignerList, SignerHash)):
                 raise ValueError('Invalid time_locked_signer.')
         self.hash_lock = hash_lock
         self.hash_locked_signer = hash_locked_signer
@@ -281,10 +284,16 @@ class SignerLocked(AbstractElement):
     
     @property
     def keys(self) -> list[SignerKey]:
-        keys = (
-            self.time_locked_signer.keys
-            + self.hash_locked_signer.keys
-        )
+        if (
+            isinstance(self.hash_locked_signer, SignerHash)
+            and isinstance(self.time_locked_signer, SignerHash)
+        ):
+            raise ValueError('SignerLocked does not have keys.')
+        keys: list[SignerKey] = []
+        if isinstance(self.hash_locked_signer, SignerList):
+            keys.extend(self.hash_locked_signer.keys)
+        if isinstance(self.time_locked_signer, SignerList):
+            keys.extend(self.time_locked_signer.keys)
         unique: set[bytes] = set()
         output: list[SignerKey] = []
         for k in keys:
@@ -294,10 +303,23 @@ class SignerLocked(AbstractElement):
         return output
 
     async def hash(self) -> SignerHash:
-        hash_lock = await keccak_800(self.hash_lock.encode())
-        hash_locked_signer = await self.hash_locked_signer.hash()
+        match self.hash_locked_signer:
+            case SignerHash():
+                hash_lock = self.hash_lock.value
+                hash_locked_signer = self.hash_locked_signer.value
+            case SignerList():
+                hash_lock = (await self.hash_lock.hash()).value
+                hash_locked_signer = (await self.hash_locked_signer.hash()).value
+            case _:
+                raise ValueError('Invalid hash_locked_signer type.')
         time_lock = pack('<I', self.time_lock)
-        time_locked_signer = await self.time_locked_signer.hash()
+        match self.time_locked_signer:
+            case SignerHash():
+                time_locked_signer = self.time_locked_signer.value
+            case SignerList():
+                time_locked_signer = (await self.time_locked_signer.hash()).value
+            case _:
+                raise ValueError('Invalid time_locked_signer type.')
         preimage = b''.join([
             hash_lock, hash_locked_signer,
             time_lock, time_locked_signer
@@ -305,28 +327,62 @@ class SignerLocked(AbstractElement):
         return SignerHash(await keccak_1600(preimage))
 
     def encode(self) -> bytes:
+        prefix = 0
         hash_lock = self.hash_lock.encode()
+        match self.hash_locked_signer:
+            case SignerHash():
+                prefix = self.SIGNER_HASH
+            case SignerList():
+                prefix = self.SIGNER_LIST
+            case _:
+                raise ValueError('Invalid hash_locked_signer type.')
         hash_locked_signer = self.hash_locked_signer.encode()
         time_lock = pack('<I', self.time_lock)
+        match self.time_locked_signer:
+            case SignerHash():
+                prefix |= self.SIGNER_HASH << 1
+            case SignerList():
+                prefix |= self.SIGNER_LIST << 1
+            case _:
+                raise ValueError('Invalid time_locked_signer type.')
         time_locked_signer = self.time_locked_signer.encode()
         return b''.join([
+            pack('<B', prefix),
             hash_lock, hash_locked_signer,
             time_lock, time_locked_signer
         ])
 
     @classmethod
     def decode(cls, view: bytes | bytearray | memoryview) -> SignerLocked:
-        if len(view) < 1:
+        try:
+            prefix = view[0]
+            hash_lock = Nonce_32.decode(view[1:])
+            offset = 1 + hash_lock.size
+            match prefix & 1:
+                case cls.SIGNER_HASH:
+                    hash_locked_signer = SignerHash.decode(view[offset:])
+                case cls.SIGNER_LIST:
+                    hash_locked_signer = SignerList.decode(view[offset:])
+                case _:
+                    raise ValueError('Invalid hash_locked_signer type.')
+            prefix >>= 1
+            offset += hash_locked_signer.size
+            time_lock = unpack_from('<I', view, offset)[0]
+            offset += 4
+            match prefix & 1:
+                case cls.SIGNER_HASH:
+                    time_locked_signer = SignerHash.decode(view[offset:])
+                case cls.SIGNER_LIST:
+                    time_locked_signer = SignerList.decode(view[offset:])
+                case _:
+                    raise ValueError('Invalid time_locked_signer type.')
+            return cls(
+                hash_lock, hash_locked_signer,
+                time_lock, time_locked_signer,
+                _validate=False
+            )
+        except (IndexError, StructError):
             raise ValueError('Invalid view size.')
-        hash_lock = Nonce_32.decode(view)
-        hash_locked_signer = SignerList.decode(view)
-        time_lock = unpack_from('<I', view, hash_lock.size + hash_locked_signer.size)[0]
-        time_locked_signer = SignerList.decode(view)
-        return cls(
-            hash_lock, hash_locked_signer,
-            time_lock, time_locked_signer,
-            _validate=False
-        )
 
 
 class UTXORefByIndex(AbstractElement):

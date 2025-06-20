@@ -216,10 +216,11 @@ async def test_signer_locked_hash():
     signer_hashes = await gather(*[s.hash() for s in signers])
     hash_lock_preimage = block.Nonce_32(urandom(32))
     hash_lock = block.Nonce_32(await keccak_800(hash_lock_preimage.value))
+    time_lock = rand(4)
     x = block.SignerLocked(
         hash_lock=hash_lock_preimage,
         hash_locked_signer=signers[0],
-        time_lock=rand(4),
+        time_lock=time_lock,
         time_locked_signer=signer_hashes[1]
     )
     h_x = await x.hash()
@@ -227,7 +228,7 @@ async def test_signer_locked_hash():
     y = block.SignerLocked(
         hash_lock=hash_lock,
         hash_locked_signer=signer_hashes[0],
-        time_lock=rand(4),
+        time_lock=time_lock,
         time_locked_signer=signers[1]
     )
     h_y = await y.hash()
@@ -235,7 +236,7 @@ async def test_signer_locked_hash():
     z = block.SignerLocked(
         hash_lock=hash_lock,
         hash_locked_signer=signer_hashes[0],
-        time_lock=rand(4),
+        time_lock=time_lock,
         time_locked_signer=signer_hashes[1]
     )
     h_z = await z.hash()
@@ -243,7 +244,7 @@ async def test_signer_locked_hash():
     w = block.SignerLocked(
         hash_lock=hash_lock_preimage,
         hash_locked_signer=signers[0],
-        time_lock=rand(4),
+        time_lock=time_lock,
         time_locked_signer=signers[1]
     )
     h_w = await w.hash()

@@ -231,7 +231,7 @@ async def test_signer_locked_hash():
         time_locked_signer=signers[1]
     )
     h_y = await y.hash()
-    assert isinstance(h_y, block.SignerHash)
+    assert h_x == h_y
     z = block.SignerLocked(
         hash_lock=hash_lock,
         hash_locked_signer=signer_hashes[0],
@@ -239,7 +239,7 @@ async def test_signer_locked_hash():
         time_locked_signer=signer_hashes[1]
     )
     h_z = await z.hash()
-    assert isinstance(h_z, block.SignerHash)
+    assert h_x == h_z
     w = block.SignerLocked(
         hash_lock=hash_lock_preimage,
         hash_locked_signer=signers[0],
@@ -247,8 +247,7 @@ async def test_signer_locked_hash():
         time_locked_signer=signers[1]
     )
     h_w = await w.hash()
-    assert isinstance(h_w, block.SignerHash)
-    assert h_x == h_y == h_z == h_w
+    assert h_x == h_w
 
 
 def test_utxo_ref_by_index_serdes():

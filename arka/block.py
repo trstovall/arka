@@ -308,7 +308,7 @@ class SignerLocked(AbstractElement):
                 hash_lock = self.hash_lock.value
                 hash_locked_signer = self.hash_locked_signer.value
             case SignerList():
-                hash_lock = await keccak_800(self.hash_lock)
+                hash_lock = await keccak_800(self.hash_lock.value)
                 hash_locked_signer = (await self.hash_locked_signer.hash()).value
             case _:
                 raise ValueError('Invalid hash_locked_signer type.')

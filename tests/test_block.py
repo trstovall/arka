@@ -327,7 +327,7 @@ def test_transaction_input_keys():
 
 def test_utxo_spend_serdes():
     x = block.UTXOSpend(
-        block.UTXORefByIndex(
+        utxo=block.UTXORefByIndex(
             rand(8),
             rand(4),
             rand(2)
@@ -338,7 +338,7 @@ def test_utxo_spend_serdes():
     y = block.UTXOSpend.decode(x.encode() + urandom(32))
     assert x == y
     x = block.UTXOSpend(
-        block.UTXORefByHash(
+        utxo=block.UTXORefByHash(
             block.TransactionHash(urandom(32)),
             rand(2)
         )
@@ -348,7 +348,7 @@ def test_utxo_spend_serdes():
     y = block.UTXOSpend.decode(x.encode() + urandom(32))
     assert x == y
     x = block.UTXOSpend(
-        block.UTXORefByHash(
+        utxo=block.UTXORefByHash(
             block.TransactionHash(urandom(32)),
             rand(2)
         ),
@@ -366,14 +366,16 @@ def test_utxo_spend_serdes():
     y = block.UTXOSpend.decode(x.encode() + urandom(32))
     assert x == y
     x = block.UTXOSpend(
-        block.UTXORefByIndex(
+        utxo=block.UTXORefByIndex(
             rand(8),
             rand(4),
             rand(2)
         ),
-        block.SignerList([block.SignerKey(urandom(32)) for i in range(2)], 2),
-        urandom(0x100),
-        rand(4)
+        time_lock=rand(4),
+        signer=block.SignerList([
+            block.SignerKey(urandom(32)) for i in range(2)
+        ], 2),
+        memo=urandom(0x100)
     )
     y = block.UTXOSpend.decode(x.encode())
     assert x == y

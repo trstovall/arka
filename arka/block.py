@@ -308,7 +308,7 @@ class SignerLocked(AbstractElement):
                 hash_lock = self.hash_lock.value
                 hash_locked_signer = self.hash_locked_signer.value
             case SignerList():
-                hash_lock = (await self.hash_lock.hash()).value
+                hash_lock = await keccak_800(self.hash_lock)
                 hash_locked_signer = (await self.hash_locked_signer.hash()).value
             case _:
                 raise ValueError('Invalid hash_locked_signer type.')
@@ -625,9 +625,9 @@ class UTXOSpend(TransactionInput):
 
     def __init__(self,
         utxo: UTXORefByIndex | UTXORefByHash,
+        time_lock: int | None = None,
         signer: SignerKey | SignerList | SignerLocked | None = None,
         memo: bytes | bytearray | memoryview | None = None,
-        time_lock: int | None = None,
         _validate: bool = True
     ):
         if _validate:
@@ -655,11 +655,11 @@ class UTXOSpend(TransactionInput):
     def size(self) -> int:
         n = 1
         n += self.utxo.size
+        n += 4 if self.time_lock is not None else 0
         n += (self.signer.size if self.signer else 0)
         mlen = self._encode_mlen(self.memo)
         if mlen:
             n += len(mlen) + len(self.memo)
-        n += 4 if self.time_lock is not None else 0
         return n
 
     def encode(self) -> bytes:
@@ -671,17 +671,18 @@ class UTXOSpend(TransactionInput):
             case _:
                 raise ValueError('Invalid UTXO reference.')
         shift = 1
+        time_lock = b'' if self.time_lock is None else pack('<I', self.time_lock)
+        prefix |= (1 << shift) if time_lock else 0
+        shift += 1
         _prefix, signer = self._encode_optional_signer(self.signer)
         prefix |= _prefix << shift
         shift += 2
         mlen = self._encode_mlen(self.memo)
         prefix |= len(mlen) << shift
         shift += 2
-        time_lock = b'' if self.time_lock is None else pack('<I', self.time_lock)
-        prefix |= (1 << shift) if time_lock else 0
         return b''.join([
-            pack('<B', prefix), self.utxo.encode(),
-            signer, mlen, (self.memo or b''), time_lock
+            pack('<B', prefix), self.utxo.encode(), time_lock,
+            signer, mlen, (self.memo or b'')
         ])
 
     @classmethod
@@ -697,16 +698,16 @@ class UTXOSpend(TransactionInput):
                     raise ValueError('Invalid UTXO reference.')
             prefix >>= 1
             offset = 1 + utxo.size
+            time_lock = unpack_from('<I', view, offset)[0] if prefix & 1 else None
+            if time_lock == 0:
+                raise ValueError('Invalid time lock.')
+            prefix >>= 1
+            offset += 4 if time_lock is not None else 0
             signer = cls._decode_optional_signer(prefix & 3, view[offset:])
             prefix >>= 2
             offset += signer.size if signer else 0
             memo = cls._decode_memo(prefix & 3, view[offset:])
-            offset += prefix & 3 + len(memo) if memo else 0
-            prefix >>= 2
-            time_lock = unpack_from('<I', view, offset)[0] if prefix & 1 else None
-            if time_lock == 0:
-                raise ValueError('Invalid time lock.')
-            return cls(utxo, signer, memo, time_lock, _validate=False)
+            return cls(utxo, time_lock, signer, memo, _validate=False)
         except (IndexError, StructError):
             raise ValueError('Invalid view size.')
 

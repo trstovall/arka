@@ -1860,37 +1860,25 @@ class BlockHeader(AbstractElement):
         )
 
 
-class Block(AbstractElement):
-    SIGNER_KEY = 0
-    SIGNER_HASH = 1
+class TransactionList(AbstractElement):
 
-    def __init__(self,
-        header: BlockHeader,
-        transactions: list[Transaction] = [],
-        _validate: bool = True
-    ):
+    def __init__(self, transactions: list[Transaction] = [], _validate: bool = True):
         if _validate:
-            if not isinstance(header, BlockHeader):
-                raise ValueError('Invalid block header.')
             if not all(isinstance(tx, Transaction) for tx in transactions):
                 raise ValueError('Invalid transaction.')
-        self.header = header
         self.transactions = transactions
-
-    def __eq__(self, value: Block) -> bool:
+    
+    def __eq__(self, value: TransactionList) -> bool:
         return (
             super().__eq__(value)
-            and self.header == value.header
             and self.transactions == value.transactions
         )
-
+    
     @property
     def size(self) -> int:
-        n = self.header.size
-        n += sum(2 + tx.size for tx in self.transactions)
-        return n
-
-    async def hash_transactions(self, merkle: bool = False) -> TransactionListHash | None:
+        return sum(tx.size for tx in self.transactions)
+    
+    async def hash(self, merkle: bool = False) -> TransactionListHash | None:
         if not self.transactions:
             return
         hashes = await gather(*[
@@ -1909,20 +1897,68 @@ class Block(AbstractElement):
             hash = await keccak_1600(b''.join(h.value for h in hashes))
         return TransactionListHash(hash)
 
+    def encode(self) -> bytes:
+        return b''.join(
+            tx.encode() for tx in self.transactions
+        )
+    
+    @classmethod
+    async def decode(cls, view: bytes | bytearray | memoryview) -> TransactionList:
+        transactions: list[Transaction] = []
+        offset = 0
+        while offset < len(view):
+            tx = await Transaction.decode(view[offset:], digest=None)
+            transactions.append(tx)
+            offset += tx.size
+        return cls(transactions, _validate=False)
+
+
+class Block(AbstractElement):
+    SIGNER_KEY = 0
+    SIGNER_HASH = 1
+
+    def __init__(self,
+        header: BlockHeader,
+        transactions: TransactionList,
+        _validate: bool = True
+    ):
+        if _validate:
+            if not isinstance(header, BlockHeader):
+                raise ValueError('Invalid block header.')
+            if not isinstance(transactions, TransactionList):
+                raise ValueError('Invalid transaction list.')
+        self.header = header
+        self.transactions = transactions
+
+    def __eq__(self, value: Block) -> bool:
+        return (
+            super().__eq__(value)
+            and self.header == value.header
+            and self.transactions == value.transactions
+        )
+
+    @property
+    def size(self) -> int:
+        return self.header.size + self.transactions.size
+
     async def hash(self, update_header=False) -> BlockHash:
-        h = await self.hash_transactions()
+        n = len(self.transactions.transactions) or None
+        h = await self.transactions.hash()
         if update_header:
-            self.header.ntxs = len(self.transactions) or None
+            self.header.ntxs = n
             self.header.root_hash = h
-        elif self.header.ntxs != (len(self.transactions) or None):
+        elif self.header.ntxs != n:
             raise ValueError('Invalid header.ntxs.')
         elif self.header.root_hash != h:
             raise ValueError('Invalid header.root_hash.')
         return await self.header.hash_nonce()
 
     def encode(self) -> bytes:
-        if len(self.transactions):
-            if self.header.ntxs != len(self.transactions):
+        n = len(self.transactions.transactions) or None
+        if n is not None and n > 0x1_0000_0000:
+            raise ValueError('Invalid transactions list size.')
+        if n:
+            if self.header.ntxs != n:
                 raise ValueError('Invalid header.ntxs')
             if self.header.root_hash is None:
                 raise ValueError('Invalid header.root_hash')
@@ -1932,21 +1968,16 @@ class Block(AbstractElement):
             if self.header.root_hash is not None:
                 raise ValueError('Invalid header.root_hash')
         header = self.header.encode()
-        transactions: list[bytes] = []
-        n = len(self.transactions)
-        tx_lens = bytearray(2 * n)
-        if n == 0:
-            pass
-        elif n < 0x1_0000_0000:
-            for i, tx in enumerate(self.transactions):
-                tx = tx.encode()
+        transactions: list[bytes] = [
+            tx.encode() for tx in self.transactions.transactions
+        ]
+        tx_lens = bytearray(2 * (n or 0))
+        if n:
+            for i, tx in enumerate(transactions):
                 m = len(tx)
                 if m >= 0x1_0000:
                     raise ValueError('Invalid transaction size.')
                 pack_into('<H', tx_lens, 2 * i, m)
-                transactions.append(tx)
-        else:
-            raise ValueError('Invalid transactions list size.')
         return b''.join(
             [header, tx_lens] + transactions
         )
@@ -1975,12 +2006,12 @@ class Block(AbstractElement):
                     offsets.append(end)
                 if len(view) < offsets[-1]:
                     raise IndexError()
-                transactions: list[Transaction] = await gather(*[
+                transactions = TransactionList(await gather(*[
                     cls._decode_transaction(view[offsets[i]:offsets[i + 1]])
                     for i in range(header.ntxs)
-                ])
+                ]))
             else:
-                transactions = []
+                transactions = TransactionList()
         except (IndexError, StructError) as e:
             raise ValueError('Invalid view size.')
         return cls(

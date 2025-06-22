@@ -1,6 +1,6 @@
 
 from __future__ import annotations
-from typing import Generator, Callable
+from typing import Generator, Callable, Literal
 from arka import broker
 from arka import block
 from collections import deque
@@ -1183,39 +1183,90 @@ class TransactionsRequest(AbstractMessageEvent):
 
 
 class TransactionsResponse(AbstractMessageEvent):
+
     TYPE = MSG.TX_RES
 
-    def __init__(self, id: int, tx: block.Transaction):
-        if id < 0:
-            raise ValueError('Transaction ID cannot be negative.')
-        self.id = id
-        self.tx = tx
+    def __init__(self, txs: dict[int, block.Transaction] = {}):
+        if len(txs) >= 0x1_0000_0000:
+            raise ValueError('Too many transactions in response.')
+        for k, v in txs.items():
+            if 0 <= k < 0x1_0000_0000_0000_0000:
+                if not isinstance(v, block.Transaction):
+                    raise TypeError('Transaction must be an instance of block.Transaction.')
+            else:
+                raise ValueError('Transaction ID must be an unsigned 64-bit integer.')
+        self.txs = txs
 
     def encode(self) -> bytes:
-        id_bytes = self.id.to_bytes((self.id.bit_length() + 7) // 8, 'little')
-        if len(id_bytes) < 16:
-            prefix = len(id_bytes).to_bytes(1, 'little')
-        else:
-            raise ValueError('Transaction ID is too large.')
+        if not self.txs:
+            # Empty response
+            return self.TYPE + b'\x00'
+        ids = list(self.txs.keys())
+        if len(ids) == 1:
+            # Single transaction response
+            prefix = b'\x01'
+            id = ids[0].to_bytes(8, 'little')
+            tx = self.txs[ids[0]].encode()
+            return b''.join(
+                [self.TYPE, prefix, id, tx]
+            )
+        # Multiple transactions response
+        num_txs = len(self.txs).to_bytes(4, 'little') if self.txs else b''
+        txs = [self.txs[i].encode() for i in ids]
+        base = min(ids, default=0)
+        ids = [i - base for i in ids]
+        base = base.to_bytes(8, 'little')
+        nbytes = (max(ids, default=0).bit_length() + 7) // 8
+        prefix = (3 | (nbytes << 2)).to_bytes(1, 'little')
+        ids = [i.to_bytes(nbytes, 'little') for i in ids]
         return b''.join(
-            [self.TYPE, prefix, id_bytes, self.tx.encode()]
+            [self.TYPE, prefix, num_txs, base] + ids + txs
         )
     
     @classmethod
     def decode(cls, msg: bytes | bytearray | memoryview) -> TransactionsResponse:
         try:
-            if len(msg) < 2:
+            prefix = msg[1]
+            match prefix & 3:
+                case 0:
+                    # Empty response
+                    return cls()
+                case 1:
+                    # Single transaction response
+                    if len(msg) < 10:
+                        raise IndexError()
+                    id = int.from_bytes(msg[2:10], 'little')
+                    tx = block.Transaction.decode(msg[10:])
+                    return cls({id: tx})
+                case 2:
+                    raise ValueError('Invalid transaction response prefix.')
+                case 3:
+                    # Multiple transactions response
+                    pass
+            if len(msg) < 14:
                 raise IndexError()
-            id_size = msg[1] & 15
-            offset = 2
-            if id_size == 0:
-                i = 0
-            else:
-                if len(msg) < offset + id_size:
-                    raise IndexError()
-                i = int.from_bytes(msg[offset:offset+id_size], 'little')
-            tx = block.Transaction.decode(msg[offset+id_size:])
-            return cls(i, tx)
+            num_txs = int.from_bytes(msg[2:6], 'little') if prefix & 1 else 0
+            if num_txs < 2:
+                raise ValueError('Invalid transaction count encoded.')
+            base = int.from_bytes(msg[6:14], 'little')
+            offset = 14
+            nbytes = (prefix >> 2) & 15
+            if nbytes == 0:
+                raise ValueError('Invalid transaction ID size.')
+            end = offset + nbytes * num_txs
+            if len(msg) < end:
+                raise IndexError()
+            ids: list[int] = [
+                base + int.from_bytes(msg[offset:offset + nbytes], 'little')
+                for offset in range(offset, end, nbytes)
+            ]
+            txs: list[block.Transaction] = []
+            offset = end
+            for i in range(num_txs):
+                tx = block.Transaction.decode(msg[offset:])
+                offset += tx.size()
+                txs.append(tx)
+            return cls(dict(zip(ids, txs)))
         except IndexError:
             raise ValueError('Invalid message size.')
 
@@ -1278,68 +1329,81 @@ class BlocksRequest(AbstractMessageEvent):
     SUMMARY = 1
     BLOCK = 2
 
-    def __init__(self, ids: set[int], mode: int = SUMMARY):
+    MODES = ['HEADER', 'SUMMARY', 'BLOCK']
+
+    def __init__(self,
+        ids: set[int] = set(),
+        mode: Literal['HEADER', 'SUMMARY', 'BLOCK'] = 'HEADER'
+    ):
         if len(ids) >= 0x100:
             raise ValueError('Too many blocks requested.')
-        self.id = ids
+        if any(i < 0 or i >= 0x1_0000_0000_0000_0000 for i in ids):
+            raise ValueError('Block ID must be an unsigned 64-bit integer.')
+        self.ids = ids
         self.mode = mode
 
     def encode(self) -> bytes:
-        num_ids = len(self.ids)
-        prefix = self.mode
-        if num_ids == 0:
-            return self.TYPE + b'\x00' + prefix.to_bytes(2, 'little')
-        if num_ids >= 0x100:
-            raise ValueError('Too many blocks requested.')
-        base = min(self.ids, default=0)
-        if base < 0:
-            raise ValueError('Block ID cannot be negative.')
-        nbytes = (base.bit_length() + 7) // 8
-        if nbytes > 8:
-            raise ValueError('Block ID is too large.')
-        prefix |= nbytes << 2
-        if num_ids == 1:
-            return b''.join([
-                self.TYPE, b'\x01', prefix.to_bytes(2, 'little'),
-                base.to_bytes(nbytes, 'little')
-            ])
-        # Reindex ids to start from 0
-        bound = max(self.ids, default=0) - base
-        nbytes = (bound.bit_length() + 7) // 8
-        if nbytes > 8:
-            raise ValueError('Block ID is too large.')
-        prefix |= nbytes << 6
-        ids = [(i - base).to_bytes(nbytes, 'little') for i in self.ids]
-        return b''.join([
-            self.TYPE, num_ids.to_bytes(1, 'little'), prefix.to_bytes(2, 'little'),
-            base.to_bytes((prefix >> 2) & 15, 'little')
-        ] + ids)
+        if not self.ids:
+            # Empty request
+            return self.TYPE + b'\x00'
+        mode = self.MODES.index(self.mode)
+        if len(self.ids) == 1:
+            # Single block request
+            prefix = (1 | (mode << 2)).to_bytes(1, 'little')
+            id = next(iter(self.ids)).to_bytes(8, 'little')
+            return b''.join(
+                [self.TYPE, prefix, id]
+            )
+        # Multiple blocks request
+        prefix = 3 | (mode << 2)
+        ids = list(self.ids)
+        base = min(ids, default=0)
+        ids = [i - base for i in ids]
+        base = base.to_bytes(8, 'little')
+        nbytes = (max(ids, default=0).bit_length() + 7) // 8
+        prefix = (prefix | (nbytes << 4)).to_bytes(1, 'little')
+        ids = [i.to_bytes(nbytes, 'little') for i in ids]
+        num_ids = len(ids).to_bytes(1, 'little')
+        return b''.join(
+            [self.TYPE, prefix, num_ids, base] + ids
+        )
 
     @classmethod
     def decode(cls, msg: bytes | bytearray | memoryview) -> BlocksRequest:
         try:
-            if len(msg) < 3:
+            prefix = msg[1]
+            match prefix & 3:
+                case 0:
+                    # Empty request
+                    return cls()
+                case 1:
+                    # Single block request
+                    if len(msg) < 10:
+                        raise IndexError()
+                    id = int.from_bytes(msg[2:10], 'little')
+                    mode = cls.MODES[prefix >> 2]
+                    return cls({id}, mode)
+                case 2:
+                    raise ValueError('Invalid block request prefix.')
+                case 3:
+                    # Multiple blocks request
+                    pass
+            if len(msg) < 11:
                 raise IndexError()
-            num_ids = msg[1]
-            prefix = int.from_bytes(msg[2:4], 'little')
-            mode = prefix & 3
-            if num_ids == 0:
-                return cls(set(), mode)
-            offset = 4
-            nbytes = (prefix >> 2) & 15
-            if len(msg) < offset + nbytes:
-                raise IndexError()
-            base = int.from_bytes(msg[offset:offset+nbytes], 'little')
-            if num_ids == 1:
-                return cls({base}, mode)
-            # num_ids > 1
-            offset += nbytes
-            nbytes = (prefix >> 6) & 15
+            num_ids = msg[2]
+            if num_ids < 2:
+                raise ValueError('Invalid block count encoded.')
+            mode = cls.MODES[(prefix >> 2) & 3]
+            base = int.from_bytes(msg[3:11], 'little')
+            nbytes = (prefix >> 4) & 15
+            if nbytes > 8:
+                raise ValueError('Invalid block ID size.')
+            offset = 11
             end = offset + nbytes * num_ids
             if len(msg) < end:
                 raise IndexError()
             ids: set[int] = {
-                int.from_bytes(msg[i:i+nbytes], 'little') + base
+                base + int.from_bytes(msg[i:i+nbytes], 'little')
                 for i in range(offset, end, nbytes)
             }
             return cls(ids, mode)
@@ -1355,38 +1419,93 @@ class BlocksResponse(AbstractMessageEvent):
     SUMMARY = 1
     BLOCK = 2
 
-    def __init__(self, block: block.BlockHeader | block.BlockSummary | block.Block):
-        self.block = block
+    MODES = ['HEADER', 'SUMMARY', 'BLOCK']
+
+    def __init__(self,
+        blocks: list[block.BlockHeader] | list[block.BlockSummary] | list[block.Block],
+        mode: Literal['HEADER', 'SUMMARY', 'BLOCK'] = 'HEADER'
+    ):
+        if len(blocks) >= 0x100:
+            raise ValueError('Too many blocks in response.')
+        match mode:
+            case 'HEADER':
+                if not all(isinstance(b, block.BlockHeader) for b in blocks):
+                    raise TypeError('All blocks must be instances of block.BlockHeader.')
+            case 'SUMMARY':
+                if not all(isinstance(b, block.BlockSummary) for b in blocks):
+                    raise TypeError('All blocks must be instances of block.BlockSummary.')
+            case 'BLOCK':
+                if not all(isinstance(b, block.Block) for b in blocks):
+                    raise TypeError('All blocks must be instances of block.Block.')
+        self.blocks = blocks
+        self.mode = mode
 
     def encode(self) -> bytes:
-        match self.block:
-            case block.BlockHeader():
-                prefix = self.HEADER
-            case block.BlockSummary():
-                prefix = self.SUMMARY
-            case block.Block():
-                prefix = self.BLOCK
-            case _:
-                raise TypeError('block must be an instance of block.BlockHeader, block.BlockSummary, or block.Block.')
+        if not self.blocks:
+            # Empty response
+            return self.TYPE + b'\x00'
+        mode = self.MODES.index(self.mode)
+        if len(self.blocks) == 1:
+            # Single block response
+            prefix = (1 | (mode << 2)).to_bytes(1, 'little')
+            block = self.blocks[0].encode()
+            return b''.join(
+                [self.TYPE, prefix, block]
+            )
+        # Multiple blocks response
+        prefix = (3 | (mode << 2)).to_bytes(1, 'little')
+        num_blocks = len(self.blocks).to_bytes(1, 'little')
+        blocks = [b.encode() for b in self.blocks]
         return b''.join(
-            [self.TYPE, prefix.to_bytes(1, 'little'), self.block.encode()]
+            [self.TYPE, prefix, num_blocks] + blocks
         )
     
     @classmethod
     def decode(cls, msg: bytes | bytearray | memoryview) -> BlocksResponse:
         try:
-            if len(msg) < 2:
-                raise IndexError()
             prefix = msg[1]
-            if prefix == cls.HEADER:
-                block = block.BlockHeader.decode(msg[2:])
-            elif prefix == cls.SUMMARY:
-                block = block.BlockSummary.decode(msg[2:])
-            elif prefix == cls.BLOCK:
-                block = block.Block.decode(msg[2:])
-            else:
-                raise ValueError('Invalid block response type.')
-            return cls(block)
+            mode = cls.MODES[prefix >> 2]
+            match prefix & 3:
+                case 0:
+                    # Empty response
+                    return cls([], mode)
+                case 1:
+                    # Single block response
+                    match mode:
+                        case 'HEADER':
+                            b = block.BlockHeader.decode(msg[2:])
+                        case 'SUMMARY':
+                            b = block.BlockSummary.decode(msg[2:])
+                        case 'BLOCK':
+                            b = block.Block.decode(msg[2:])
+                        case _:
+                            raise ValueError('Invalid block response mode.')
+                    return cls([b], mode)
+                case 2:
+                    raise ValueError('Invalid block response prefix.')
+                case 3:
+                    # Multiple blocks response
+                    pass
+            if len(msg) < 3:
+                raise IndexError()
+            num_blocks = msg[2]
+            if num_blocks < 2:
+                raise ValueError('Invalid block count encoded.')
+            offset = 3
+            blocks: list[block.BlockHeader] | list[block.BlockSummary] | list[block.Block] = []
+            for _ in range(num_blocks):
+                match mode:
+                    case 'HEADER':
+                        b = block.BlockHeader.decode(msg[offset:])
+                    case 'SUMMARY':
+                        b = block.BlockSummary.decode(msg[offset:])
+                    case 'BLOCK':
+                        b = block.Block.decode(msg[offset:])
+                    case _:
+                        raise ValueError('Invalid block response mode.')
+                blocks.append(b)
+                offset += b.size()
+            return cls(blocks, mode)
         except IndexError:
             raise ValueError('Invalid message size.')
 
@@ -1438,6 +1557,8 @@ class Peer(object):
         self.handler = handler
         self.recvr = recvr
         self.peers_sub: bool = False
+        self.transactions_sub: bool = False
+        self.blocks_sub: bool = False
 
 
 ### MeshProtocol
@@ -1573,18 +1694,40 @@ class Mesh(object):
             self.blacklist[peer.addr] = time.monotonic() + self.BLACKLIST_TIMEOUT
 
     async def handle_peer(self, peer: Peer):
+        peers_sub: bool = True
+        transactions_sub: bool = True
+        blocks_sub: bool = True
         try:
+            peer.recvr = self.loop.create_task(self.handle_recv(peer))
             self.broker.pub(broker.PeerConnected(peer.addr))
             # Set up connection
-            await peer.sock.send(PeersSubscribe(active=True).encode())
+            if peers_sub:
+                await peer.sock.send(PeersSubscribe(active=True).encode())
+            if transactions_sub:
+                await peer.sock.send(TransactionsSubscribe(active=True).encode())
+            if blocks_sub:
+                await peer.sock.send(BlocksSubscribe(active=True).encode())
             # Process peer.msg_q
-            peer.recvr = self.loop.create_task(self.handle_recv(peer))
             while not peer.recvr.done() and peer.sock.state == peer.sock.STATE_ESTABLISHED:
                 match await peer.msg_q.get():
                     case None:
                         break
                     case MsgToSend() as msg:
-                        await peer.sock.send(msg.encode())
+                        msg = msg.encode()
+                        match msg[:1]:
+                            case PeersPublish.TYPE:
+                                if not peer.peers_sub:
+                                    # Silently drop peer messages
+                                    continue
+                            case TransactionsPublish.TYPE:
+                                if not peer.transactions_sub:
+                                    # Silently drop transaction messages
+                                    continue
+                            case BlocksPublish.TYPE:
+                                if not peer.blocks_sub:
+                                    # Silently drop block messages
+                                    continue
+                        await peer.sock.send(msg)
                     case PeersSubscribe() as msg:
                         if msg.active and not peer.peers_sub:
                             peer.peers_sub = True
@@ -1602,7 +1745,7 @@ class Mesh(object):
                         elif peer.peers_sub and not msg.active:
                             peer.peers_sub = False
                     case PeersPublish() as msg:
-                        if not peer.peers_sub:
+                        if not peers_sub:
                             # Silently drop peer publications
                             continue
                         nbrs = self.neighbors.get(peer.addr, set())
@@ -1635,6 +1778,70 @@ class Mesh(object):
                             # Don't exceed limit of self.max_peers
                             continue
                         self.connect(msg.neighbor)
+                    case TransactionsSubscribe() as msg:
+                        if msg.active and not peer.transactions_sub:
+                            peer.transactions_sub = True
+                            self.broker.pub(
+                                broker.PeerTransactionsSubscribed(peer.addr)
+                            )
+                        elif peer.transactions_sub and not msg.active:
+                            peer.transactions_sub = False
+                            self.broker.pub(
+                                broker.PeerTransactionsUnsubscribed(peer.addr)
+                            )
+                    case TransactionsPublish() as msg:
+                        if not transactions_sub:
+                            # Silently drop transaction publications
+                            continue
+                        self.broker.pub(
+                            broker.PeerTransactionsPublished(
+                                peer.addr, msg.tx_hashes
+                            )
+                        )
+                    case TransactionsRequest() as msg:
+                        self.broker.pub(
+                            broker.PeerTransactionsRequested(
+                                peer.addr, msg.ids
+                            )
+                        )
+                    case TransactionsResponse() as msg:
+                        self.broker.pub(
+                            broker.PeerTransactionsResponded(
+                                peer.addr, msg.txs
+                            )
+                        )
+                    case BlocksSubscribe() as msg:
+                        if msg.active and not peer.blocks_sub:
+                            peer.blocks_sub = True
+                            self.broker.pub(
+                                broker.PeerBlocksSubscribed(peer.addr)
+                            )
+                        elif peer.blocks_sub and not msg.active:
+                            peer.blocks_sub = False
+                            self.broker.pub(
+                                broker.PeerBlocksUnsubscribed(peer.addr)
+                            )
+                    case BlocksPublish() as msg:
+                        if not blocks_sub:
+                            # Silently drop block publications
+                            continue
+                        self.broker.pub(
+                            broker.PeerBlocksPublished(
+                                peer.addr, msg.id, msg.hash
+                            )
+                        )
+                    case BlocksRequest() as msg:
+                        self.broker.pub(
+                            broker.PeerBlocksRequested(
+                                peer.addr, msg.ids, msg.mode
+                            )
+                        )
+                    case BlocksResponse() as msg:
+                        self.broker.pub(
+                            broker.PeerBlocksResponded(
+                                peer.addr, msg.blocks, msg.mode
+                            )
+                        )
         except Exception as e:
             import traceback
             print(f'{self.addr}, {peer.addr}: Exception: {e}')

@@ -1437,6 +1437,8 @@ class BlocksResponse(AbstractMessageEvent):
             case 'BLOCK':
                 if not all(isinstance(b, block.Block) for b in blocks):
                     raise TypeError('All blocks must be instances of block.Block.')
+            case _:
+                raise ValueError(f'Invalid mode: {mode}. Must be one of {self.MODES}.')
         self.blocks = blocks
         self.mode = mode
 

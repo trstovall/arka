@@ -1325,10 +1325,6 @@ class BlocksRequest(AbstractMessageEvent):
 
     TYPE = MSG.BLOCK_REQ
 
-    HEADER = 0
-    SUMMARY = 1
-    BLOCK = 2
-
     MODES = ['HEADER', 'SUMMARY', 'BLOCK']
 
     def __init__(self,
@@ -1339,6 +1335,8 @@ class BlocksRequest(AbstractMessageEvent):
             raise ValueError('Too many blocks requested.')
         if any(i < 0 or i >= 0x1_0000_0000_0000_0000 for i in ids):
             raise ValueError('Block ID must be an unsigned 64-bit integer.')
+        if mode not in self.MODES:
+            raise ValueError(f'Invalid mode: {mode}. Must be one of {self.MODES}.')
         self.ids = ids
         self.mode = mode
 
@@ -1381,7 +1379,10 @@ class BlocksRequest(AbstractMessageEvent):
                     if len(msg) < 10:
                         raise IndexError()
                     id = int.from_bytes(msg[2:10], 'little')
-                    mode = cls.MODES[prefix >> 2]
+                    try:
+                        mode = cls.MODES[prefix >> 2]
+                    except IndexError:
+                        raise ValueError('Invalid block request mode.')
                     return cls({id}, mode)
                 case 2:
                     raise ValueError('Invalid block request prefix.')
@@ -1393,7 +1394,10 @@ class BlocksRequest(AbstractMessageEvent):
             num_ids = msg[2]
             if num_ids < 2:
                 raise ValueError('Invalid block count encoded.')
-            mode = cls.MODES[(prefix >> 2) & 3]
+            try:
+                mode = cls.MODES[(prefix >> 2) & 3]
+            except IndexError:
+                raise ValueError('Invalid block request mode.')
             base = int.from_bytes(msg[3:11], 'little')
             nbytes = (prefix >> 4) & 15
             if nbytes > 8:
@@ -1414,10 +1418,6 @@ class BlocksRequest(AbstractMessageEvent):
 class BlocksResponse(AbstractMessageEvent):
 
     TYPE = MSG.BLOCK_RES
-
-    HEADER = 0
-    SUMMARY = 1
-    BLOCK = 2
 
     MODES = ['HEADER', 'SUMMARY', 'BLOCK']
 
@@ -1464,7 +1464,10 @@ class BlocksResponse(AbstractMessageEvent):
     def decode(cls, msg: bytes | bytearray | memoryview) -> BlocksResponse:
         try:
             prefix = msg[1]
-            mode = cls.MODES[prefix >> 2]
+            try:
+                mode = cls.MODES[prefix >> 2]
+            except IndexError:
+                raise ValueError('Invalid block response mode.')
             match prefix & 3:
                 case 0:
                     # Empty response

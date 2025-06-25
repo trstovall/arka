@@ -129,7 +129,11 @@ class Chain(object):
         """
         # This should be implemented to return the current block height.
         # For now, we return 0 as a placeholder.
-        return 0
+        return self._height
+    
+    @property
+    def state(self) -> tuple[int, block.BlockHash]:
+        return self._height, self._hash
 
     async def transaction_input_delta(self,
         input: block.PublisherSpend | block.ExecutiveSpend

@@ -8,6 +8,9 @@ import asyncio
 
 
 UTXO_FEE_DIVISOR = 2 ** 64
+BLOCKS_IN_EPOCH = 10_000  # 1 minute blocks, EPOCH ~ 6.94 days
+EPOCHS_IN_CHAIN = 52 * 4  # 52 weeks per year, 4 years history
+BLOCKS_IN_CHAIN = BLOCKS_IN_EPOCH * EPOCHS_IN_CHAIN
 
 
 class ConsensusError(Exception):
@@ -22,13 +25,97 @@ class Consensus(object):
     The consensus engine for the Arka blockchain.
     """
     def __init__(self,
-        broker: broker.Broker,
+        broker_: broker.Broker,
         chain: chain.Chain,
         loop: asyncio.AbstractEventLoop | None = None
     ):
-        self.broker = broker
+        self.broker = broker_
         self.chain = chain
         self.loop = loop or asyncio.get_running_loop()
+        self.msg_q = asyncio.Queue()
+        self.forks: dict[broker.Address, dict[int, block.BlockHash]] = {}
+        self.handlers: dict[broker.Address, tuple[asyncio.Task, asyncio.Queue]] = {}
+        self.handler: asyncio.Task = self.loop.create_task(self.run())
+
+
+    async def run(self) -> None:
+        tips: dict[broker.Address, tuple[int, block.BlockHash]] = {}
+        forks: dict[int, dict[block.BlockHash, set[broker.Address]]] = {}
+        subchains: dict[
+            tuple[block.BlockHash, block.BlockHash], list[block.BlockHash]
+        ] = {}
+        headers: dict[block.BlockHash, block.BlockHeader] = {}
+        blocks: dict[block.BlockHash, block.Block] = {}
+        subs = {
+            broker.PeerConnected, broker.PeerDisconnected,
+            broker.PeerBlocksPublished, broker.PeerTransactionsPublished,
+            broker.PeerBlocksSubscribed, broker.PeerTransactionsSubscribed,
+            broker.PeerBlocksUnsubscribed, broker.PeerTransactionsUnsubscribed,
+            broker.PeerBlocksRequested, broker.PeerTransactionsRequested,
+            broker.PeerBlocksResponded, broker.PeerTransactionsResponded,
+        }
+        for sub in subs:
+            self.broker.sub(sub, self.msg_q)
+        try:
+            while True:
+                match await self.msg_q.get():
+                    case broker.PeerConnected() as msg:
+                        q = asyncio.Queue()
+                        t = self.loop.create_task(self.handle_fork(msg.addr, q))
+                        self.handlers[msg.addr] = (t, q)
+                        t, q = None, None
+                    case broker.PeerDisconnected() as msg:
+                        handler = self.handlers.pop(msg.addr, None)
+                        if handler:
+                            handler[0].cancel()
+                            await handler[0]
+                            del handler
+                    case broker.PeerTransactionsSubscribed() as msg:
+                        print(f'Transactions subscribed: {msg.addr}')
+                    case broker.PeerTransactionsUnsubscribed() as msg:
+                        print(f'Transactions unsubscribed: {msg.addr}')
+                    case broker.PeerTransactionsPublished() as msg:
+                        print(f'Transactions published: {msg.addr}, {msg.tx_hashes}')
+                    case broker.PeerTransactionsRequested() as msg:
+                        print(f'Transactions requested: {msg.addr}, {msg.ids}')
+                    case broker.PeerTransactionsResponded() as msg:
+                        print(f'Transactions responded: {msg.addr}, {msg.txs}')
+                    case broker.PeerBlocksSubscribed() as msg:
+                        print(f'Blocks subscribed: {msg.addr}')
+                    case broker.PeerBlocksUnsubscribed() as msg:
+                        print(f'Blocks unsubscribed: {msg.addr}')
+                    case (
+                        broker.PeerBlocksPublished()
+                        | broker.PeerBlocksRequested()
+                        | broker.PeerBlocksResponded()
+                     ) as msg:
+                        handler = self.handlers.get(msg.addr)
+                        if handler:
+                            await handler[1].put(msg)
+        finally:
+            for sub in subs:
+                self.broker.unsub(sub, self.msg_q)
+
+    async def handle_fork(self, peer: broker.Address, msg_q: asyncio.Queue) -> None:
+        root: int | None = None
+        tip: int | None = None
+        hashes: dict[int, block.BlockHash] = {}
+        headers: dict[int, block.BlockHeader] = {}
+        unlinked: set[int] = set()
+        not_validated: set[int] = set()
+        try:
+            while True:
+                match await msg_q.get():
+                    case broker.PeerBlocksPublished() as msg:
+                        if msg.id > self.chain.state[0] + BLOCKS_IN_CHAIN:
+                            # Too many blocks in chain, ignore.
+                            continue
+                        if tip is None or msg.id > tip:
+
+                            tip = msg.id
+                            hashes[msg.id] = msg.hash
+        finally:
+            pass
 
     async def transaction_delta(self,
         tx: block.Transaction,

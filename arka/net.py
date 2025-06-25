@@ -1498,13 +1498,14 @@ class BlocksResponse(AbstractMessageEvent):
                 raise ValueError('Invalid block count encoded.')
             offset = 3
             blocks: list[block.BlockHeader] | list[block.BlockSummary] | list[block.Block] = []
+            _mode = cls.MODES.index(mode)
             for _ in range(num_blocks):
-                match mode:
-                    case 'HEADER':
+                match _mode:
+                    case 0:     # HEADER
                         b = block.BlockHeader.decode(msg[offset:])
-                    case 'SUMMARY':
+                    case 1:     # SUMMARY
                         b = block.BlockSummary.decode(msg[offset:])
-                    case 'BLOCK':
+                    case 2:     # BLOCK
                         b = block.Block.decode(msg[offset:])
                     case _:
                         raise ValueError('Invalid block response mode.')

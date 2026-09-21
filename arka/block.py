@@ -1362,12 +1362,18 @@ class Transaction(AbstractElement):
         inputs: list[
             PublisherSpend | ExecutiveSpend | UTXOSpend
             | AssetDefinition | ExecutiveDefinition
-        ],
-        outputs: list[ArkaUTXO | AssetUTXO | ExecutiveVote] = [],
-        signatures: list[Signature] = [],
+        ] | None = None,
+        outputs: list[ArkaUTXO | AssetUTXO | ExecutiveVote] | None = None,
+        signatures: list[Signature] | None = None,
         digest: TransactionHash | None = None,
         _validate: bool = True
     ):
+        inputs: list[
+            PublisherSpend | ExecutiveSpend | UTXOSpend
+            | AssetDefinition | ExecutiveDefinition
+        ] = inputs or []
+        outputs: list[ArkaUTXO | AssetUTXO | ExecutiveVote] = outputs or []
+        signatures: list[Signature] = signatures or []
         if _validate:
             if not all(
                 isinstance(x, (
@@ -1862,7 +1868,8 @@ class BlockHeader(AbstractElement):
 
 class TransactionList(AbstractElement):
 
-    def __init__(self, transactions: list[Transaction] = [], _validate: bool = True):
+    def __init__(self, transactions: list[Transaction] | None = None, _validate: bool = True):
+        transactions = transactions or []
         if _validate:
             if not all(isinstance(tx, Transaction) for tx in transactions):
                 raise ValueError('Invalid transaction.')
@@ -1878,23 +1885,24 @@ class TransactionList(AbstractElement):
     def size(self) -> int:
         return sum(tx.size for tx in self.transactions)
     
-    async def hash(self, merkle: bool = False) -> TransactionListHash | None:
+    async def hash(self, merkle: bool = True) -> TransactionListHash | None:
         if not self.transactions:
             return
         hashes = await gather(*[
             tx.hash() for tx in self.transactions
         ])
+        hashes = [h.value for h in hashes]
         if merkle:
             while len(hashes) > 1:
                 if len(hashes) & 1:
                     hashes.append(hashes[-1])
                 hashes = await gather(*[
-                    keccak_1600(hashes[i].value + hashes[i + 1].value)
+                    keccak_1600(hashes[i] + hashes[i + 1])
                     for i in range(0, len(hashes), 2)
                 ])
-            hash = hashes[0].value
+            hash = hashes[0]
         else:
-            hash = await keccak_1600(b''.join(h.value for h in hashes))
+            hash = await keccak_1600(b''.join(hashes))
         return TransactionListHash(hash)
 
     def encode(self) -> bytes:
@@ -1907,7 +1915,7 @@ class TransactionList(AbstractElement):
         transactions: list[Transaction] = []
         offset = 0
         while offset < len(view):
-            tx = await Transaction.decode(view[offset:], digest=None)
+            tx = Transaction.decode(view[offset:], digest=None)
             transactions.append(tx)
             offset += tx.size
         return cls(transactions, _validate=False)
@@ -1939,7 +1947,11 @@ class Block(AbstractElement):
 
     @property
     def size(self) -> int:
-        return self.header.size + self.transactions.size
+        return (
+            self.header.size
+            + 2 * self.header.ntxs
+            + self.transactions.size
+        )
 
     async def hash(self, update_header=False) -> BlockHash:
         n = len(self.transactions.transactions) or None
@@ -1954,11 +1966,12 @@ class Block(AbstractElement):
         return await self.header.hash_nonce()
 
     def encode(self) -> bytes:
-        n = len(self.transactions.transactions) or None
-        if n is not None and n > 0x1_0000_0000:
+        txs = self.transactions.transactions
+        ntxs = len(txs) or None
+        if ntxs is not None and ntxs > 0x1_0000_0000:
             raise ValueError('Invalid transactions list size.')
-        if n:
-            if self.header.ntxs != n:
+        if ntxs:
+            if self.header.ntxs != ntxs:
                 raise ValueError('Invalid header.ntxs')
             if self.header.root_hash is None:
                 raise ValueError('Invalid header.root_hash')
@@ -1969,10 +1982,10 @@ class Block(AbstractElement):
                 raise ValueError('Invalid header.root_hash')
         header = self.header.encode()
         transactions: list[bytes] = [
-            tx.encode() for tx in self.transactions.transactions
+            tx.encode() for tx in txs
         ]
-        tx_lens = bytearray(2 * (n or 0))
-        if n:
+        tx_lens = bytearray(2 * (ntxs or 0))
+        if ntxs:
             for i, tx in enumerate(transactions):
                 m = len(tx)
                 if m >= 0x1_0000:

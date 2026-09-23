@@ -18,7 +18,14 @@ those instructions consume or replace. Translation therefore depends on both:
 
 Each delta is a before/after change:
 
-`Delta(collection, key, old_bytes | absent, new_bytes | absent)`
+`Delta(delta_type, reference, old_bytes | absent, new_bytes | absent)`
+
+Keys are indexed by delta type, encoded as a small unsigned integer. Complete
+key identity is `(delta_type, reference)`, not the reference alone. An in-memory
+index may be expressed as `index[delta_type][reference_bytes]`; a flat persistent
+dictionary uses `U[1](delta_type) || reference_bytes` under the proposed one-byte
+encoding below. Type assignments identify delta classes, independently of the
+input/output type tags used by `block.py`.
 
 | Before | After | Change |
 | --- | --- | --- |
@@ -94,7 +101,7 @@ is present. Length limits are checked before allocation or slicing.
 
 ```text
 record =
-    collection: U[1]
+    delta_type: U[1]
  || presence:   U[1]
  || key_len:    U[2]
  || old_len:    U[4]
@@ -111,13 +118,20 @@ and `03` mean deletion, insertion, and replacement respectively.
 
 `record_size = 12 + key_len + old_len + new_len`
 
-Each decoder consumes its complete bounded record slice. Unknown collection
+The record's `key` field contains reference bytes only: the preceding
+`delta_type` field already identifies their type. `key_len` excludes the type
+byte. The dictionary key is reconstructed by prefixing those reference bytes
+with the encoded delta type; the record does not store that type twice.
+
+Each decoder consumes its complete bounded record slice. Unknown delta-type
 tags, reserved bits, inconsistent lengths, and surplus bytes are rejected.
 There is no implicit Python object hash or pickle representation.
 
-### Version 1 collection registry
+### Version 1 delta-type registry
 
-The numeric tags below are proposed storage tags, not transaction type tags.
+The numeric tags below are proposed small integer delta-type assignments, not
+transaction type tags. Each type selects its reference codec, value codec, and
+logical state collection.
 
 | Tag | Collection | Key bytes | Value bytes |
 | ---: | --- | --- | --- |
@@ -206,7 +220,7 @@ same list, independently of transaction boundaries.
 | Active height | Active block hash at that height |
 | `(block_hash, transaction_position)` | Transaction's global delta range |
 | `(block_hash, delta_ordinal)` | Chunk descriptor and local record number |
-| Optional `(collection, key)` history | Ordered `(block_hash, delta_ordinal)` references |
+| Optional `(delta_type, reference)` history | Ordered `(block_hash, delta_ordinal)` references |
 
 For ordinal `g` in a chunk beginning at `f`, the local record number is `g-f`.
 Its physical start is `chunk_start + 20 + 8*(N+1) + offset[g-f]`.

@@ -10,6 +10,20 @@ from asyncio import gather
 rand = lambda n: int.from_bytes(urandom(n), 'little')
 
 
+def make_pow():
+    return block.POW(
+        block.Nonce_32(bytes(32)), block.Nonce_32(bytes(32)),
+        block.Nonce_32(bytes(32)),
+    )
+
+
+async def set_pow(header):
+    initial = (await header.hash()).value
+    nonce = block.Nonce_32(urandom(32))
+    final = await keccak_800(initial + nonce.value)
+    header.pow = block.POW(block.Nonce_32(initial), nonce, block.Nonce_32(final))
+
+
 def assert_encoding_inverse(original, decoded):
     """Compare values and canonical bytes, excluding any trailing stream data."""
     assert original == decoded
@@ -840,7 +854,7 @@ def test_block_header_serdes():
             data_fee=rand(15),
             executive=block.Nonce_16(urandom(16))
         ),
-        nonce=block.Nonce_32(urandom(32))
+        pow=make_pow()
     )
     y = block.BlockHeader.decode(x.encode())
     assert_encoding_inverse(x, y)
@@ -874,7 +888,7 @@ async def test_block_header_hash():
             data_fee=rand(8),
             executive=block.Nonce_16(urandom(16))
         ),
-        nonce=block.Nonce_32(urandom(32))
+        pow=make_pow()
     )
     h = await x.hash()
     assert isinstance(h, block.BlockHeaderHash)
@@ -901,7 +915,7 @@ async def test_block_header_hash_nonce():
     h = await x.hash()
     with pytest.raises(ValueError):
         g = await x.hash_nonce()
-    x.nonce = block.Nonce_32(urandom(32))
+    await set_pow(x)
     assert (await x.hash()) == h
     g = await x.hash_nonce()
     assert isinstance(g, block.BlockHash)
@@ -1003,7 +1017,7 @@ async def test_block_hash():
                 data_fee=rand(15),
                 executive=block.Nonce_16(urandom(16))
             ),
-            nonce = block.Nonce_32(urandom(32))
+            pow=make_pow()
         ),
         transactions=block.TransactionList([
             block.Transaction(
@@ -1026,6 +1040,9 @@ async def test_block_hash():
     )
     with pytest.raises(ValueError):
         h = await x.hash()
+    x.header.ntxs = len(x.transactions.transactions) or None
+    x.header.root_hash = await x.transactions.hash()
+    await set_pow(x.header)
     h = await x.hash(update_header=True)
     assert isinstance(h, block.BlockHash)
     assert x.header.ntxs == len(x.transactions.transactions)
@@ -1093,7 +1110,7 @@ def make_header(count=0):
         publisher=block.SignerKey(bytes(range(32))),
         ntxs=count or None,
         root_hash=block.TransactionListHash(bytes(32)) if count else None,
-        nonce=block.Nonce_32(bytes(32)),
+        pow=make_pow(),
     )
 
 
@@ -1199,6 +1216,8 @@ async def test_block_encoding_inverse_and_cached_transactions(count, buffer_type
         make_header(count),
         block.TransactionList([make_transaction(i) for i in range(count)]),
     )
+    original.header.root_hash = await original.transactions.hash()
+    await set_pow(original.header)
     digest = await original.hash(update_header=True)
     encoded = original.encode()
     backing = bytearray(encoded + b'trailing bytes')

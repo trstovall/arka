@@ -71,7 +71,12 @@ GENESIS = block.Block(
             data_fee=100_000,
             executive=ARKATEKT
         ),
-        nonce=block.Nonce_32(bytes(32))
+        # Placeholder proof; not a mined or validated genesis POW.
+        pow=block.POW(
+            initial_hash=block.Nonce_32(bytes(32)),
+            nonce=block.Nonce_32(bytes(32)),
+            final_hash=block.Nonce_32(bytes(32)),
+        )
     ),
     transactions=[
         block.Transaction(

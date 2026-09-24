@@ -1703,6 +1703,43 @@ class Parameters(AbstractElement):
         return cls(target, reward, fund, utxo_fee, data_fee, executive, _validate=False)
 
 
+class POW(Bytes):
+    """Header digest, nonce, and resulting digest, serialized in that order."""
+
+    SIZE = 32 + 32 + 32         # initial_hash, nonce_32, final_hash
+
+    def __init__(self,
+        initial_hash: Nonce_32,
+        nonce: Nonce_32,
+        final_hash: Nonce_32
+    ):
+        if not all(isinstance(x, Nonce_32) for x in (initial_hash, nonce, final_hash)):
+            raise ValueError('Invalid POW component.')
+        self.value = initial_hash.encode() + nonce.encode() + final_hash.encode()
+
+    @property
+    def initial_hash(self) -> Nonce_32:
+        return Nonce_32.decode(self.value[:32])
+
+    @property
+    def nonce(self) -> Nonce_32:
+        return Nonce_32.decode(self.value[32:64])
+
+    @property
+    def final_hash(self) -> Nonce_32:
+        return Nonce_32.decode(self.value[64:96])
+
+    @classmethod
+    def decode(cls, view: bytes | bytearray | memoryview) -> POW:
+        if len(view) < cls.SIZE:
+            raise ValueError('Invalid POW size.')
+        return cls(
+            Nonce_32.decode(view[:32]),
+            Nonce_32.decode(view[32:64]),
+            Nonce_32.decode(view[64:96]),
+        )
+
+
 class BlockHeader(AbstractElement):
 
     SIGNER_KEY = 0
@@ -1712,7 +1749,7 @@ class BlockHeader(AbstractElement):
         id: int, timestamp: int, prev_block: BlockHash,
         publisher: SignerKey | SignerHash, ntxs: int | None = None,
         root_hash: TransactionListHash | None = None,
-        parameters: Parameters | None = None, nonce: Nonce_32 | None = None,
+        parameters: Parameters | None = None, pow: POW | None = None,
         _validate: bool = True
     ):
         if _validate:
@@ -1748,8 +1785,8 @@ class BlockHeader(AbstractElement):
                 raise ValueError('Invalid root_hash.')
             if parameters is not None and not isinstance(parameters, Parameters):
                 raise ValueError('Invalid parameters.')
-            if nonce is not None and not isinstance(nonce, Nonce_32):
-                raise ValueError('Invalid nonce.')
+            if pow is not None and not isinstance(pow, POW):
+                raise ValueError('Invalid pow.')
         self.id = id
         self.timestamp = timestamp
         self.prev_block = prev_block
@@ -1757,7 +1794,7 @@ class BlockHeader(AbstractElement):
         self.ntxs = ntxs
         self.root_hash = root_hash
         self.parameters = parameters
-        self.nonce = nonce
+        self.pow = pow
 
     def __eq__(self, value: BlockHeader) -> bool:
         return (
@@ -1769,7 +1806,7 @@ class BlockHeader(AbstractElement):
             and self.ntxs == value.ntxs
             and self.root_hash == value.root_hash
             and self.parameters == value.parameters
-            and self.nonce == value.nonce
+            and self.pow == value.pow
         )
 
     @property
@@ -1782,24 +1819,27 @@ class BlockHeader(AbstractElement):
                 raise ValueError('Invalid root_hash')
             n += 4 + self.root_hash.size
         n += 0 if self.parameters is None else self.parameters.size
-        n += 0 if self.nonce is None else self.nonce.size
+        n += 0 if self.pow is None else self.pow.size
         return n
 
     async def hash(self) -> BlockHeaderHash:
         return BlockHeaderHash(
-            await keccak_1600(self.encode(include_nonce=False))
+            await keccak_1600(self.encode(include_pow=False))
         )
 
     async def hash_nonce(self) -> BlockHash:
-        if self.nonce is None:
-            raise ValueError('Invalid nonce.')
-        return BlockHash(
-            await keccak_800(
-                (await self.hash()).value + self.nonce.value
-            )
-        )
+        """Validate the POW hash linkage, without checking target difficulty."""
+        if self.pow is None:
+            raise ValueError('Missing POW.')
+        initial_hash = (await self.hash()).value
+        if self.pow.initial_hash.value != initial_hash:
+            raise ValueError('Invalid POW initial hash.')
+        final_hash = await keccak_800(initial_hash + self.pow.nonce.value)
+        if self.pow.final_hash.value != final_hash:
+            raise ValueError('Invalid POW final hash.')
+        return BlockHash(final_hash)
 
-    def encode(self, include_nonce=True) -> bytes:
+    def encode(self, include_pow: bool = True) -> bytes:
         prefix = 0
         id = pack('<Q', self.id)
         timestamp = pack('<Q', self.timestamp)
@@ -1821,15 +1861,15 @@ class BlockHeader(AbstractElement):
             root_hash = b''
         parameters = b'' if self.parameters is None else self.parameters.encode()
         prefix |= 4 if parameters else 0
-        if not include_nonce or self.nonce is None:
-            nonce = b''
+        if not include_pow or self.pow is None:
+            pow = b''
         else:
-            nonce = self.nonce.encode()
+            pow = self.pow.encode()
             prefix |= 8
         prefix = pack('<B', prefix)
         return b''.join([
             prefix, id, timestamp, prev_block, publisher,
-            ntxs, root_hash, parameters, nonce
+            ntxs, root_hash, parameters, pow
         ])
 
     @classmethod
@@ -1857,12 +1897,12 @@ class BlockHeader(AbstractElement):
                 root_hash = None
             parameters = Parameters.decode(view[offset:]) if prefix & 4 else None
             offset += parameters.size if parameters else 0
-            nonce = Nonce_32.decode(view[offset:]) if prefix & 8 else None
+            pow = POW.decode(view[offset:]) if prefix & 8 else None
         except (IndexError, StructError) as e:
             raise ValueError('Invalid view size.')
         return cls(
             id, timestamp, prev_block, publisher,
-            ntxs, root_hash, parameters, nonce, _validate=False
+            ntxs, root_hash, parameters, pow, _validate=False
         )
 
 
@@ -1949,7 +1989,7 @@ class Block(AbstractElement):
     def size(self) -> int:
         return (
             self.header.size
-            + 2 * self.header.ntxs
+            + 2 * (self.header.ntxs or 0)
             + self.transactions.size
         )
 

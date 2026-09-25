@@ -1,4 +1,4 @@
-﻿# Indexed, reversible delta lists
+# Indexed, reversible delta lists
 
 This document proposes a storage representation for translating accepted blocks
 into ordered, chunked database changes. It is a design specification, not an
@@ -78,7 +78,7 @@ than made valid by overlapping old snapshots.
 | `ExecutiveVote` output | Capture and replace the record determined by the vote-state rule |
 | Header and active parameters | Produce applicable reward, fund, parameter, and tip changes |
 
-Definitions and votes require their actual consensus transition rules; blindly
+UTXO updates include the vote deltas described below. Definitions and votes require their actual consensus transition rules; blindly
 copying an input or overwriting an executive's vote record is not a substitute.
 `chain.py` does not yet define vote aggregation or all block-level effects.
 A translator must report unsupported effects rather than publish an incomplete
@@ -92,6 +92,203 @@ All authoritative state affected by acceptance must be covered, including lookup
 indexes and the chain tip. A derived cache may instead be invalidated and rebuilt
 if it is explicitly excluded from authoritative state. Immutable archived blocks
 and delta chunks need not be deleted when a block is disconnected.
+
+## Vote deltas contained in UTXO updates
+
+UTXO deltas carry the corresponding vote deltas. Applying a UTXO update therefore
+updates both the unclaimed-output database and the vote database; reversing it
+restores both. The vote database supplies the voting state from which chain
+parameters are determined. These are required state effects, not optional memo
+interpretations or independent transactions.
+
+This extends the earlier record proposal below. The current `chain.py` update
+classes do not yet contain a vote-delta field or implement a vote database.
+The following contribution index and nested framing are proposed implementation
+choices. Exact vote weighting and parameter selection remain consensus rules.
+
+### Vote sources
+
+| Source in `block.py` | Vote meaning |
+| --- | --- |
+| `ArkaUTXO.block_reward` | Proposed publisher reward amount |
+| `ArkaUTXO.exec_fund` | Proposed executive fund amount |
+| `ArkaUTXO.utxo_fee` | Proposed UTXO fee parameter |
+| `ArkaUTXO.data_fee` | Proposed transaction data fee parameter |
+| `ExecutiveVote.executive`, `promote`, `units` | Executive support or opposition, interpreted by the executive-selection rules |
+
+For an optional ARKA vote field, `None` means no contribution to that parameter.
+Zero is an explicit proposal for zero and must not be discarded as absent.
+One output can contribute to several parameter votes. Its `units` supply the
+amount available to the weighting rule; absent units must not silently acquire
+a positive weight. `AssetUTXO` has no parameter-vote fields in the present codec.
+
+`ExecutiveVote` is a separate output type, not an `ArkaUTXO` parameter field.
+Its state transition must also supply reversible vote updates, with a defined
+lifetime and weighting rule. The existing identifier-keyed `ExecutiveVoteUpdate`
+alone does not specify how multiple outputs for one executive combine.
+
+### Before and after contributions
+
+Let `Votes(ref, value, context)` denote the finite set of vote contributions
+attributable to an output, where context contains the applicable consensus rules.
+For an absent output this set is empty. The composite change is:
+
+```text
+UTXODelta:
+    delta_type, reference
+    old_output | absent
+    new_output | absent
+    votes: list[VoteDelta]
+
+VoteDelta:
+    vote_type, source_reference
+    old_contribution | absent
+    new_contribution | absent
+```
+
+An insertion adds the new output's contributions. Spending or expiring an output
+removes its recorded contributions. Replacement removes old contributions and
+adds new ones; unchanged contribution records need no update. The translator
+captures before-images from the vote database and verifies that they belong to
+the source output. After-images must agree with the validated output and vote
+rules. Stored nested deltas must not be trusted merely because their parent
+UTXO delta is structurally valid.
+
+Undo restores the recorded old contributions exactly. It does not recalculate
+old weights using current parameters, current height, or a later epoch. If
+weights change with age or epoch, those changes require explicit reversible
+maintenance deltas or an evaluation rule that derives them from preserved source
+records. Such behavior cannot be inferred from the current block codec.
+
+### Vote keys and uniqueness
+
+Use a small integer `vote_type` followed by the source output's positional
+reference as the contribution key. A proposed local vote-type registry is:
+
+| Vote type | Contribution |
+| ---: | --- |
+| 0 | Block reward proposal |
+| 1 | Executive fund proposal |
+| 2 | UTXO fee proposal |
+| 3 | Data fee proposal |
+| 4 | Executive support/opposition |
+
+These tags belong to the nested vote-delta registry, independently of outer
+delta-type and transaction-type tags. A parameter contribution stores its
+proposed amount and weight; an executive contribution stores its executive
+identifier, direction, and weight. The source reference identifies ownership;
+the proposed amount or executive is part of the value, not a replacement for
+that source identity.
+
+Two UTXOs voting for the same amount have different contribution keys. This
+preserves the unique-key rule within a block without making equal proposals
+conflict. A replacement at one contribution key is expressed as one before/after
+record. Detect duplicates across all nested lists before application.
+
+For efficient selection, the vote database may maintain derived totals indexed
+by `(vote_type, proposed_value)` or by executive and direction. Several nested
+changes can affect the same total. Either derive those totals from contribution
+records or reduce all changes to each total into one block-level update. Do not
+emit repeated authoritative delta keys. Any persisted aggregate must be restored
+or rebuilt together with its contribution index.
+
+### Parameter selection
+
+The vote database represents live contributions, including the presence of an
+explicit zero proposal. A consensus-defined selection function consumes a
+specified snapshot and produces the next applicable parameter values:
+
+`next_parameters = Select(vote_snapshot, previous_parameters, epoch_context)`
+
+`Select` must specify weighting, aggregation (for example median versus another
+rule), ties, empty electorates, admissible bounds, and activation height. No
+particular aggregation algorithm is established by this document. The current
+`ArkaUTXO` directly votes on four amount fields; it has no `target` vote field.
+Difficulty target derivation must therefore follow its separately defined rule.
+Executive voting feeds executive selection rather than an invented direct
+parameter field on `ArkaUTXO`.
+
+`chain.py` defines 10,000-block epochs but implements parameter lookup only for
+epoch zero. An implementation must define whether the selection snapshot is
+before or after a boundary block. Validate that block using the parameters
+already applicable to it; do not let its new votes retroactively authorize it.
+Where a header carries epoch parameters, compare them with the values computed
+from the prescribed vote snapshot.
+
+### Application, rollback, and forks
+
+A parent UTXO update and its contained vote updates form one application unit.
+Check all UTXO and vote before-images before publishing either database change.
+During rollback check the after-images and restore both sets of old values.
+A crash must recover them to the same block boundary; completing the UTXO write
+alone is not a completed delta application.
+
+Auxiliary databases used for fork validation require an isolated vote database
+as well as the UTXO database. Roll both back to the common ancestor, then apply
+the competing branch's nested deltas. Compute epoch parameters from that branch's
+vote state. Promote vote state with the other validated branch stores; canonical
+votes must not be modified while the branch remains under validation. This adds
+the vote log and four parameter stores specified below to the original four-store layout. They participate in the same generation publication; the cross-store commit mechanism remains to be implemented.
+
+### Extracted vote log and parameter manifests
+
+Vote changes extracted from transaction translation are logged to
+`db/vote_deltas/index` and `db/vote_deltas/values` using a persistent log.
+There is one block-partitioned entry per completed block, including empty lists.
+The entry binds its votes to the same height, block hash, and parent as the UTXO
+delta entry. Nested vote records and extracted records must describe identical
+changes; replay applies the extracted changes once, not once per representation.
+Source attribution retains the connection to the transaction and originating
+output even though the vote list is stored separately.
+
+The materialized destinations are:
+
+| Vote type | Parameter | Files |
+| ---: | --- | --- |
+| 0 | `block_reward` | `db/block_reward/manifest`, `db/block_reward/values` |
+| 1 | `exec_fund` | `db/exec_fund/manifest`, `db/exec_fund/values` |
+| 2 | `utxo_fee` | `db/utxo_fee/manifest`, `db/utxo_fee/values` |
+| 3 | `data_fee` | `db/data_fee/manifest`, `db/data_fee/values` |
+
+These type numbers remain the proposed registry above. Each manifest indexes
+its parameter's live contributions; values preserve proposals and weights.
+The manifest format and selection algorithm require implementation. Executive
+vote type 4 is not a fifth parameter in this table and needs a separately defined
+materialization policy.
+
+Forward block application updates the UTXO database and these parameter stores
+at the same published boundary. Rollback reads the matching vote-log entry and
+restores all old contributions before exposing the parent state. The complete
+vote log can reconstruct the parameter stores. Auxiliary forks must include their
+own vote log and four parameter stores so their parameter selection never reads
+canonical votes after the common ancestor. See [db.md](db.md) for storage and
+generation publication.
+
+### Example: spending a voting output
+
+Suppose output A has 1,100 units and proposes `block_reward=100`, while output B
+has 1,000 units and proposes `block_reward=120`. For this example only, take vote
+weight to equal units; actual validation must use the agreed weighting rule.
+
+```text
+UTXO A: old_A -> absent
+    votes:
+        (type=0, source=A): (proposal=100, weight=1100) -> absent
+
+UTXO B: absent -> new_B
+    votes:
+        (type=0, source=B): absent -> (proposal=120, weight=1000)
+```
+
+Forward application removes A's weight from proposal 100 and adds B's weight to
+proposal 120. Undo removes B's contribution and restores A's original 1,100
+weight. Other outputs voting for either amount remain unchanged. Selection uses
+the resulting complete vote database; this pair of changes alone does not imply
+that 120 becomes the next reward.
+
+If B also proposes `data_fee=0`, its parent delta contains a second insertion
+with vote type 3, proposal zero, and the applicable weight. If `data_fee=None`,
+there is no such insertion. This distinction survives serialization and rollback.
 
 ## Serialized delta records
 
@@ -157,6 +354,42 @@ When reading a value, the collection determines its type and the entire value
 slice must be consumed. Canonicality and existing codec limitations remain as
 described in `block.1.md`; this framing does not repair those implementations.
 
+### Version 2 nested vote framing
+
+Version 1 records and the byte examples below describe the base UTXO change
+without contained vote records. A vote-capable extension must be explicitly
+versioned; appending unmarked bytes to a version 1 record would violate its
+exact-length rule. For chunk version 2, use:
+
+```text
+composite_record =
+    base_len: U[4] || base_record: B[base_len]
+ || vote_count: U[4]
+ || (vote_len: U[4] || vote_record: B[vote_len]) repeated vote_count times
+```
+
+`base_record` retains the version 1 record layout. Each nested `vote_record`
+uses that same before/after layout, with `delta_type` interpreted as `vote_type`,
+and its key containing the 14-byte source reference. It is a nested update,
+not a separate top-level delta ordinal. Non-voting records have `vote_count=0`.
+Chunk offsets bound complete composite records, so a parent and its votes are
+never separated across chunks. Chunk checksums cover the contained votes too.
+
+One proposed value codec uses fixed unsigned 15-byte amounts and weights:
+parameter values are `U[15](proposal) || U[15](weight)`; executive values are
+`B[16](executive) || U[1](promote) || U[15](weight)`, with promote restricted to
+0 or 1. This codec assumes weights fit 120 bits; a consensus rule requiring a
+wider or different weight domain requires a different version. Presence flags,
+not numeric values, distinguish missing contributions from proposals of zero.
+
+`composite_size = 8 + base_len + sum(4 + vote_len)`
+
+Thus a 63-byte base update without votes occupies 71 bytes in version 2. A
+parameter-vote insertion or deletion occupies `12 + 14 + 30 = 56` nested bytes;
+a parent with one such vote occupies `8 + 63 + 4 + 56 = 131` bytes. Chunk budgets
+and offsets must use these complete sizes. The 202-byte chunk example below
+remains explicitly a version 1 example, not a vote-capable version 2 encoding.
+
 ## Chunk framing
 
 A chunk is a finite consecutive segment of one block's delta list. Records never
@@ -165,7 +398,7 @@ straddle chunks. The envelope contains offsets for direct access in either order
 ```text
 chunk =
     magic:        B[4] = ASCII "ADLT"
- || version:      U[2] = 1
+ || version:      U[2] = 1 or 2
  || flags:        U[2] = 0
  || record_count: U[4] = N
  || payload_len:  U[8] = P

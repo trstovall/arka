@@ -75,7 +75,7 @@ GENESIS = block.Block(
         pow=block.POW(
             initial_hash=block.Nonce_32(bytes(32)),
             nonce=block.Nonce_32(bytes(32)),
-            final_hash=block.Nonce_32(bytes(32)),
+            final_hash=block.BlockHash(bytes(32)),
         )
     ),
     transactions=[

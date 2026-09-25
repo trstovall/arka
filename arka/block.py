@@ -1711,9 +1711,13 @@ class POW(Bytes):
     def __init__(self,
         initial_hash: Nonce_32,
         nonce: Nonce_32,
-        final_hash: Nonce_32
+        final_hash: BlockHash
     ):
-        if not all(isinstance(x, Nonce_32) for x in (initial_hash, nonce, final_hash)):
+        if (
+            not isinstance(initial_hash, Nonce_32)
+            or not isinstance(nonce, Nonce_32)
+            or not isinstance(final_hash, BlockHash)
+        ):
             raise ValueError('Invalid POW component.')
         self.value = initial_hash.encode() + nonce.encode() + final_hash.encode()
 
@@ -1726,8 +1730,8 @@ class POW(Bytes):
         return Nonce_32.decode(self.value[32:64])
 
     @property
-    def final_hash(self) -> Nonce_32:
-        return Nonce_32.decode(self.value[64:96])
+    def final_hash(self) -> BlockHash:
+        return BlockHash.decode(self.value[64:96])
 
     @classmethod
     def decode(cls, view: bytes | bytearray | memoryview) -> POW:
@@ -1736,7 +1740,7 @@ class POW(Bytes):
         return cls(
             Nonce_32.decode(view[:32]),
             Nonce_32.decode(view[32:64]),
-            Nonce_32.decode(view[64:96]),
+            BlockHash.decode(view[64:96]),
         )
 
 

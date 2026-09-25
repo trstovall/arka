@@ -13,7 +13,7 @@ rand = lambda n: int.from_bytes(urandom(n), 'little')
 def make_pow():
     return block.POW(
         block.Nonce_32(bytes(32)), block.Nonce_32(bytes(32)),
-        block.Nonce_32(bytes(32)),
+        block.BlockHash(bytes(32)),
     )
 
 
@@ -21,7 +21,7 @@ async def set_pow(header):
     initial = (await header.hash()).value
     nonce = block.Nonce_32(urandom(32))
     final = await keccak_800(initial + nonce.value)
-    header.pow = block.POW(block.Nonce_32(initial), nonce, block.Nonce_32(final))
+    header.pow = block.POW(block.Nonce_32(initial), nonce, block.BlockHash(final))
 
 
 def assert_encoding_inverse(original, decoded):

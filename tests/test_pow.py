@@ -10,7 +10,7 @@ def make_pow():
     return block.POW(
         block.Nonce_32(b'\x11' * 32),
         block.Nonce_32(b'\x22' * 32),
-        block.Nonce_32(b'\x33' * 32),
+        block.BlockHash(b'\x33' * 32),
     )
 
 
@@ -35,6 +35,7 @@ def test_pow_encoding_and_ownership(buffer_type):
     assert decoded.initial_hash.value == expected[:32]
     assert decoded.nonce.value == expected[32:64]
     assert decoded.final_hash.value == expected[64:]
+    assert isinstance(decoded.final_hash, block.BlockHash)
 
 
 @pytest.mark.parametrize('length', [0, 31, 32, 63, 64, 95])
@@ -45,7 +46,8 @@ def test_pow_rejects_truncation(length):
 
 @pytest.mark.parametrize('position', [0, 1, 2])
 def test_pow_rejects_invalid_components(position):
-    components = [block.Nonce_32(bytes(32)) for _ in range(3)]
+    components = [block.Nonce_32(bytes(32)), block.Nonce_32(bytes(32)),
+                  block.BlockHash(bytes(32))]
     components[position] = bytes(32)
     with pytest.raises(ValueError):
         block.POW(*components)
@@ -82,7 +84,7 @@ async def attach_pow(header):
     initial = (await header.hash()).value
     nonce = block.Nonce_32(b'\x42' * 32)
     final = await keccak_800(initial + nonce.value)
-    header.pow = block.POW(block.Nonce_32(initial), nonce, block.Nonce_32(final))
+    header.pow = block.POW(block.Nonce_32(initial), nonce, block.BlockHash(final))
     return block.BlockHash(final)
 
 
@@ -110,7 +112,7 @@ async def test_pow_rejects_tampering(component):
         index = ['initial_hash', 'nonce', 'final_hash'].index(component)
         corrupted = bytearray(fields[index].value)
         corrupted[0] ^= 1
-        fields[index] = block.Nonce_32(corrupted)
+        fields[index] = type(fields[index])(corrupted)
         header.pow = block.POW(*fields)
     with pytest.raises(ValueError, match='Invalid POW'):
         await header.hash_nonce()

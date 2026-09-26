@@ -356,3 +356,226 @@ Test out-of-order lookup replies, duplicate IDs, stale generations, missing
 records, full queues, cancellation, worker failure, epoch barriers, commit-phase
 faults, and fork promotion during live requests. A test that merely receives a
 queue reply does not establish that the database is durable or coherent.
+
+## Implementation notes: concurrent canonical and branch candidates
+
+A candidate consists of a completed chain view plus pending transactions intended
+for its next block. The canonical candidate and a competing branch candidate are
+independent instances of this state machine. Both remain active and validate
+incoming transactions while the competing branch is reconstructed and extended.
+Rolling back for branch validation means rolling back the auxiliary instance of
+canonical state, never temporarily rolling back the live canonical database.
+
+Until a competing candidate's fully validated tip surpasses the current canonical
+tip, canonical transaction admission, queries, block construction, and completed
+block acceptance continue normally. The branch's advertised height or received
+POW suffix is not its validated height. An equal-height branch does not trigger
+promotion under the selection rule in `db.md`.
+
+### Candidate-local state and locks
+
+```text
+CandidateState:
+    candidate_id, generation_id
+    role: canonical | auxiliary
+    phase: reconstructing | validating | ready | failed | retired
+    completed_view: height, final_hash, revision
+    worker_group: nine database workers
+    pending_transactions and immutable transaction bytes
+    reserved_delta_keys and validation read dependencies
+    per-transaction validation results and assigned output positions
+    incoming_transaction_cursor
+    promotion_eligibility
+```
+
+Each candidate has its own coordinator gate, reservation lock, queues, request
+IDs, caches, derived indexes, and parameter publications. The existing
+"exclusive database gate" is exclusive to that candidate's worker group; it
+must not serialize canonical work behind branch replay or branch commits.
+A separate short-lived selection lock protects the identity of the canonical
+candidate during promotion. It is not held during cryptographic checks,
+reconstruction, or ordinary branch extension.
+
+Every request, lookup, and reply carries candidate identity in addition to its
+generation and view. A revision changes whenever that candidate advances or
+rebases. The transaction bytes may be shared because they are immutable; UTXO
+lookups, deltas, votes, median caches, and admission decisions are candidate-local.
+The same positional reference on two branches can designate different outputs.
+
+### Obtain an ancestor view without blocking canonical work
+
+A full eight- or eighteen-file copy under the canonical writer lock pauses
+canonical mutation for the duration of the copy. It is therefore unsuitable as
+the default snapshot mechanism for this non-interruption requirement. There are
+two implementation choices:
+
+- **Replay retained immutable history:** capture a common ancestor height/hash
+  and pin the matching completed block and delta ranges. Build auxiliary stores
+  from genesis or a verified checkpoint through that ancestor while canonical
+  appends continue. Completed log entries in the pinned prefix must be immutable;
+  compaction, truncation, and generation deletion cannot invalidate them.
+- **Use an established isolated snapshot:** pin a previously sealed generation
+  or a filesystem snapshot with guaranteed isolation, then roll its auxiliary
+  state back to the ancestor. A brief barrier may establish the snapshot identity,
+  but copying the entire live mutable dictionary must not occur under that barrier.
+
+Replay is the simplest portable starting point with the current containers.
+Workers issue bounded range reads against captured prefix extents, excluding
+newly appended tails. Reconstruct UTXOs and all four parameter stores, and rebuild
+branch-local transaction indexes and publication context. Do not read the live
+canonical dictionary as if it were a historical snapshot.
+
+If a snapshot at height `h` is used, undo heights `h` down through `a+1` in the
+auxiliary stores only, where `a` is the ancestor. The resulting completed view
+must equal the ancestor's final hash before branch blocks are validated. A
+reconstructing candidate can queue incoming transactions, but cannot declare them
+valid before it has a coherent state. Its admission starts as soon as that state
+is ready, concurrently with further canonical operation.
+
+### Fan out every transaction to both candidates
+
+Use a transaction ingress service with a monotonically increasing ingress
+sequence. Each incoming transaction is stored once as immutable bytes and sent
+to both candidate inboxes with separate request IDs:
+
+```text
+TransactionEnvelope:
+    ingress_sequence, transaction_identity, encoded_transaction
+
+ValidateForCandidate:
+    candidate_id, request_id, ingress_sequence
+    expected_view_revision, encoded_transaction
+```
+
+Do not use competing consumers on a single transaction queue: that distributes
+transactions between candidates rather than delivering each transaction to both.
+The ingress router explicitly fans out each envelope. Track a delivery cursor
+and backlog per candidate. A candidate created later replays the retained pending
+transaction set and catches up from the captured cursor, with identity-based
+deduplication to cover overlap with live delivery.
+
+Canonical delivery does not await branch validation or a full branch inbox.
+Use independent bounded delivery tasks and a retained ingress backlog, with
+per-candidate acknowledgements and limits. If resources are exhausted, explicitly
+pause or abandon the auxiliary candidate and release its pins; do not silently
+drop branch deliveries while claiming that it has processed all transactions.
+Bounded resources cannot support unlimited lagging candidates without a policy.
+
+Ingress deduplication must account for signed payload bytes: transaction hashes
+exclude signatures, so two submissions with one transaction hash need not contain
+the same signature material. Share parsing or cryptographic computations only
+when their complete inputs match. State-dependent signer resolution, balances,
+fees, and vote effects are still checked separately on each candidate.
+
+### Independent validation outcomes
+
+A transaction can be accepted on one candidate and rejected on the other. It may
+spend an output already claimed on one branch, refer to an output absent from the
+other, or encounter different epoch parameters. Return candidate-qualified results:
+
+```text
+ValidationResult:
+    transaction_identity, candidate_id, completed_view_revision
+    status: accepted | invalid | conflict | missing_dependency | stale
+    reason
+```
+
+An auxiliary rejection must not evict an accepted canonical transaction. A
+canonical rejection must not prevent independent branch validation. Pending-set
+membership, unique delta-key reservations, resource budgets, and next-block
+output positions are maintained independently. Within each candidate all admitted
+transactions remain intended for that candidate's next block.
+
+Validation captures a completed view, performs lookups and checks, and rechecks
+that revision under the candidate admission lock before reserving keys. If the
+candidate advanced meanwhile, mark the result stale and retry against its new
+view. Do not publish stale deltas just because the transaction bytes are unchanged.
+Deterministic ingress order can resolve local reservation conflicts; it is not
+a substitute for block consensus rules.
+
+### Advancing a branch while transactions arrive
+
+Process branch blocks sequentially against their own parent views. Transaction
+validation tasks may run between commits or concurrently against a pinned stable
+view. A branch-local commit gate prevents them from observing partial UTXO or
+vote application, without affecting the canonical candidate's gate.
+
+After each branch block commits, remove included transactions from that branch's
+pending set, invalidate stale reservations, and revalidate remaining transactions.
+Recompute next-block output positions and vote deltas where their context changed.
+Perform the same process independently whenever the canonical tip advances.
+Candidate transactions do not get inserted into downloaded completed blocks;
+they are candidates for a subsequent block built on the resulting tip.
+
+If a peer supplies a long suffix, promotion may occur at a completed, fully
+validated prefix that already surpasses canonical height, provided every block
+through that proposed promotion tip is validated. An unvalidated remaining suffix
+cannot contribute to the length comparison and remains unaccepted. If the
+promotion proposal instead names the entire received suffix, all of it must first
+be validated.
+
+### Promotion barrier and continued transaction delivery
+
+Once the branch has a qualifying validated tip:
+
+1. Prepare and synchronize its complete generation without holding the canonical
+   selection lock. Verify that its parameter publications and all four logs agree
+   with its completed view.
+2. Acquire the selection lock and briefly gate canonical commits and the branch's
+   own commits. Compare both current completed tips, not their earlier snapshots.
+   Recheck ancestry and validation status. If canonical growth has caught up,
+   release the gates and continue validating; do not force promotion.
+3. Publish the selected generation using the durable `CURRENT` protocol. Switch
+   canonical routing as one operation, then release the gates. No partial store
+   combination becomes canonical.
+4. Preserve branch-local admissions that still match the promoted completed view.
+   Independently reconsider canonical-only pending transactions and transactions
+   from detached blocks; do not copy their old deltas or reservations.
+
+Ingress continues to record transactions during this brief publication barrier.
+Candidate-specific cursors ensure that every retained envelope is delivered
+exactly as needed after routing changes. A result already in flight remains
+associated with its original candidate and revision; it is never relabeled as
+an acceptance by the newly canonical candidate. Reads already pinned to the old
+generation may complete with that view identified, subject to retention policy.
+
+This allows a short synchronization point for atomic promotion, not a canonical
+pause for the duration of branch validation. The old canonical candidate can
+remain an auxiliary instance if retained for further branch work, or be drained
+and retired. Worker groups and ingress cursors must be updated consistently with
+that decision.
+
+### Scheduling and failure isolation
+
+Give canonical requests a reserved processing budget and bound branch replay,
+range reads, sorting, and cryptographic concurrency. Separate executor capacity
+or admission semaphores prevent branch work from saturating every thread used by
+canonical operations. CPU-heavy Python sorting must not monopolize the event loop;
+use an appropriate executor or bounded work batches. Snapshot/replay I/O also
+needs throttling on a shared disk.
+
+A corrupt or invalid branch transitions to `failed`; outstanding branch requests
+receive explicit failure or retirement replies, and canonical work continues.
+A failure during the atomic publication step invokes database recovery, not
+optimistic routing to whichever group replied first. Group shutdown drains its
+own pending lookups and file operations before removing snapshots or queued data.
+
+### Example and verification
+
+Canonical tip C100 and branch tip B97 share ancestor 97. Auxiliary reconstruction
+and validation of B98, B99, and B100 proceed while canonical transactions and
+blocks continue. Transaction T spending an ancestor output is sent to both:
+canonical state may reject it because C99 spent that output, while B100 accepts
+it. Neither result changes the other's pending set.
+
+If B101 is fully valid and canonical still ends at C100, B101 can be promoted.
+If canonical advanced to C102, B101 remains auxiliary and continues receiving
+transactions. B103 qualifies only after B102 and B103 are fully validated and
+canonical still ends below height 103. A claimed B104 proof with missing blocks
+cannot affect the comparison.
+
+Tests should demonstrate continued canonical commits during slow replay, delivery
+to both candidates, divergent validation outcomes, stale-view retries, bounded
+branch backlogs, independent reservations, epoch-specific vote medians, and
+promotion races with canonical growth. Inject failures before and after generation
+publication and verify that canonical POW never advertises an unvalidated branch.

@@ -1,206 +1,206 @@
-﻿# Bounded block queue and retirement
+﻿# Bounded block queue and reversible retirement
 
-The canonical block queue retains at most **200 epochs**, with **10,000 blocks
-per epoch**, for a capacity of **2,000,000 blocks**. Once full, accepting another
-block retires the oldest retained block and any still-unclaimed UTXOs originating
-in it. Retirement changes live state; it is not merely deletion of historical
-block bytes.
+The canonical block queue retains **200 epochs of 10,000 blocks**, or
+**2,000,000 blocks**. Once full, accepting a block retires the oldest block and
+any of its outputs still unclaimed after the new block's transactions.
 
-This document extends [db.md](db.md), [deltas.md](deltas.md), and
-[forks.md](forks.md). It describes the required behavior, not completed code.
-`chain.py` has an unimplemented `expire` method. `consensus.py` currently uses
-`52 * 4 = 208` epochs; that constant does not implement the 200-epoch limit here.
+Retirement is represented by ordinary reversible deltas appended to the end of
+that block's transaction deltas. Reversal uses the same delta replay mechanism;
+it does not construct a separate retirement lookup table or special receipt map.
+Retired block bodies are kept temporarily in a bounded buffer, approximately
+100 blocks for untrusted-peer handling.
+
+This describes the intended implementation. `chain.py` still has an unimplemented
+`expire` method, and `consensus.py` currently uses 208 rather than 200 epochs.
+Related designs are in [db.md](db.md), [deltas.md](deltas.md), and
+[db.3.md](db.3.md). The ordering here supersedes the earlier recommendation to
+apply retirement before the accepting block's transaction deltas.
 
 ## Queue bounds
 
-Let `C = 2_000_000` and `H` be the completed canonical tip height, with genesis
-at height zero. The active queue contains:
+With capacity `C=2_000_000`, genesis at height zero, and completed tip H:
 
-`first_height = max(0, H - C + 1)`
+`first_height = max(0, H-C+1)`
 
-`retained_heights = [first_height, H + 1)`
+`retained_heights = [first_height, H+1)`
 
-`count = min(H + 1, C)`
+`count = min(H+1, C)`
 
-| Tip height | Retained heights, inclusive | Count | Newly retired height |
-| ---: | --- | ---: | --- |
-| 1,999,998 | 0–1,999,998 | 1,999,999 | None |
-| 1,999,999 | 0–1,999,999 | 2,000,000 | None |
-| 2,000,000 | 1–2,000,000 | 2,000,000 | 0 |
-| 2,000,001 | 2–2,000,001 | 2,000,000 | 1 |
+| Completed tip | Retained heights, inclusive | Newly retired block |
+| ---: | --- | --- |
+| 1,999,998 | 0–1,999,998 | None |
+| 1,999,999 | 0–1,999,999 | None; queue just filled |
+| 2,000,000 | 1–2,000,000 | 0 |
+| 2,000,001 | 2–2,000,001 | 1 |
 
-The initial fill retires nothing. Thereafter the queue advances one block at a
-time, not an entire epoch every 10,000 blocks. Absolute block heights never
-reset when the oldest entry is removed.
+Retirement advances one block per append, not one whole epoch at a time. Heights
+and positional output references are never renumbered.
 
-## UTXO retirement
+## Convert the retiring block to deletion deltas
 
-A UTXO's origin is its positional reference `(block, transaction, output)`.
-Retiring height `r` removes every live output whose origin block is `r`,
-regardless of its balance or how long its owner intended to retain it. Already
-spent outputs require no deletion. Outputs created by later transactions remain
-live even if their value ultimately came from a retired block.
+For new height h at capacity, retiring height is `r=h-C`. Enumerate the retiring
+block's transaction outputs using their original transaction and output positions.
+Only outputs are needed for this conversion; inputs and signatures need not be
+revalidated merely to retire state.
 
-Use the retiring block's output list to enumerate possible keys, then look up
-the corresponding live records. Alternatively maintain a block-to-live-output
-index. The persistent dictionary cannot recover original keys from its salted
-key fingerprints, so retirement must not depend on enumerating those fingerprints
-as if they were UTXO references.
+For each ARKA or asset output reference, look up its live value in the private
+state **after** applying the accepting block's transaction deltas:
 
-For every remaining output, capture an ordinary deletion delta:
+- If present, emit its normal typed UTXO delta with the exact live bytes as `old`
+  and absence as `new`.
+- If already spent, emit nothing.
+- Attach/extract any associated vote removals using the same mechanism as an
+  ordinary spend.
 
 ```text
-RetirementDelta:
-    delta_type = ARKA_UTXO or ASSET_UTXO
-    reference = (retiring_height, transaction_position, output_position)
-    old = exact live output bytes
-    new = absent
+retirement_delta = UTXOUpdate(
+    ref=(retiring_height, transaction_position, output_position),
+    old=live_output,
+    new=absent,
+)
 ```
 
-Both ARKA and asset UTXOs retire. Removing a UTXO does not automatically remove
-an asset definition, executive definition, or another non-UTXO state record;
-those require their own explicit lifetime rules. Reward/fund expiration is also
-not implied merely by naming this a UTXO-retirement operation.
+Retiring a block does not reapply or reverse that old block's original transaction
+deltas. It constructs new deletion deltas for outputs that remain live now.
+Definitions, rewards, funds, and other non-UTXO records require explicit lifetime
+rules; they are not removed simply because their original block retires.
 
-## Ordering at the retention boundary
+A transaction that consumes an output from the retiring block leaves no live
+record for retirement to delete again. This preserves unique delta keys within
+the accepting block. Whether a boundary-block spend is otherwise permitted is a
+consensus eligibility rule; retirement ordering itself must not produce a second
+delete or introduce a separate undocumented rejection rule.
 
-Retirement is caused by advancing the canonical queue, and belongs to the same
-atomic state transition as the newly accepted block. A deterministic boundary
-rule is required so nodes agree whether an oldest-block output can be spent in
-the block that retires it.
+## One list, one reversal path
 
-The recommended rule is **retire before validating the new block's inputs**.
-For proposed height `h`, any reference below `max(0, h-C+1)` is outside the live
-window and cannot be spent. Compute the retirement effects in the private
-validation view before checking transactions; do not mutate published state until
-the whole block succeeds. If this block is rejected, no retirement takes effect.
-This ordering is a proposed consensus detail accompanying the capacity rule.
+Let T[h] be the accepting block's transaction deltas and R[h] its generated
+retirement deltas. Store:
 
-A transaction previously admitted against the old tip can consequently become
-ineligible at the boundary. Candidate admission should already use the next
-block's retention bounds, and final block validation must recheck them. An
-explicit spend and retirement must not emit duplicate deletion keys for the
-same block transition.
+`D[h] = T[h] || R[h]`
 
-After validation, commit the new block, its transaction and retirement deltas,
-vote effects, queue bounds, and POW tip as one consistent state. Append-first
-physical staging may temporarily use extra disk space; the published logical
-queue must never exceed capacity.
+The vote-delta partition likewise includes transaction effects followed by any
+remaining retirement vote removals. Persist both partitions with the identity
+of block h, including empty retirement suffixes. Chunk boundaries may divide the
+list but do not change its semantic order or commit boundary.
 
-## Vote effects
-
-Retiring an ARKA UTXO removes the votes attached to its balance just as spending
-it does. Capture those removals in the containing UTXO delta and the extracted
-entry in `db/vote_deltas`, and apply them exactly once to the relevant parameter
-stores. Preserve source reference, proposal, and old weight for reversal.
-
-Under the previous-10,000-block publication window in `db.md`, outputs retiring
-after 2,000,000 blocks are already outside the current electorate. Their removal
-therefore does not subtract weight from the current window's median. It removes
-any remaining live-source records in their origin bins. Previously sealed epoch
-publications remain unchanged. If an old bin has already been safely discarded,
-cleanup must recognize that representation rather than manufacture a negative
-vote total or count the vote twice.
-
-## Partitioning deltas and indexing logs
-
-Store retirement effects with the block that caused them, not by rewriting the
-retired block's historical delta entry. For example, the delta list at height
-2,000,000 includes deletions of still-live outputs from height zero. Its reverse
-restores those exact outputs if that queue advancement is undone.
-
-Each log needs explicit logical bounds:
+Forward application follows D[h]. Reverse application visits D[h] backward and
+swaps old/new:
 
 ```text
-QueueState:
-    first_height
-    count
-    tip_height, tip_final_hash
-    predecessor_final_hash of first_height, or genesis marker
+forward:  transaction effects -> retirement effects
+reverse:  restore retired outputs -> undo transaction effects
 ```
 
-A request for absolute height `h` maps to slot `h-first_height` only when
-`first_height <= h <= tip_height`. Earlier heights return a distinct retired/
-unavailable result, not an accidental lookup of another block. The canonical tip
-remains the final hash of the last retained POW. Retain the predecessor hash at
-the front boundary to identify ancestry without pretending it supplies the
-retired predecessor's full state.
+There is no special lookup needed to undo retirement. Each deletion already
+contains the output bytes and vote before-images necessary to restore it. A
+retirement-start ordinal may be recorded for inspection, but correctness does
+not depend on a second table of retired outputs.
 
-Blocks, POWs, UTXO deltas, and vote deltas remain associated by absolute height
-and block identity. They may share a logical active window while undo/checkpoint
-storage temporarily retains older bytes. Such bytes are recovery history, not
-additional active queue entries.
+Conversion and validation take place in a private working view. A rejected block
+causes no published transaction changes or retirement. The ordinary database
+commit protocol publishes the complete deltas, UTXO/vote state, queue bounds,
+and POW tip consistently before obsolete bytes are reclaimed.
 
-`AsyncPersistentLog` needs a corrected prefix-retirement implementation before
-being used here: its current prefix truncation shifts offsets while also advancing
-`start_index`, and readers add that index again. Define one consistent translation
-from absolute height to physical offset. Do not simply call that existing method
-for every retirement and assume the bounds remain valid.
+## Reversing a full queue
 
-For a simple implementation, retain append-only data segments with a logical
-front offset, then compact retired segments in batches. Rewriting the entire
-2,000,000-entry offset table for each accepted block is unnecessary. Epoch-sized
-segments fit the retention unit, but a partially retired first segment still
-requires a per-block logical boundary. Chunk reclamation follows reader and
-candidate pins.
+Before accepting h, the full queue spans `[r,h)`. Afterward it spans `[r+1,h+1)`.
+Undoing h restores `[r,h)`, rather than simply shortening the queue to C-1 entries:
 
-## Reversal and recovery
+1. Reverse D[h], restoring retirement deletions and then undoing transactions.
+2. Remove h from the active tail and restore the former front block r from the
+   retired-block buffer when its body is available.
+3. Restore the prior queue bounds, tip, ancestry boundary, and matching log views
+   in the same recoverable transition.
 
-Undoing an accepted boundary block must reverse both its ordinary transaction
-changes and its retirement changes. It must also restore the former queue front.
-Once a block is physically erased, its bytes cannot be recreated from a UTXO
-before-image alone. Keep the retired front entry in an undo segment or pinned
-archive until the supported rollback interval permits its deletion, or require
-retrieval and verification of that historical data before such a reversal.
+Queue metadata and block identity are still required. They describe ordering and
+availability, not an additional UTXO lookup table. Reverse-playing D[h] into a
+sparse ancestor overlay works unchanged: retirement deletions restore their old
+values just as ordinary spend deltas do.
 
-Retained deltas alone cannot rebuild current state from an empty dictionary once
-the genesis-era delta prefix has been discarded. Maintain a verified rolling
-checkpoint immediately before the oldest replayable delta, or retain an archival
-replay source. The checkpoint must bind its height/hash, UTXO state, parameter
-publication context, and other required validation state. Advance it using the
-retiring historical delta before discarding that delta, with a recoverable
-checkpoint-publication protocol.
+### Example
 
-After a crash, recover one committed tip, front boundary, and matching state.
-Never expose a shortened queue with unretired UTXOs, or delete the only undo
-records before their corresponding state/checkpoint publication is durable.
-Filesystem deletion and compaction are later reclamation steps, not the commit
-point for retirement.
+At full capacity, output A from height zero is live, output B from height zero
+was spent previously, and output X from height zero is spent by new block
+2,000,000, producing Y. The combined list contains:
 
-## Auxiliary candidates
+```text
+transaction deltas:  X -> absent; absent -> Y
+retirement deltas:   A -> absent
+```
 
-The sparse extensions in `forks.md` must include retirement effects caused by
-their proposed tip heights. A candidate extending beyond canonical may have a
-later logical front, and its view must hide expired outputs even if they remain
-in canonical state. These are proposed tombstones until canonical validation
-establishes the transition's validity.
+B is absent already; X is absent after transaction application. Neither receives
+a retirement delta. Reverse replay restores A, removes Y, and restores X. B stays
+absent. Restoring the height-zero block at the queue front returns the logical
+window to 0–1,999,999. No retirement-specific lookup table is built.
 
-Canonical front advancement must preserve historical lookups pinned by retained
-candidates or rebuild them from a verified checkpoint and retained deltas. A
-candidate whose fork predates available history cannot be reconstructed from the
-retained block queue alone. It needs a trustworthy reconstruction source or must
-remain unresolved; a POW chain is not a replacement for missing state data.
-Being ahead does not eliminate this data requirement, and missing history is not
-itself evidence that the candidate is invalid.
+## Bounded retired-block buffer
 
-The 200-epoch bound governs the active block queue, not an unconditional bound on
-all recovery, checkpoint, or candidate staging storage. If a strict total-disk
-limit is also required, history availability and deep-fork handling need a
-separate explicit policy.
+Maintain a recent retired-block buffer with a configurable maximum of approximately
+100 blocks for untrusted-peer handling. Retain absolute height and block/POW
+identity with each body. Canonical bodies removed from the front are already
+validated; the limit bounds history retained to service untrusted peer-driven
+reorganization work, not permission to trust arbitrary peer-supplied bodies.
 
-## Example
+This buffer is outside the 2,000,000-entry active queue. It enables short backward
+queue shifts and provides the output inventory if a restored front block retires
+again on a different path. Recompute retirement deletions against that path's
+live state; do not blindly reuse the earlier suffix when different transactions
+may have spent different outputs.
 
-At height 1,999,999, the queue is full. Genesis output A remains unclaimed, while
-genesis output B was spent long ago. Proposed block 2,000,000 retires height zero.
-Its private view removes A and its attached votes; B causes no deletion. A
-transaction in the proposed block cannot claim A under the recommended ordering.
+At steady state, evict the oldest buffered body when the configured limit is
+exceeded, subject to an explicit bounded pin policy. A peer must not bypass the
+limit by opening many candidates that pin every old block. Limit or defer such
+operations, retrieve verified history when needed, or report unavailable data.
+Missing history is not by itself evidence that an ahead POW candidate is invalid.
 
-After successful commit, the queue covers heights 1–2,000,000, A is absent, and
-the new block's delta entry contains A's exact before-image. If the block is
-reverted while the necessary history is retained, A and the former queue front
-are restored. The previously spent B remains absent.
+The body-buffer horizon and delta undo horizon are distinct. A retained delta can
+restore UTXO state after the corresponding original body has been evicted, but
+cannot reconstruct inputs, signatures, or the complete original block bytes.
+Reversal that requires those bodies must retrieve them or expose explicit body
+unavailability. Never advertise an output inventory as a complete block.
 
-Tests should cover the first retirement, each off-by-one boundary, ARKA and asset
-outputs, already-spent sources, rejected boundary blocks, vote cleanup, next-block
-admission, rollback, absolute-height lookups, checkpoint replay, and auxiliary
-extensions crossing different front boundaries.
+## Votes and parameter state
+
+ARKA retirement deletes the votes attached to the output's full recorded balance.
+Log these removals in the accepting block's vote-delta entry and apply them once.
+Reverse replay restores the exact old contribution; it must not recompute old
+weight from later parameters.
+
+Under the previous-10,000-block publication window, a UTXO retiring after
+2,000,000 blocks is outside the current electorate. Its removal cleans up any
+remaining origin-bin source state without subtracting from the current window
+or changing sealed epoch publications. If old materialized bins have already been
+reclaimed, the representation must account for that without fabricating negative
+weights. Retained deltas still describe the reversible logical effect.
+
+## Log indexing, recovery, and retention limits
+
+Logs must distinguish absolute heights from physical positions. At a retained
+front f, logical slot for h is `h-f`; requests below f return retired/unavailable
+unless served through the retired-block buffer or an explicit historical view.
+The current `AsyncPersistentLog` prefix-truncation implementation needs correction
+before use: it both shifts offsets and advances an index readers add again.
+Use logical front advancement and batched segment reclamation rather than moving
+the whole offset table on every block.
+
+Before removing a body, complete output enumeration and persist its generated
+retirement deltas as part of the accepting transition. Preserve undo information
+through the supported rollback horizon. Retirement cannot be reversed if both
+its before-images and any reconstruction source have been erased.
+
+Once old delta prefixes are discarded, replay from an empty UTXO database is no
+longer sufficient. Retain a verified checkpoint before the oldest replayable
+transition, or an archival reconstruction source. Advancing and publishing that
+checkpoint must be recoverable before deleting its source history.
+
+A crash must recover either the old queue/state or the complete accepted new
+queue/state. Buffer movement, log truncation, and physical deletion must not
+remove the only recovery source mid-commit. Auxiliary overlays include the same
+retirement suffixes and must pin or reconstruct the history they use within the
+configured resource policy.
+
+Tests should cover initial fill, first retirement, empty retirement suffixes,
+already-spent outputs, transaction/retirement key uniqueness, full-queue reverse
+replay, repeated rollback/re-extension, vote restoration, buffer overflow, missing
+old bodies, and interrupted commits. The defining property is that ordinary
+transaction-delta reversal also reverses retirement.

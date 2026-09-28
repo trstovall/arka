@@ -106,10 +106,10 @@ is also retained, distinguish it from the network/database command journal.
 | Incoming message | Coordinator work |
 | --- | --- |
 | Transaction announcement | Compare hashes with known/pending transactions; request missing bodies |
-| Transaction bodies | Validate independently on canonical and auxiliary candidates; resolve inputs, derive UTXO/vote deltas, reserve keys |
+| Transaction bodies | Validate in the canonical context; resolve inputs, derive UTXO/vote deltas, reserve keys; stage auxiliary data without independent admission |
 | Transaction request | Resolve requested IDs in the proper peer context; reply with available transaction bodies or explicit status |
 | Block announcement | Compare advertised ancestry/tip with known candidates; schedule missing headers and bodies |
-| Block/header/summary response | Associate with the pending request, check identity, and advance only a contiguous validated candidate prefix |
+| Block/header/summary response | Correlate the request and check identity; stage auxiliary data, or advance the validated prefix in the selected canonical context |
 | Block request | Ask BlocksDB for the requested view and representation; assemble the network response |
 | POW-chain announcement/response | Ask POWDB and BlocksDB about ancestry; schedule validation data without displacing canonical state |
 | POW-chain request | Read a bounded chain segment from a pinned view and return it with its ancestry identity |
@@ -157,6 +157,92 @@ need a registered function identifier/version, invocation ID, typed input/output
 and success/error status. They do not authorize arbitrary Python execution or
 unrestricted access to database files. Side-effecting handlers need the same
 idempotency and commit discipline as other commands.
+
+## Database coordinator journal events to implement
+
+Add explicit `Database*` event classes alongside the existing `Peer*` classes in
+`arka/broker.py`. The following is a proposed interface, not an inventory of
+implemented classes. Each class derives from `AbstractBrokerEvent`; its named
+fields below are its payload. The common envelope supplies correlation, peer
+session, candidate identity, generation, and view revision. Peer-directed events
+also carry `addr: Address`, matching the existing network classes.
+
+`Requested` means the coordinator asks the network to retrieve data;
+`Responded` means it supplies a reply to a peer's request; `Published` means it
+announces locally accepted availability. These outbound events must never be
+fed back as inbound `Peer*` events. The network subscribes to each concrete
+outbound class because the current broker uses exact-type dispatch.
+
+### Retrieval, replies, and announcements
+
+| Proposed class | Typed payload fields beyond the envelope and `addr` | Network action |
+| --- | --- | --- |
+| `DatabaseTransactionsSubscribed` | None | Subscribe to the peer's transaction announcements |
+| `DatabaseTransactionsUnsubscribed` | None | Cancel that subscription |
+| `DatabaseTransactionsRequested` | `ids: set[int]` | Request advertised peer-local transaction IDs |
+| `DatabaseTransactionsResponded` | `txs: dict[int, Transaction]`, `unavailable: set[int]` | Reply with available bodies and identify unavailable requested IDs |
+| `DatabaseTransactionsPublished` | `tx_hashes: dict[int, TransactionHash]` | Announce transactions admitted in the canonical context |
+| `DatabaseBlocksSubscribed` | None | Subscribe to the peer's block announcements |
+| `DatabaseBlocksUnsubscribed` | None | Cancel that subscription |
+| `DatabaseBlocksRequested` | `ids: set[int]`, `mode: Literal["HEADER", "SUMMARY", "BLOCK"]` | Request the selected representations |
+| `DatabaseBlocksResponded` | `blocks: list[Block] \| list[BlockHeader] \| list[BlockSummary]`, `mode`, `unavailable: set[int]` | Reply from the pinned view, preserving the requested representation |
+| `DatabaseBlocksPublished` | `id: int`, `hash: BlockHash` | Announce a committed canonical block |
+| `DatabasePOWChainRequested` | `ancestor: BlockHash`, `tip: BlockHash`, `start_height: int`, `limit: int` | Request a bounded segment of an identified path |
+| `DatabasePOWChainResponded` | `ancestor: BlockHash`, `tip: BlockHash`, `start_height: int`, `headers: list[BlockHeader]`, `complete: bool` | Supply ordered headers containing POW and parent commitments |
+| `DatabasePOWChainPublished` | `height: int`, `tip: BlockHash` | Announce only the committed canonical POW tip |
+| `DatabaseFunctionRequested` | `function_id: str`, `version: int`, `invocation_id: bytes`, `input_bytes: bytes` | Request registered extended-function execution |
+| `DatabaseFunctionResponded` | `invocation_id: bytes`, `output_bytes: bytes \| None`, `error_code: str \| None` | Return a correlated result or error |
+| `DatabaseRequestFailed` | `error_code: str`, `detail: str` | Terminate a request that cannot be served |
+
+Here `mode` in a block reply has the same literal type as in its request. Block
+replies must associate each returned item with its requested height, explicitly
+in the wire codec if that representation does not contain the height. A POW
+reply's `complete` describes fulfillment of the bounded request, not validation
+of the entire claimed chain. Headers provide ancestry that standalone `POW`
+objects do not encode. Missing or pruned data is not evidence of invalidity.
+
+Transaction IDs in retrieval requests belong to the advertising peer/session;
+IDs in local announcements belong to the local session's advertised mapping.
+Retain these mappings through the request lifetime. Hashes identify content;
+integer IDs alone do not. Subscription events express outbound intent; receiving
+`PeerTransactionsSubscribed` or `PeerBlocksSubscribed` instead changes which
+local announcements that peer should receive.
+
+Add corresponding inbound `PeerPOWChainPublished`, `PeerPOWChainRequested`,
+`PeerPOWChainResponded`, `PeerFunctionRequested`, and `PeerFunctionResponded`
+classes with matching payloads and correlation. The network adapter must also
+represent unavailable items and terminal errors on inbound replies. These are
+protocol extensions; the existing transaction/block wire messages must be checked
+before assuming they can encode all proposed reply fields.
+
+### Coordinator outcomes and committed state
+
+The coordinator also journals local facts. These events have no required peer
+address and are not automatically broadcast. They let recovery and observers
+distinguish receipt, validation, staging, and durable publication.
+
+| Proposed class | Typed payload fields beyond the envelope | Publication point |
+| --- | --- | --- |
+| `DatabaseTransactionEvaluated` | `tx_hash: TransactionHash`, `status: Literal["accepted", "rejected", "conflict", "stale"]`, `reason: str \| None` | Canonical transaction evaluation finishes; acceptance is pending admission, not block commitment |
+| `DatabaseCandidateUpdated` | `tip: BlockHash`, `height: int`, `status: Literal["incomplete", "retained", "selected", "invalid", "discarded"]`, `missing_ranges: list[tuple[int, int]]` | Candidate inventory or selection changes; ranges are half-open and this does not imply validation |
+| `DatabaseBlockCommitted` | `batch_id: bytes`, `height: int`, `hash: BlockHash` | The coherent cross-store block commit is visible |
+| `DatabaseCanonicalTipChanged` | `batch_id: bytes`, `old_tip: BlockHash`, `new_tip: BlockHash`, `ancestor: BlockHash`, `height: int` | A validated append or branch transition is committed |
+| `DatabaseParametersPublished` | `epoch: int`, `source_range: tuple[int, int]`, `parameters: dict[str, int]` | All four epoch parameters are committed together |
+| `DatabaseBlocksRetired` | `batch_id: bytes`, `retired_range: tuple[int, int]`, `first_height: int` | Queue retirement and its appended reversible deltas are committed |
+
+The parameter map has exactly `block_reward`, `exec_fund`, `utxo_fee`, and
+`data_fee`; values use each parameter's consensus integer encoding. Its source
+range is `[10000*(epoch-1), 10000*epoch)` for non-genesis publications.
+Retirement notifications summarize the effects described in
+[block_queue.md](block_queue.md); the actual reversible before-images remain in
+the delta logs. Journal events do not substitute for database deltas.
+
+Use stable event IDs derived from a committed batch and event role for commit
+notifications. A block append may yield several notifications, but all reference
+the same committed generation. A network subscriber converts eligible committed
+facts into explicitly journaled, peer-directed `Database*Published` events;
+auxiliary inventory changes never trigger canonical announcements. Transport
+completion or failure is journaled separately against the outbound message ID.
 
 ## Central communication journal
 
@@ -218,14 +304,15 @@ and its announcement without duplicating state effects.
 1. Network journals PeerTransactionsPublished(peer, {local_id: tx_hash}).
 2. Coordinator finds the body missing and journals an outbound transaction request.
 3. Network receives and journals PeerTransactionsResponded(peer, {local_id: tx}).
-4. Coordinator correlates the response and fans immutable bytes to both candidates.
-5. Candidates reply independently with accepted, rejected, conflict, or stale status.
-6. Coordinator journals any network reply or announcement with its relevant context.
+4. Coordinator correlates the response and schedules canonical transaction validation.
+5. Coordinator journals DatabaseTransactionEvaluated with the canonical view revision.
+6. If admitted and eligible for announcement, coordinator journals
+   DatabaseTransactionsPublished for subscribed peers.
 ```
 
-The broker journal preserves receipt order. It does not force both candidates to
-have the same result or wait for each other. A rejection on one branch does not
-become a global rejection of that transaction on every branch.
+The broker journal preserves receipt order. Auxiliary candidates may stage the
+same bytes, but do not independently admit transactions. An evaluation is tied
+to its canonical view revision and must be reconsidered if that context changes.
 
 ### Longer POW chain with slow block delivery
 
@@ -235,13 +322,15 @@ peer reports a longer POW chain
 coordinator requests missing headers/blocks
     -> journal -> network -> peer
 peer supplies individual responses
-    -> journal -> coordinator -> auxiliary validation tasks
-fully validated branch becomes longer than current canonical state
-    -> coordinated generation publication -> journal canonical-tip event
+    -> journal -> coordinator -> auxiliary data staging and proposed deltas
+complete candidate selected for a canonical validation transition
+    -> canonical validation barrier -> coordinated generation publication
+    -> journal DatabaseCanonicalTipChanged -> DatabasePOWChainPublished
 ```
 
-Canonical transaction processing continues while auxiliary data arrives. Only
-fully validated ancestry contributes to promotion. Neither the peer's statement
+Canonical transaction processing continues while auxiliary data arrives. State
+validation occurs in the selected canonical context as described in forks.md;
+publication waits for a successful transition. Neither the peer's statement
 that it accepted a chain nor the journal's recording of that statement advances
 the local canonical POW tip.
 

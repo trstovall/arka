@@ -159,6 +159,23 @@ class Database:
         return self.open().__await__()
 
     async def _call(self, function, *args):
+        """Run connection work on its owning thread and drain it on cancellation.
+
+        The dedicated single-worker executor creates, uses, and closes the
+        connection on the same thread, preserving SQLite's default
+        check_same_thread=True. asyncio.to_thread() uses the shared executor;
+        successive calls can use different threads even under an asyncio lock.
+        The lock protects whole transactions, while this executor supplies
+        thread affinity for individual operations.
+
+        Cancelling an await does not stop SQL already running in a thread.
+        Shield the future and wait for completion before propagating cancellation
+        so callers cannot release the transaction lock or begin cleanup while
+        that operation is still running. Plain to_thread() would need equivalent
+        cancellation handling as well as a different connection ownership policy.
+        Completion here does not imply rollback: a cancelled commit may already
+        have succeeded.
+        """
         future = asyncio.get_running_loop().run_in_executor(self._executor, function, *args)
         try:
             return await asyncio.shield(future)
@@ -249,10 +266,16 @@ class Database:
     def _batch(self, items, keys):
         self._execute('BEGIN IMMEDIATE')
         try:
-            for key, value in items:
-                self._put(key, value)
-            for key in keys:
-                self._delete(key)
+            if items:
+                self._connection.executemany(
+                    'INSERT INTO map(key,value) VALUES(?,?) '
+                    'ON CONFLICT(key) DO UPDATE SET value=excluded.value', items)
+            if keys:
+                cursor = self._connection.executemany(
+                    'DELETE FROM map WHERE key=?', ((key,) for key in keys))
+                # difference_update deduplicates keys before submitting the batch.
+                if cursor.rowcount != len(keys):
+                    raise KeyError('One or more batch keys are missing')
             self._connection.commit()
         except BaseException:
             self._connection.rollback()

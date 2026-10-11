@@ -39,10 +39,13 @@ def test_map_reopen(tmp_path):
                 await db[b'key']
             assert await db.get(b'missing', b'default') == b'default'
             await db.update({b'a': b'one', b'b': b'two'})
+            await db.update({b'a': b'replaced', b'empty': b''})
+            await db.update({})
+            await db.difference_update([])
             with pytest.raises(KeyError):
                 await db.difference_update([b'a', b'not-present'])
-            assert await db.get(b'a') == b'one'
-            await db.difference_update([b'a', b'b'])
+            assert await db.get(b'a') == b'replaced'
+            await db.difference_update([b'a', b'b', b'a'])
             assert await db.__len__() == 1
     asyncio.run(scenario())
 

@@ -50,11 +50,11 @@ def test_map_reopen(tmp_path):
     asyncio.run(scenario())
 
 
-async def encoded_block(height, parent=None):
+async def encoded_block(height, parent=None, parameters=None):
     from arka import block
     from arka.crypto import keccak_800
     header = block.BlockHeader(height, height, parent or block.BlockHash(bytes(32)),
-                               block.SignerKey(bytes(32)))
+                               block.SignerKey(bytes(32)), parameters=parameters)
     initial = (await header.hash()).value
     nonce = bytes(32)
     header.pow = block.POW(block.Nonce_32(initial), block.Nonce_32(nonce),

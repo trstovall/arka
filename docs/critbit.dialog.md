@@ -120,3 +120,14 @@ Outlined per-file allocation tracking, mmap storage, and atomic root publication
 **3 logical algorithm tests passed.**
 
 ---
+
+Updates are batched and must be transactional, durable, and recoverable after power outage.
+
+...
+
+Updated [arka/critbit.py](arka/critbit.py) with transactional batch interfaces and a power-loss recovery protocol: private roots, synchronized tree files, one durable manifest commit, and acknowledgement afterward.
+
+Defined allocator recovery, retry identity, and crash-test requirements. These remain explicit implementation contracts; the sketch does not yet provide durable storage.
+
+---
+

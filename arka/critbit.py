@@ -21,6 +21,38 @@ the last valid manifest. A per-file root alone cannot publish a multi-tree block
 Do not reuse nodes reachable from canonical, auxiliary, historical, or reader
 roots. Reclaim abandoned allocations only after reachability/recovery checks.
 
+Updates are transactional batches, not separately published tree mutations.
+Readers pin one committed generation covering every tree. A batch builds private
+roots and allocator generations under a single database writer gate. An error
+aborts the complete batch; no partial root set becomes visible. Durable commit
+must finish before returning success or emitting a broker commit event.
+
+Required power-loss protocol (not implemented by this sketch):
+  1. Reserve fresh extents without altering live nodes or the committed allocator
+     snapshot. Write copy-on-write nodes, summaries and allocator metadata.
+  2. Flush modified mappings, then synchronize every participating backing file,
+     including file growth. An mmap flush alone is not the durability contract.
+  3. Append a framed, checksummed commit record to a database-wide manifest.bin:
+     batch identity, parent/new generation, block identity, complete root sets,
+     file identities, durable extents and allocator roots. Synchronize this file.
+     Synchronize directory metadata when required for newly created files.
+  4. Make the generation visible and acknowledge. Per-tree superblocks are hints;
+     they cannot independently decide which multi-tree batch committed.
+
+Recovery validates the manifest's committed prefix and all referenced file bounds
+and metadata. An incomplete final record is an uncommitted tail. Corruption inside
+committed history is an error, not permission to silently discard acknowledged
+blocks. Replay the last complete commit, ignoring unpublished roots/allocations.
+Never reuse extents until recovery and retained-root reachability prove them free.
+If a commit becomes durable before its response is delivered, a retry with the
+same batch identity must report that result; conflicting reuse must be rejected.
+
+Fault-injection tests must interrupt every write/flush/publication boundary,
+simulate torn final records and allocator updates, and reopen all files. Recovery
+must expose a complete old or new generation, never mixed roots. These guarantees
+require an actual disk format and platform durability implementation; the logical
+algorithms and interfaces here alone do not provide power-outage recovery.
+
 Fixed-width keys are required within each tree. Parameter proposals use unsigned
 big-endian keys so bit order equals numeric order. Other keys follow their domain
 codec. Executive selection is by stored balance, not identifier ordering.
@@ -90,7 +122,7 @@ Node = Leaf | Branch
 class NodeStore(Protocol):
     def read(self, offset: Offset) -> Node: ...
     def allocate(self, node: Node) -> Offset:
-        """Persist an immutable node in this file's tracked allocation arena."""
+        """Stage an immutable node; allocation alone does not imply durability."""
         ...
 
 
@@ -139,6 +171,51 @@ class RootManifest(Protocol):
         manifest format. Return the new generation; publication is not a plain
         series of independent per-tree assignments.
         """
+        ...
+
+
+@dataclass(frozen=True)
+class FileState:
+    """One file's prepared state referenced by a durable batch commit.
+
+    file_id distinguishes file replacement from offset reuse. allocator_root
+    refers to allocation tracking inside this same tree file. durable_extent
+    bounds every referenced record; it is not permission to reclaim older roots.
+    """
+
+    file_id: bytes
+    root: Offset
+    allocator_root: Offset
+    durable_extent: int
+
+
+class TransactionalBackend(Protocol):
+    """Required persistence boundary; implementations must enforce these effects.
+
+    begin captures a complete generation and admits one writer. Tree operations
+    subsequently allocate within that batch. commit includes unchanged files and
+    the retained canonical/auxiliary/history root sets in its manifest record.
+    Implementations must freeze caller mappings before accepting them.
+    """
+
+    def begin(self, batch_id: bytes, expected_generation: int) -> None: ...
+
+    def commit(self, batch_id: bytes, block_hash: bytes,
+               files: Mapping[str, FileState],
+               retained_roots: Mapping[str, Mapping[str, Offset]]) -> int:
+        """Flush prepared files, durably publish one commit, then return generation.
+
+        Failure during final synchronization can leave the outcome uncertain;
+        recover and query the batch identity before retrying or reclaiming data.
+        """
+        ...
+
+    def abort(self, batch_id: bytes) -> None:
+        """Discard an unpublished batch; never undo an already durable commit."""
+        ...
+
+    def recover(self) -> int:
+        """Restore the last complete committed generation before admitting work."""
         ...
 
 

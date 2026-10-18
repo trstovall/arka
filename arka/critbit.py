@@ -82,11 +82,12 @@ TREE_KINDS = {
     'asset_definitions': Kind.MAP,
     'arka_utxos': Kind.MAP,
     'asset_utxos': Kind.MAP,
-    'transaction_refs': Kind.MAP,  # hash_ref=True only: hash -> (block, tx)
+    'tx_refs': Kind.MAP,        # hash_ref=True only: hash -> (block, tx)
     'block_reward': Kind.SUM,
     'exec_fund': Kind.SUM,
     'utxo_fee': Kind.SUM,
     'data_fee': Kind.SUM,
+    'bond_rate': Kind.SUM,
     'executive_votes': Kind.MAX,
 }
 

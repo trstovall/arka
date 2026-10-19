@@ -63,7 +63,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path
-from typing import Mapping, Protocol
+from typing import Iterable, Mapping, MutableMapping, Protocol
 
 
 DB_HOME = Path('~/.arka/db').expanduser()
@@ -118,6 +118,49 @@ class Branch:
 
 
 Node = Leaf | Branch
+
+
+@dataclass(frozen=True)
+class Update:
+    """Replacement value and augmentation for one key in a block patch."""
+
+    value: bytes
+    weight: int | None = None
+    balance: int | None = None
+    updated: Position | None = None
+
+
+class _PatchStore:
+    """Stage intermediate nodes in memory; persist only the final reachable DAG."""
+
+    def __init__(self, base: NodeStore):
+        self.base = base
+        self.nodes: dict[Offset, Node] = {}
+
+    def read(self, offset: Offset) -> Node:
+        return self.nodes[offset] if offset < 0 else self.base.read(offset)
+
+    def allocate(self, node: Node) -> Offset:
+        offset = -len(self.nodes) - 1
+        self.nodes[offset] = node
+        return offset
+
+    def persist(self, root: Offset) -> Offset:
+        translated = {0: 0}
+        pending = [(root, False)]
+        while pending:
+            offset, visited = pending.pop()
+            if offset >= 0 or offset in translated:
+                continue
+            node = self.nodes[offset]
+            if isinstance(node, Branch):
+                if not visited:
+                    pending.extend(((offset, True), (node.right, False), (node.left, False)))
+                    continue
+                node = Branch(node.bit, translated.get(node.left, node.left),
+                              translated.get(node.right, node.right), node.summary)
+            translated[offset] = self.base.allocate(node)
+        return translated.get(root, root)
 
 
 class NodeStore(Protocol):
@@ -262,6 +305,67 @@ class Critbit:
         _, leaf = self._path(root, key)
         return leaf.value if leaf is not None and leaf.key == key else None
 
+    def update(self, root: Offset,
+               items: Mapping[bytes, bytes | Update] | Iterable[tuple[bytes, bytes | Update]],
+               *, remove: Iterable[bytes] = ()) -> Offset:
+        """Primary per-block patch: upsert items and remove keys as one root change.
+
+        Ordinary map items may be bytes; augmented items use Update(value,
+        weight=...) or Update(value, balance=..., updated=...). Values replace
+        current values; weights/balances are absolute, not increments. Input
+        order does not define executive recency: the explicit position does.
+
+        Reject duplicate upserts, duplicate removals, overlapping sets and missing
+        removal keys. Empty patches return the original root. Validate and stage
+        the entire patch before allocating persistent nodes. Intermediate paths
+        are kept in memory; only nodes reachable from the final root are written.
+        Unchanged subtrees remain shared with the original root.
+
+        No root is published here. The caller's transactional backend must flush
+        and publish this root with the other trees in the one-minute block batch.
+        Allocation failure can leave unpublished nodes for backend abort/recovery;
+        the original root remains intact. This is not a durable commit by itself.
+        """
+        replacements = {}
+        for key, value in items.items() if isinstance(items, Mapping) else items:
+            key = self._key(key)
+            if key in replacements:
+                raise ValueError('Duplicate update key')
+            value = value if isinstance(value, Update) else Update(value)
+            if not isinstance(value.value, (bytes, bytearray, memoryview)):
+                raise TypeError('Expected value bytes')
+            replacements[key] = Update(bytes(value.value), value.weight, value.balance,
+                                       None if value.updated is None else tuple(value.updated))
+        removals = set()
+        for key in remove:
+            key = self._key(key)
+            if key in removals or key in replacements:
+                raise ValueError('Duplicate or overlapping removal key')
+            removals.add(key)
+        if not replacements and not removals:
+            return root
+        staged = _PatchStore(self.store)
+        tree = Critbit(staged, self.kind, self.key_bytes)
+        # Remove replaced leaves too, avoiding transient executive rank clashes
+        # when valid final ranks move between leaves in a single atomic patch.
+        for key in sorted(removals | replacements.keys()):
+            if tree.get(root, key) is not None:
+                root = tree.delete(root, key)
+            elif key in removals:
+                raise KeyError(key)
+        for key, value in sorted(replacements.items()):
+            root = tree.put(root, key, value.value, weight=value.weight,
+                            balance=value.balance, updated=value.updated)
+        return staged.persist(root)
+
+    def update_difference(self, root: Offset, keys: Iterable[bytes]) -> Offset:
+        """Remove a batch of existing keys; return one unpublished replacement root.
+
+        For a combined insertion/replacement/deletion patch, use
+        update(root, items, remove=keys) so both sets are staged together.
+        """
+        return self.update(root, (), remove=keys)
+
     def _branch(self, bit: int, left: Offset, right: Offset) -> Offset:
         summary = None
         if self.kind != Kind.MAP:
@@ -360,3 +464,203 @@ class Critbit:
         if self.kind != Kind.MAX:
             raise TypeError('Executive selection requires a MAX tree')
         return self.store.read(root).summary if root else None
+
+    def defrag(self, root: Offset, destination: NodeStore, *,
+               relocations: MutableMapping[Offset, Offset] | None = None) -> Offset:
+        """Copy reachable nodes in left-first depth-first postorder.
+
+        Return a root in destination; this tree and all source roots stay intact.
+        Children are allocated before parents, as required by the append-only
+        db.py codec. Each shared node is copied once per relocation session.
+        Supply the same mapping to copy additional retained roots from the SAME
+        source file into the SAME destination. Start with an empty mapping and
+        fresh replacement store; never reuse it after discarding that store.
+
+        Traversal memory is bounded by tree depth, but the default relocation
+        dictionary is O(reachable nodes). At billions of records supply an
+        external-memory MutableMapping. Source offsets are not globally unique:
+        mappings must not be shared between different source/destination pairs.
+
+        This method neither flushes nor swaps files. The owner pins source roots,
+        copies every retained version, synchronizes the destination, and commits
+        a manifest binding new file identity and remapped roots before switching
+        readers. On failure discard the replacement and relocation session.
+        """
+        if destination is self.store:
+            raise ValueError('Defrag requires a separate replacement store')
+        source_path = getattr(self.store, 'path', None)
+        target_path = getattr(destination, 'path', None)
+        if source_path is not None and target_path is not None:
+            if Path(source_path).resolve() == Path(target_path).resolve():
+                raise ValueError('Defrag cannot overwrite its source file')
+        codec = getattr(destination, 'codec', None)
+        if codec is not None and (codec.kind != self.kind or codec.key_bytes != self.key_bytes):
+            raise ValueError('Replacement store has a different schema')
+        moved = {} if relocations is None else relocations
+        if not root:
+            return 0
+        pending = [(root, None)]
+        visiting = set()
+        while pending:
+            offset, parent = pending.pop()
+            if offset in moved:
+                continue
+            if parent is not None:
+                node = Branch(parent.bit, moved[parent.left], moved[parent.right], parent.summary)
+                moved[offset] = destination.allocate(node)
+                visiting.remove(offset)
+                continue
+            if offset in visiting:
+                raise ValueError('Cyclic source tree')
+            node = self.store.read(offset)
+            if isinstance(node, Leaf):
+                moved[offset] = destination.allocate(node)
+            else:
+                visiting.add(offset)
+                pending.extend(((offset, node), (node.right, None), (node.left, None)))
+        return moved[root]
+
+
+@dataclass(frozen=True)
+class WindowVersion:
+    """One sequence version: absolute interval [start, end) and its tree root."""
+
+    tree_root: Offset = 0
+    start: int = 0
+    end: int = 0
+
+    @property
+    def size(self) -> int:
+        return self.end - self.start
+
+
+@dataclass(frozen=True)
+class WindowRoot(WindowVersion):
+    """Current version plus oldest-to-newest rollback predecessors.
+
+    Predecessors are plain versions, not recursive history objects. Persist this
+    complete descriptor with the database manifest, not merely tree_root.
+    """
+
+    predecessors: tuple[WindowVersion, ...] = ()
+
+    def __post_init__(self):
+        object.__setattr__(self, 'predecessors', tuple(self.predecessors))
+
+
+class Window:
+    """Capped persistent sequence over an ordinary 64-bit-key critbit map.
+
+    advance(root, record) adds one record/block and returns an unpublished root.
+    rollback(root, blocks) selects a retained ancestor and drops detached future
+    versions from the returned history. Both leave their input root untouched.
+    delete_after counts rollback steps: keep current plus that many predecessors.
+    A caller retaining another root explicitly pins its data independently.
+
+    Keys are absolute indices encoded as eight-byte unsigned big-endian integers.
+    Advancing past capacity removes the oldest key from the new tree, but its
+    bytes remain reachable from older roots. Neither operation frees storage.
+    Root descriptors/history still require transactional persistence by the owner.
+    """
+
+    def __init__(self, tree: Critbit, capacity: int = 2_000_000,
+                 delete_after: int = 100):
+        if tree.kind != Kind.MAP or tree.key_bytes != 8:
+            raise ValueError('Window requires an ordinary map with eight-byte keys')
+        if type(capacity) is not int or capacity <= 0:
+            raise ValueError('Capacity must be positive')
+        if type(delete_after) is not int or delete_after < 0:
+            raise ValueError('delete_after must be nonnegative')
+        self.tree, self.capacity, self.delete_after = tree, capacity, delete_after
+
+    @staticmethod
+    def empty() -> WindowRoot:
+        return WindowRoot()
+
+    def _validate(self, root: WindowRoot):
+        versions = (*root.predecessors, WindowVersion(root.tree_root, root.start, root.end))
+        if len(root.predecessors) > self.delete_after:
+            raise ValueError('History exceeds retention limit')
+        for version in versions:
+            if (not 0 <= version.start <= version.end <= 2**64
+                    or version.size > self.capacity
+                    or version.start != max(0, version.end - self.capacity)
+                    or (version.tree_root == 0) != (version.size == 0)):
+                raise ValueError('Invalid Window version')
+        if any(b.end != a.end + 1 for a, b in zip(versions, versions[1:])):
+            raise ValueError('Window history must contain consecutive versions')
+
+    def get(self, root: WindowRoot, index: int) -> bytes:
+        self._validate(root)
+        if type(index) is not int or not root.start <= index < root.end:
+            raise IndexError(index)
+        result = self.tree.get(root.tree_root, index.to_bytes(8, 'big'))
+        if result is None:
+            raise ValueError('Missing record inside Window interval')
+        return result
+
+    def _advance_end(self, version: WindowVersion, record: bytes,
+                     tree: Critbit) -> WindowVersion:
+        if version.end >= 2**64:
+            raise OverflowError('Window sequence number exhausted')
+        root = tree.put(version.tree_root, version.end.to_bytes(8, 'big'), record)
+        return WindowVersion(root, version.start, version.end + 1)
+
+    def _advance_start(self, version: WindowVersion, tree: Critbit) -> WindowVersion:
+        start = max(version.start, version.end - self.capacity)
+        root = version.tree_root
+        for index in range(version.start, start):
+            root = tree.delete(root, index.to_bytes(8, 'big'))
+        return WindowVersion(root, start, version.end)
+
+    def advance(self, root: WindowRoot, record: bytes) -> WindowRoot:
+        self._validate(root)
+        # Both boundary changes share one staging arena. Only the final tree's
+        # reachable nodes are allocated in the backing store.
+        staged = _PatchStore(self.tree.store)
+        tree = Critbit(staged, Kind.MAP, 8)
+        version = self._advance_start(self._advance_end(root, record, tree), tree)
+        history = (*root.predecessors, WindowVersion(root.tree_root, root.start, root.end))
+        history = history[-self.delete_after:] if self.delete_after else ()
+        return WindowRoot(staged.persist(version.tree_root), version.start, version.end, history)
+
+    @staticmethod
+    def _rollback_start(current: WindowVersion, ancestor: WindowVersion) -> WindowVersion:
+        # Private intermediate descriptor; not a readable or publishable window.
+        # The ancestor tree restores the actual old prefix, not just its index.
+        return WindowVersion(ancestor.tree_root, ancestor.start, current.end)
+
+    @staticmethod
+    def _rollback_end(current: WindowVersion, ancestor: WindowVersion) -> WindowVersion:
+        return WindowVersion(current.tree_root, current.start, ancestor.end)
+
+    def rollback(self, root: WindowRoot, blocks: int = 1) -> WindowRoot:
+        self._validate(root)
+        if type(blocks) is not int or not 0 <= blocks <= len(root.predecessors):
+            raise ValueError('Rollback exceeds retained history')
+        if blocks == 0:
+            return root
+        ancestor = root.predecessors[-blocks]
+        version = self._rollback_end(self._rollback_start(root, ancestor), ancestor)
+        return WindowRoot(version.tree_root, version.start, version.end,
+                          root.predecessors[:-blocks])
+
+    def defrag(self, root: WindowRoot, destination: NodeStore, *,
+               relocations: MutableMapping[Offset, Offset] | None = None) -> WindowRoot:
+        """Copy the oldest retained version first, then patch forward by sharing.
+
+        Later versions reuse already relocated subtrees; only their new paths
+        and records are copied. No transaction replay or reconstruction of missing
+        history is needed. Return all remapped bounds/history in one descriptor.
+        Read it through a Window wrapping destination, not through this Window.
+        External branch/reader roots require copying too or pinning the old file.
+        See Critbit.defrag for manifest publication and mapping-size requirements.
+        """
+        self._validate(root)
+        moved = {} if relocations is None else relocations
+        versions = []
+        for version in (*root.predecessors, root):
+            copied = self.tree.defrag(version.tree_root, destination, relocations=moved)
+            versions.append(WindowVersion(copied, version.start, version.end))
+        current = versions[-1]
+        return WindowRoot(current.tree_root, current.start, current.end, tuple(versions[:-1]))

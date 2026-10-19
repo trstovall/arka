@@ -131,3 +131,203 @@ Defined allocator recovery, retry identity, and crash-test requirements. These r
 
 ---
 
+Update critbit.py Critbit to have update and update\_difference methods to allow a batch patch.  This is the primary update method since it is updated with each one minute block.  The singular methods may be useful in the future.
+
+...
+
+Added to [arka/critbit.py](arka/critbit.py):
+
+- `update(root, items, remove=())` for combined block patches.
+- `update_difference(root, keys)` for batch deletion.
+- `Update` records for weighted and executive values.
+
+Batches stage changes in memory and allocate only final reachable nodes. Original roots remain intact; durable publication still belongs to the transactional backend.
+
+Single-key methods remain available. **6 tests passed.**
+
+---
+
+Flesh out codecs for the different node types and node stores based on codecs in block.py.  Write this to db.py.  Include a database coordinator and a discussion on allocation algorithm options.  Plan for billions of records.
+
+...
+
+Added [arka/db.py](arka/db.py) with:
+
+- Versioned MAP, SUM, and MAX node codecs and `block.py` value adapters.
+- Bounded-window mmap storage with per-file allocation checkpoints.
+- Transactional root-set journaling and an async queue coordinator.
+- Allocation tradeoffs and capacity planning for billions of records.
+
+**14 tests passed.** Reclamation, journal compaction, and Windows power-loss qualification remain unfinished.
+
+---
+
+I am considering how to handle deltas for chain rollbacks.  Could I just keep a tree root for each block and truncate?
+
+...
+
+Yes. With immutable copy-on-write nodes, you can retain a **complete set of tree roots for each block** and roll back by selecting an earlier set. You do not need inverse deltas merely to restore tree state.
+
+Each block’s checkpoint should include its identity, parent, all tree roots, and any associated log boundaries. Publish rollback as a **new durable manifest generation** pointing to the ancestor checkpoint, so recovery sees the rollback consistently.
+
+“Truncate” needs two distinctions:
+
+- **Logical truncation:** remove the detached suffix from the canonical chain and restore its ancestor roots. This is straightforward.
+- **Physical truncation:** shorten backing files only when their discarded tails contain nothing reachable from any retained root—including auxiliary branches and readers. Otherwise, defer reclamation.
+
+For a fork, start the candidate from the ancestor’s root set while canonical processing continues. Unchanged nodes remain shared.
+
+Deltas may still help with inspection, replay, or effects outside the trees, but become optional for rollback if **every authoritative state change is covered by the checkpoint**. The current `db.py` retains root records in its journal, but still needs an explicit checkpoint-selection/rollback API.
+
+---
+
+The critbit tree is sufficient to replace the AsyncPersistentDictionary, but we need a series structure to store sequential data like blocks, headers, etc. including the allocation and copy on write.  A better AsyncPersistentLog.
+
+...
+
+A **persistent paged sequence** would complement the critbit maps well.
+
+Use a copy-on-write radix tree indexed by absolute sequence number:
+
+- **Leaf pages** hold record descriptors: file offset and byte length.
+- **Internal pages** hold child offsets.
+- **Record extents** hold immutable variable-length bytes, such as blocks.
+- **A sequence root** records the index-tree root and retained interval `[first, stop)`.
+
+This gives the operations needed for the chain:
+
+| Operation | Behavior |
+|---|---|
+| Append batch | Write records, replace affected index pages, return a new root |
+| Read by height | Descend through the index to its record descriptor |
+| Truncate tail | Return a root with a smaller `stop` |
+| Retire prefix | Advance `first`, preserving absolute heights |
+| Fork | Share an ancestor root, then append a private suffix |
+| Roll back | Restore a retained sequence root |
+
+A partial final page must be copied before appending. After tail truncation, subsequent appends must replace descriptors at those positions rather than expose the detached suffix.
+
+Each sequence file—such as `blocks.bin` or `headers.bin`—would contain its own allocation tracking, index pages, and record extents. Truncation is logical; physical space is reclaimed only when no retained root or reader references it.
+
+The database manifest should publish **map roots and sequence roots together per block**. That makes a rollback restore both UTXO state and chain history atomically, without replaying inverse deltas.
+
+I’d keep this as a separate `PersistentSeries` primitive, sharing the allocator and commit machinery with the critbit stores.
+
+---
+
+Truncate tail and retire prefix are similar operations but sound very different.
+
+...
+
+Agreed. Use symmetric names:
+
+- `truncate_start(first)` removes entries before `first`.
+- `truncate_end(stop)` removes entries at or after `stop`.
+
+Both return a new root describing the retained interval `[first, stop)`, preserve absolute indices, and defer physical reclamation until no retained root references the removed data.
+
+“Retirement” and “rollback” describe why the database changes those bounds, rather than different storage operations.
+
+---
+
+Also, rollback\_start, rollback\_end, rollback, and advance.
+
+...
+
+Then `Window` can expose symmetric boundary operations:
+
+| Method | Effect |
+|---|---|
+| `advance_start` | Move start forward, excluding older records |
+| `advance_end` | Append records, moving end forward |
+| `advance` | Advance both boundaries in one batch |
+| `rollback_start` | Restore an earlier start and its retained records |
+| `rollback_end` | Restore an earlier end, excluding newer records |
+| `rollback` | Restore both boundaries from a retained Window version |
+
+Each operation returns a new root for `[start, end)`. Rollback must preserve the selected version’s record identities, not merely change numerical bounds; restoration requires retained data.
+
+---
+
+Window\.advance and Window\.rollback return the appropriate root after calling the appropriate
+```python
+Window._[rollback|advance]_[start|end]
+```
+
+...
+
+Yes. The public methods coordinate the boundary changes:
+
+```python
+Window.advance(...) -> WindowRoot
+Window.rollback(...) -> WindowRoot
+```
+
+They call the appropriate private helpers:
+
+```python
+Window._advance_start(...)
+Window._advance_end(...)
+Window._rollback_start(...)
+Window._rollback_end(...)
+```
+
+Each public call returns one resulting `WindowRoot(tree_root, start, end)`. Intermediate roots remain unpublished; the database coordinator commits the final root with the other structures in the batch.
+
+---
+
+The Window begins empty.  Then a genesis block (index 0) is added and Window size is 1.  This grows to `2_000_000` blocks (200 epochs) capped.  Then block 2\_000\_000 is added, so advance(record\_2M) returns a root with 2\_000\_000 records ([1, 2\_000\_000]).  Record N remains until garbage collected determined by a delete\_after parameter.  So delete\_after=100 would delete record N when Window(start=a, end=b) for `a == N + delete_after` is added.
+
+...
+
+Understood. `Window` separates its **active bounds** from **retained records awaiting deletion**.
+
+Using half-open bounds:
+
+- Empty: `[0, 0)`.
+- After genesis: `[0, 1)`.
+- At capacity: `[0, 2_000_000)`.
+- After adding record `2_000_000`: `[1, 2_000_001)`—still 2,000,000 active records.
+
+On `advance(record)`, append at `end`, then move `start` as needed to enforce capacity.
+
+With `delete_after=100`, record `N` remains retained after leaving the active window. When the new root has `start == N + 100`, remove its key from that new tree version.
+
+That deletion makes its storage eligible for garbage collection; physical reclamation still waits until no retained root or reader references it. The returned root therefore describes 2,000,000 **active** records, while its underlying tree may temporarily contain additional retained records.
+
+---
+
+The delete\_after parameter controls the number of window roots retained (the last N == delete\_after).  This allows rolling back at most delete\_after blocks.
+
+...
+
+Understood—`delete_after` controls **root-history retention**, not a per-record expiration delay. Records become reclaimable only when unreachable from every retained root or reader.
+
+To allow rollback by up to `delete_after` blocks, retain the **current root plus `delete_after` predecessor roots**. Keeping only `delete_after` roots total would allow at most `delete_after - 1` rollback steps.
+
+---
+
+Add Window to critbit.py and document critbit.py in docs/critbit.md
+
+...
+
+Added `Window` to [arka/critbit.py](arka/critbit.py), with capped advance, retained-root rollback, and branch-safe records.
+
+Created [docs/critbit.md](docs/critbit.md) covering trees, augmentation, batch updates, Window semantics, and persistence boundaries.
+
+**10 tests passed.** Persisting Window bounds and history in the database manifest remains unfinished.
+
+---
+
+The critbit trees become fragmented and randomly oriented.  The backing file can be defragmented and ordered by depth first traversal and copy to a replacement file improving caching then swapped.  For Window, start with the oldest retained root and patch forward.  Add a defrag method to Critbit and Window and document.
+
+...
+
+Added `Critbit.defrag()` and `Window.defrag()` in [arka/critbit.py](arka/critbit.py). They copy nodes in depth-first order, preserve sharing, and remap roots. Window processes retained versions oldest-first.
+
+Documented usage, scaling, and safe file replacement in [docs/critbit.md](docs/critbit.md).
+
+**23 tests passed**, including mmap reopen. Live file swapping remains coordinator work.
+
+---
+

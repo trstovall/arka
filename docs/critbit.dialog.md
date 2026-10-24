@@ -331,3 +331,31 @@ Documented usage, scaling, and safe file replacement in [docs/critbit.md](docs/c
 
 ---
 
+critbit.md describes Window representation as wrapping a MAP critbit tree.  But all trees need to be windowed.  The window is just the last `delete_after` tree root generations.  Rollback past `delete_after` roots is prevented.
+
+...
+
+Understood. `Window` should manage **root-generation history for every tree kind**—MAP, SUM, and MAX—not represent a sequence of records.
+
+- Each committed block adds one root generation, even if that tree’s root is unchanged.
+- Retain the current generation plus `delete_after` predecessors.
+- Rollback selects a retained generation; deeper rollback is rejected.
+- Publish all trees’ generations together so rollback restores one coherent database state.
+
+The 2,000,000-block cap and absolute record indices belong to the block sequence, separately from root retention. The current `Window` implementation and documentation conflate those responsibilities and need to be revised.
+
+---
+
+The blocks themselves are the deltas to the tree structures.  Candidate block processing threads should greedily seek the next block and should prevent rolling back past `delete_after`.  They maintain a 2M + 1 block rolling window of block chain plus candidate.  While `delete_after` controls root retension, the 2\_000\_000 constant is hard-coded.
+
+...
+
+Understood. These are separate limits:
+
+- **Tree history:** Every tree retains its current root plus `delete_after` predecessor generations. Rollback beyond that retained history is prohibited.
+- **Block history:** Candidate processing maintains a hard-coded rolling window of **2,000,000 chain blocks plus one candidate block**.
+- **Processing:** Each candidate worker greedily obtains the next available block and derives the next tree roots from it. A block supplies the transition instructions; retained roots supply rollback, without inverse-delta replay.
+- **Publication:** A completed block’s roots across all trees form one coherent generation.
+
+Replaying a block still requires its parent state to resolve spends and other referenced values. The block alone is not a standalone before/after state snapshot.
+
